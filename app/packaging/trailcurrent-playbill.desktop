@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=TrailCurrent Playbill
+GenericName=In-rig entertainment center
+Comment=Browse media, trails, and rig systems on your TrailCurrent desktop
+Exec=trailcurrent-playbill %U
+Icon=trailcurrent-playbill
+Terminal=false
+Categories=AudioVideo;Player;TV;
+StartupWMClass=trailcurrent-playbill
+Keywords=trailcurrent;playbill;media;tv;rig;

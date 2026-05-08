@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=TrailCurrent Playbill
+GenericName=In-rig entertainment center
+Comment=Browse media, trails, and rig systems on your TrailCurrent desktop
+# --ozone-platform=wayland forces Electron to use the Wayland Ozone backend.
+# Without it, Electron defaults to X11, fails to find a display, and exits
+# silently in <1s — what looks like "click icon → blank screen → nothing"
+# but is actually "click icon → app crashed at platform init".
+# --enable-features lets us register Wayland window decorations + ozone
+# explicitly. main.js's appendSwitch runs too late to influence the choice.
+Exec=/opt/trailcurrent-playbill/trailcurrent-playbill --no-sandbox --ozone-platform=wayland --enable-features=UseOzonePlatform,WaylandWindowDecorations %U
+Icon=trailcurrent-playbill
+Terminal=false
+Categories=AudioVideo;Player;TV;
+StartupWMClass=trailcurrent-playbill
+Keywords=trailcurrent;playbill;media;tv;rig;

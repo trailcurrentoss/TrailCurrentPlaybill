@@ -1,0 +1,44 @@
+# TrailCurrent Playbill — system-wide GNOME defaults
+#
+# Installed at /etc/dconf/db/local.d/00-trailcurrent-playbill, then `dconf
+# update` rebuilds the binary db.
+#
+# Scope: only PRODUCT IDENTITY keys are set here. User-preference keys
+# (color-scheme, locale, timezone, keyboard, accessibility) are left alone
+# so gnome-initial-setup and the user can choose them on first login.
+#
+# Keys we lock (see /etc/dconf/db/local.d/locks/) so first-login user-mode
+# defaults can't overlay our brand-identity choices.
+
+[org/gnome/desktop/background]
+picture-uri='file:///usr/share/backgrounds/trailcurrent-playbill/wallpaper-light.png'
+picture-uri-dark='file:///usr/share/backgrounds/trailcurrent-playbill/wallpaper-dark.png'
+picture-options='zoom'
+primary-color='#0d100c'
+secondary-color='#0d100c'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/backgrounds/trailcurrent-playbill/wallpaper-dark.png'
+picture-options='zoom'
+
+# Brand chrome:
+#   - gtk-theme: TrailCurrent-Playbill (our theme tree at
+#     /usr/share/themes/TrailCurrent-Playbill/, recolored libadwaita +
+#     Farwatch-derived widget chrome).
+#   - icon-theme: stay on Yaru (its symbolic icons honor our accent token).
+#   - accent-color: kept as 'green' as a libadwaita-side belt-and-suspenders.
+[org/gnome/desktop/interface]
+gtk-theme='TrailCurrent-Playbill'
+icon-theme='Yaru'
+accent-color='green'
+
+[org/gnome/shell]
+favorite-apps=['trailcurrent-playbill.desktop', 'firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.Settings.desktop']
+# Empty array → GNOME Shell auto-populates the app picker from /usr/share/applications/.
+# (Was previously inheriting Ubuntu's default layout that referenced ~21 apps,
+# most of which weren't installed under -minimal — left the picker mostly empty.)
+app-picker-layout=@aa{sv} []
+
+[org/gnome/login-screen]
+logo='/usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png'
+disable-user-list=false

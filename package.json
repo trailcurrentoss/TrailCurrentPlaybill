@@ -1,0 +1,17 @@
+{
+  "name": "trailcurrent-playbill-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TrailCurrent Playbill — desktop entertainment app + Radxa Q6A image build (workspace root, JavaScript only, no TypeScript).",
+  "workspaces": [
+    "app"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace app",
+    "start": "npm run start --workspace app",
+    "dist": "npm run dist --workspace app"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

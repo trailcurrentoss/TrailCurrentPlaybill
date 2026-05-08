@@ -1,0 +1,30 @@
+# TrailCurrent Playbill — dconf locks for product-identity keys
+#
+# Lock keys here so first-login (gnome-initial-setup) and per-user dconf
+# defaults can't silently overlay our brand-identity choices. Without these
+# locks, Ubuntu's first-login machinery rewrites favorite-apps to put its own
+# defaults at position 0 (we observed firefox.desktop → firefox_firefox.desktop).
+#
+# We do NOT lock user-preference keys (color-scheme, language, keyboard, etc.)
+# — those stay user-controllable.
+
+# Wallpapers — TrailCurrent identity, not a user choice
+/org/gnome/desktop/background/picture-uri
+/org/gnome/desktop/background/picture-uri-dark
+/org/gnome/desktop/background/picture-options
+/org/gnome/desktop/background/primary-color
+/org/gnome/desktop/background/secondary-color
+
+# Screensaver wallpaper
+/org/gnome/desktop/screensaver/picture-uri
+/org/gnome/desktop/screensaver/picture-options
+
+# Brand chrome — theme name + accent + icon theme (Playbill identity)
+/org/gnome/desktop/interface/gtk-theme
+/org/gnome/desktop/interface/icon-theme
+/org/gnome/desktop/interface/accent-color
+/org/gnome/shell/favorite-apps
+/org/gnome/shell/app-picker-layout
+
+# GDM logo
+/org/gnome/login-screen/logo

@@ -1,0 +1,5 @@
+# Installed to /etc/dconf/profile/gdm — tells gdm what dconf databases to
+# read. The `gdm.d` system-db is where we drop our overrides.
+user-db:user
+system-db:gdm
+file-db:/usr/share/gdm/greeter-dconf-defaults

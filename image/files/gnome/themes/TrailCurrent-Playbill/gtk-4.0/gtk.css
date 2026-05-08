@@ -1,0 +1,427 @@
+/* ============================================================================
+   TrailCurrent Playbill — GTK4 / libadwaita theme
+   Installed at /usr/share/themes/TrailCurrent-Playbill/gtk-4.0/gtk.css.
+
+   Design language ported from the Farwatch PWA chrome:
+     /media/dave/extstorage/TrailCurrent/Product/TrailCurrentFarwatch/frontend/public/css/
+
+   Strategy: redefine libadwaita's named colors to TrailCurrent brand tokens
+   (libadwaita 1.4 reads @define-color from the active theme's gtk.css), then
+   layer Farwatch-style widget chrome on top — focus rings at 3px primary halo,
+   8-12px button radii with brand-green hover glow, 60x32 pill switches that
+   fill brand green when on, 16px card radii with lift-on-hover.
+
+   This file is loaded when gsettings org.gnome.desktop.interface
+   gtk-theme = 'TrailCurrent-Playbill'. We set that in our system-wide dconf
+   override and lock the key so user-mode dconf can't overlay it.
+   ============================================================================ */
+
+/* ── Brand color tokens (libadwaita 1.4 named colors) ─────────────────────── */
+
+@define-color accent_color           #52A441;
+@define-color accent_bg_color        #52A441;
+@define-color accent_fg_color        #000000;
+
+@define-color destructive_color      #FF5453;
+@define-color destructive_bg_color   #FF5453;
+@define-color destructive_fg_color   #000000;
+
+@define-color success_color          #74FE00;
+@define-color success_bg_color       #74FE00;
+@define-color success_fg_color       #000000;
+
+@define-color warning_color          #FFC107;
+@define-color warning_bg_color       #FFC107;
+@define-color warning_fg_color       #000000;
+
+@define-color error_color            #FF5453;
+@define-color error_bg_color         #FF5453;
+@define-color error_fg_color         #000000;
+
+/* Surfaces — dark by default; light variant in gtk-4.0/gtk-light.css */
+@define-color window_bg_color        #14181a;
+@define-color window_fg_color        #ffffff;
+@define-color view_bg_color          #1a1f1c;
+@define-color view_fg_color          #ffffff;
+@define-color headerbar_bg_color     #1a1f1c;
+@define-color headerbar_fg_color     #ffffff;
+@define-color headerbar_border_color rgba(255,255,255,0.08);
+@define-color headerbar_backdrop_color #14181a;
+@define-color headerbar_shade_color  rgba(0,0,0,0.36);
+@define-color card_bg_color          #1a1f1c;
+@define-color card_fg_color          #ffffff;
+@define-color card_shade_color       rgba(0,0,0,0.36);
+@define-color dialog_bg_color        #1a1f1c;
+@define-color dialog_fg_color        #ffffff;
+@define-color popover_bg_color       #232826;
+@define-color popover_fg_color       #ffffff;
+@define-color sidebar_bg_color       #14181a;
+@define-color sidebar_fg_color       #ffffff;
+@define-color sidebar_backdrop_color #0d100c;
+@define-color sidebar_shade_color    rgba(0,0,0,0.36);
+@define-color shade_color            rgba(0,0,0,0.36);
+@define-color scrollbar_outline_color rgba(0,0,0,0.5);
+
+/* Eucalyptus link tone (Farwatch --color-link #83A79C) */
+@define-color blue_3                 #83A79C;
+@define-color blue_4                 #6E9087;
+@define-color blue_5                 #5A7A72;
+@define-color link_color             #83A79C;
+
+/* ── Buttons (Farwatch .btn-primary port) ─────────────────────────────────── */
+
+button {
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: 600;
+    border: 2px solid transparent;
+    background: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+    transition: background 150ms ease,
+                border-color 150ms ease,
+                box-shadow 150ms ease,
+                transform 150ms ease;
+}
+
+button:hover {
+    background: alpha(@window_fg_color, 0.14);
+}
+
+button:active {
+    background: alpha(@window_fg_color, 0.20);
+}
+
+button:focus,
+button:focus-visible {
+    outline: 3px solid alpha(@accent_color, 0.30);
+    outline-offset: 1px;
+}
+
+button.flat {
+    background: transparent;
+    border-color: transparent;
+}
+
+button.flat:hover {
+    background: alpha(@window_fg_color, 0.08);
+}
+
+button.suggested-action,
+.osd button.suggested-action {
+    background: @accent_bg_color;
+    color: @accent_fg_color;
+    border: 2px solid transparent;
+}
+
+button.suggested-action:hover {
+    background: shade(@accent_bg_color, 0.92);
+    box-shadow: 0 0 18px alpha(@accent_color, 0.40);
+    transform: translateY(-1px);
+}
+
+button.suggested-action:active {
+    transform: translateY(0);
+    box-shadow: 0 0 12px alpha(@accent_color, 0.30);
+}
+
+button.destructive-action {
+    background: @destructive_bg_color;
+    color: @destructive_fg_color;
+}
+
+button.destructive-action:hover {
+    background: shade(@destructive_bg_color, 0.92);
+    box-shadow: 0 0 18px alpha(@destructive_color, 0.40);
+}
+
+/* Pill (segmented-control) tabs — Farwatch .tabs-nav__btn port */
+button.pill,
+.linked > button {
+    border-radius: 9999px;
+    padding: 6px 14px;
+}
+
+button.pill.suggested-action,
+.linked > button:checked {
+    background: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+/* ── Text inputs (Farwatch .form-input port) ──────────────────────────────── */
+
+entry, spinbutton {
+    border-radius: 12px;
+    border: 2px solid alpha(@window_fg_color, 0.18);
+    padding: 8px 12px;
+    background: @view_bg_color;
+    color: @view_fg_color;
+    transition: border-color 150ms ease,
+                box-shadow 150ms ease;
+}
+
+entry:focus, spinbutton:focus,
+entry:focus-within, spinbutton:focus-within {
+    border-color: @accent_color;
+    box-shadow: 0 0 0 3px alpha(@accent_color, 0.20);
+    outline: none;
+}
+
+entry.error, spinbutton.error {
+    border-color: @destructive_color;
+}
+
+entry.error:focus, spinbutton.error:focus {
+    box-shadow: 0 0 0 3px alpha(@destructive_color, 0.20);
+}
+
+entry > placeholder { color: alpha(@view_fg_color, 0.40); }
+
+/* ── GtkSwitch (Farwatch .toggle-switch port) ─────────────────────────────── */
+
+switch {
+    min-width: 50px;
+    min-height: 28px;
+    border-radius: 999px;
+    border: 2px solid alpha(@window_fg_color, 0.25);
+    background: @view_bg_color;
+    transition: background 250ms ease,
+                border-color 250ms ease;
+}
+
+switch slider {
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 50%;
+    margin: 2px;
+    background: alpha(@window_fg_color, 0.65);
+    transition: background 250ms ease;
+}
+
+switch:checked {
+    background: @accent_bg_color;
+    border-color: @accent_bg_color;
+}
+
+switch:checked slider {
+    background: white;
+}
+
+switch:focus, switch:focus-visible {
+    outline: 3px solid alpha(@accent_color, 0.30);
+    outline-offset: 1px;
+}
+
+/* ── GtkCheckButton + radio (consistent with switch / accent) ────────────── */
+
+checkbutton check,
+checkbutton radio {
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 4px;
+    border: 2px solid alpha(@window_fg_color, 0.30);
+    background: @view_bg_color;
+    transition: background 150ms ease,
+                border-color 150ms ease;
+}
+
+checkbutton radio { border-radius: 50%; }
+
+checkbutton check:checked,
+checkbutton radio:checked {
+    background: @accent_bg_color;
+    border-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+checkbutton:focus check,
+checkbutton:focus radio {
+    outline: 3px solid alpha(@accent_color, 0.30);
+    outline-offset: 1px;
+}
+
+/* ── Cards / list rows (Farwatch .card port) ──────────────────────────────── */
+
+.card,
+listview > row,
+list > row {
+    border-radius: 14px;
+    border: 1px solid alpha(@window_fg_color, 0.10);
+    background: @card_bg_color;
+    transition: transform 200ms ease,
+                box-shadow 200ms ease;
+}
+
+listview > row:hover,
+list > row:hover {
+    background: alpha(@window_fg_color, 0.04);
+}
+
+listview > row:selected,
+list > row:selected {
+    background: alpha(@accent_color, 0.18);
+    color: @window_fg_color;
+}
+
+/* ── Headerbar / window chrome ────────────────────────────────────────────── */
+
+headerbar,
+.titlebar {
+    background: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    border-bottom: 1px solid @headerbar_border_color;
+    min-height: 44px;
+}
+
+headerbar:backdrop {
+    background: @headerbar_backdrop_color;
+}
+
+window {
+    background: @window_bg_color;
+    color: @window_fg_color;
+}
+
+/* ── Popovers / menus ─────────────────────────────────────────────────────── */
+
+popover > arrow,
+popover > contents {
+    background: @popover_bg_color;
+    color: @popover_fg_color;
+    border: 1px solid alpha(@window_fg_color, 0.10);
+    border-radius: 12px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+}
+
+menubutton button {
+    border-radius: 8px;
+}
+
+modelbutton {
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+modelbutton:hover {
+    background: alpha(@accent_color, 0.14);
+    color: @accent_color;
+}
+
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+
+scrollbar slider {
+    background: alpha(@window_fg_color, 0.20);
+    border-radius: 4px;
+    min-width: 8px;
+    min-height: 8px;
+    border: 0;
+}
+
+scrollbar slider:hover {
+    background: alpha(@window_fg_color, 0.35);
+}
+
+scrollbar slider:active {
+    background: @accent_color;
+}
+
+/* ── Sidebar (Files, Settings) ────────────────────────────────────────────── */
+
+stacksidebar list,
+.sidebar list,
+.navigation-sidebar {
+    background: @sidebar_bg_color;
+    color: @sidebar_fg_color;
+}
+
+stacksidebar list > row:selected,
+.sidebar list > row:selected,
+.navigation-sidebar > row:selected {
+    background: alpha(@accent_color, 0.16);
+    color: @accent_color;
+    border-radius: 10px;
+    margin: 2px 6px;
+    font-weight: 600;
+}
+
+/* ── Selection ────────────────────────────────────────────────────────────── */
+
+selection,
+*:selected {
+    background-color: alpha(@accent_color, 0.40);
+    color: @window_fg_color;
+}
+
+/* ── Status badges (libadwaita .badge / Farwatch chip) ────────────────────── */
+
+.badge {
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.badge.success { background: alpha(@success_color, 0.15); color: @success_color; }
+.badge.warning { background: alpha(@warning_color, 0.15); color: @warning_color; }
+.badge.danger,
+.badge.error   { background: alpha(@destructive_color, 0.15); color: @destructive_color; }
+.badge.info,
+.badge.accent  { background: alpha(@accent_color, 0.15); color: @accent_color; }
+
+/* ── Notebook / tabs ──────────────────────────────────────────────────────── */
+
+notebook header {
+    background: @window_bg_color;
+}
+
+notebook tab {
+    padding: 8px 14px;
+    border-radius: 9999px;
+    background: transparent;
+    color: alpha(@window_fg_color, 0.65);
+    transition: background 150ms ease, color 150ms ease;
+    margin: 4px;
+}
+
+notebook tab:hover {
+    background: alpha(@window_fg_color, 0.06);
+    color: @window_fg_color;
+}
+
+notebook tab:checked {
+    background: @accent_bg_color;
+    color: @accent_fg_color;
+    font-weight: 600;
+}
+
+/* ── Progress / level / scale ─────────────────────────────────────────────── */
+
+progressbar progress,
+levelbar block.filled,
+scale highlight {
+    background: @accent_bg_color;
+    border-radius: 9999px;
+}
+
+scale slider {
+    background: white;
+    border: 2px solid @accent_color;
+    box-shadow: 0 0 8px alpha(@accent_color, 0.40);
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 50%;
+}
+
+/* ── Spinners ─────────────────────────────────────────────────────────────── */
+
+spinner { color: @accent_color; }
+
+/* ── Tooltips ─────────────────────────────────────────────────────────────── */
+
+tooltip,
+tooltip.background {
+    background: @popover_bg_color;
+    color: @popover_fg_color;
+    border: 1px solid alpha(@window_fg_color, 0.10);
+    border-radius: 8px;
+}

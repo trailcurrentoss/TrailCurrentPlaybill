@@ -1,0 +1,31 @@
+{
+  "name": "trailcurrent-playbill",
+  "version": "0.1.0",
+  "description": "TrailCurrent Playbill — in-rig entertainment center for the TrailCurrent Linux desktop (GNOME on Wayland, Radxa Q6A).",
+  "main": "main/main.js",
+  "private": true,
+  "scripts": {
+    "build:vendor": "node packaging/copy-vendor.js",
+    "build:renderer": "babel renderer/components --out-dir build/components --presets=@babel/preset-react",
+    "build": "npm run build:vendor && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --config electron-builder.config.js"
+  },
+  "dependencies": {
+    "ionicons": "^7.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "7zip-bin": "^5.2.0",
+    "app-builder-bin": "^4.0.0"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.24.0",
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.24.0",
+    "electron": "31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

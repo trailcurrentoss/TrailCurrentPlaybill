@@ -1,0 +1,82 @@
+# TrailCurrent Playbill — apt package pinning policy
+#
+# This file blocks apt (including unattended-upgrades) from upgrading the
+# packages most likely to break GPU acceleration or WiFi on the Radxa Dragon
+# Q6A (Qualcomm QCS6490). Documented in docs/KERNEL_UPDATE_POLICY.md.
+#
+# Pin-Priority -1 means apt cannot install any version of these packages
+# from any source — `apt upgrade` skips them, `unattended-upgrades` skips
+# them, and a manual `apt install` will require an explicit `--allow-downgrades`
+# / `apt-mark unhold` to override.
+#
+# To deliberately roll a new kernel after validating it on a staging board:
+#   sudo apt-mark unhold linux-image-* linux-headers-* linux-modules-*
+#   sudo apt update && sudo apt full-upgrade
+#   sudo apt-mark hold linux-image-* linux-headers-* linux-modules-*
+#
+# Userspace (openssl, glibc, gnome, browser, etc.) is NOT held — security
+# updates flow normally via the standard unattended-upgrades job.
+
+# ── Linux kernel ────────────────────────────────────────────────────────────
+Package: linux-image-*
+Pin: release *
+Pin-Priority: -1
+
+Package: linux-headers-*
+Pin: release *
+Pin-Priority: -1
+
+Package: linux-modules-*
+Pin: release *
+Pin-Priority: -1
+
+Package: linux-modules-extra-*
+Pin: release *
+Pin-Priority: -1
+
+# ── Mesa / GPU userspace (Adreno on QCS6490) ────────────────────────────────
+Package: mesa-*
+Pin: release *
+Pin-Priority: -1
+
+Package: libdrm*
+Pin: release *
+Pin-Priority: -1
+
+Package: libgbm1
+Pin: release *
+Pin-Priority: -1
+
+Package: libegl1
+Pin: release *
+Pin-Priority: -1
+
+Package: libgl1-mesa-dri
+Pin: release *
+Pin-Priority: -1
+
+Package: libglx-mesa0
+Pin: release *
+Pin-Priority: -1
+
+# ── linux-firmware (BT + GPU blobs; WiFi is via aic8800 DKMS, not here) ─────
+Package: linux-firmware
+Pin: release *
+Pin-Priority: -1
+
+# ── WiFi DKMS bundle (Quectel FCU760K / AIC8800D80) ─────────────────────────
+# WiFi on the Q6A is the Quectel FCU760K module (AIC8800D80 chipset, USB-
+# attached) per the v1.21 schematic. Radxa explicitly disables in-tree ath
+# (CONFIG_AIC_WLAN_SUPPORT=n) and ships a DKMS package instead. Pin the
+# package so unattended-upgrades cannot pull a new aic8800-usb-dkms version
+# that fails to build against our held kernel headers — that's the failure
+# mode the Armbian Q6A community has been hitting (`apt upgrade` breaks
+# WiFi). Treat aic8800-usb-dkms + aic8800-firmware as part of the
+# kernel/headers BUNDLE; update the four together or not at all.
+Package: aic8800-usb-dkms
+Pin: release *
+Pin-Priority: -1
+
+Package: aic8800-firmware
+Pin: release *
+Pin-Priority: -1

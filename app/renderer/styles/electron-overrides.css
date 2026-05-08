@@ -1,0 +1,48 @@
+/* Electron-specific overrides on top of the R&D prototype's tv.css.
+   The prototype was authored as a 1920×1080 preview embedded in a centered
+   browser window. In Electron the renderer IS the screen — fill the viewport
+   directly, drop the preview frame, drop the auto-scale wrapper. */
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  /* The R&D body uses flex-center to position the .tv-frame in the viewport.
+     We don't have a frame; just fill. */
+  display: block;
+  background: var(--bg-primary, #000);
+}
+
+#tv-root {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
+
+/* The TVApp component renders <div className="tv-screen"> as its root.
+   In the prototype tv-screen was 100% of a 1920x1080 frame. Here it's
+   100% of the viewport — same rule, different parent. No change needed
+   beyond the html/body sizing above. */
+
+/* Hide the R&D demo chrome (.tv-page, .tv-head, .tv-frame) if any of it
+   ever renders. We only mount <TVApp /> directly into #tv-root in this
+   build, so these never appear — defensive belt-and-suspenders. */
+.tv-page, .tv-head, .tv-frame {
+  display: none !important;
+}
+
+/* Slightly tighten the focus ring against very dark wallpapers so the
+   contrast threshold stays comfortable in dark mode. */
+[data-theme="dark"] .nav-btn.focused,
+[data-theme="dark"] .card.focused,
+[data-theme="dark"] .app-card.focused,
+[data-theme="dark"] .tv-btn.focused {
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.85),
+    0 0 0 8px rgba(82,164,65,0.22);
+}

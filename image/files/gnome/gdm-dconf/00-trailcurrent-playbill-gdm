@@ -1,0 +1,28 @@
+# TrailCurrent Playbill — GDM (login screen) dconf override
+#
+# Installed at /etc/dconf/db/gdm.d/00-trailcurrent-playbill-gdm. Compiled
+# into /etc/dconf/db/gdm by `dconf update`. GDM reads its dconf via the
+# `gdm` profile (separate from user-mode `local`), so user-side settings
+# don't apply here — we have to set GDM keys explicitly.
+
+# Login-screen branding — TrailCurrent logo (the one in
+# /usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png).
+[org/gnome/login-screen]
+logo='/usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png'
+banner-message-enable=false
+disable-user-list=false
+fallback-logo='/usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png'
+
+# GDM chrome — same TrailCurrent-Playbill theme + Yaru-green accent as the
+# user session, dark color-scheme always.
+[org/gnome/desktop/interface]
+gtk-theme='TrailCurrent-Playbill'
+icon-theme='Yaru'
+accent-color='green'
+color-scheme='prefer-dark'
+
+# Background of the login screen — blurred dark wallpaper from our branding/.
+# (gnome-shell uses this on the lock screen / login greeter.)
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/backgrounds/trailcurrent-playbill/wallpaper-dark.png'
+picture-options='zoom'

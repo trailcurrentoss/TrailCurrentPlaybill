@@ -1,0 +1,64 @@
+# =============================================================================
+# AI agent configuration (local only — never commit)
+# Per global guidance: agent configuration is personal and local; never
+# committed to ANY repository. This applies to all agents (Claude, Cursor,
+# Copilot, Aider, Continue, Codeium, Tabnine, Sourcery, etc.).
+# =============================================================================
+.claude
+.claude/
+.claude.md
+CLAUDE.md
+CLAUDE.MD
+.cursorrules
+.cursor/
+.github/copilot*
+.aider*
+.continue/
+.codeium/
+.tabnine*
+.sourcery.yaml
+
+# =============================================================================
+# Editor / OS noise
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# Node / Electron app build outputs
+# =============================================================================
+node_modules/
+app/build/
+app/dist/
+app/.cache/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =============================================================================
+# OS image build outputs (these are large — built artifacts, not source)
+# =============================================================================
+image/output/
+image/cache/
+image/rsdk/.cache/
+*.img
+*.img.xz
+*.img.gz
+*.img.zst
+*.qcow2
+*.iso
+
+# =============================================================================
+# ComfyUI working files (the source prompts live in branding/comfyui-prompts.md;
+# generated PNGs that are the canonical assets DO get committed under branding/)
+# =============================================================================
+branding/_candidates/
+branding/_drafts/
+branding/_working/
+*.bak

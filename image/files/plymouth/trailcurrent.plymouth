@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=TrailCurrent Playbill
+Description=TrailCurrent Playbill boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/trailcurrent
+ScriptFile=/usr/share/plymouth/themes/trailcurrent/trailcurrent.script

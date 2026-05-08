@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="#52a441">
+  <!-- Playbill: theater program booklet with play triangle - what's on, on the big screen -->
+  <!-- Program / booklet body (vertical rectangle, slightly portrait) -->
+  <rect x="116" y="60" width="280" height="392" rx="10"/>
+  <!-- Title bar (white cutout, top of cover) -->
+  <rect x="148" y="92" width="216" height="48" rx="4" fill="white"/>
+  <!-- Play disc (white circle) -->
+  <circle cx="256" cy="244" r="78" fill="white"/>
+  <!-- Play triangle inside disc -->
+  <polygon points="234,206 234,282 306,244"/>
+  <!-- Showtime / program info lines (white cutouts) -->
+  <rect x="148" y="346" width="216" height="14" rx="3" fill="white"/>
+  <rect x="148" y="376" width="216" height="14" rx="3" fill="white"/>
+  <rect x="148" y="406" width="160" height="14" rx="3" fill="white"/>
+</svg>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=TrailCurrent Playbill
+Comment=TrailCurrent brand chrome (forest-green accent, Farwatch-PWA-derived widget look) for GNOME on Wayland.
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=TrailCurrent-Playbill
+MetacityTheme=Adwaita
+IconTheme=Yaru
+CursorTheme=Yaru
+ButtonLayout=:close

@@ -1,0 +1,19 @@
+[Unit]
+Description=TrailCurrent Playbill first-boot setup (rootfs expand, machine-id, SSH host keys)
+DefaultDependencies=no
+Before=sysinit.target shutdown.target NetworkManager.service systemd-user-sessions.service
+Wants=local-fs.target
+After=local-fs.target
+Conflicts=shutdown.target
+ConditionPathExists=!/var/lib/trailcurrent-playbill/.firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/trailcurrent-playbill-firstboot.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=300
+
+[Install]
+WantedBy=sysinit.target
