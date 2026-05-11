@@ -1,0 +1,118 @@
+/* GUI lifecycle — spawn / quit the Electron app from the controller.
+
+   The Electron binary lives at /opt/trailcurrent-playbill/trailcurrent-playbill
+   (per the image's hook 5; see image/rsdk/src/share/rsdk/build/rootfs.jsonnet).
+   Wayland flags are mandatory — without --ozone-platform=wayland Electron
+   defaults to X11 in this image, fails platform init, and exits silently.
+
+   Cold-wake flow:
+     1. PWA publishes  local/playbill/<id>/system/command  {action:'system.launchGui'}
+     2. mqtt-bridge dispatches via the bus
+     3. handlers/system.js calls gui.launch()
+     4. We spawn the binary detached so the daemon doesn't tether the GUI's
+        lifetime to its own
+     5. The new GUI process opens its IPC client, connects to the controller's
+        UDS socket, and IpcServer fires 'first-client' → state.gui.running=true
+
+   Quit:
+     pkill against the binary path (covers GUI-launched-from-GNOME-dock case
+     where we don't have the PID). SIGTERM lets Electron clean up its
+     Chromium child processes; SIGKILL would orphan them.
+
+   Wake / Sleep:
+     GNOME Screensaver is a session D-Bus service. SetActive(true) blanks +
+     locks; SetActive(false) wakes. We shell out to dbus-send rather than
+     pulling in a node-dbus dependency for two calls. */
+
+'use strict';
+
+const { spawn, execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileP = promisify(execFile);
+
+const BIN = '/opt/trailcurrent-playbill/trailcurrent-playbill';
+const ARGS = [
+  '--no-sandbox',
+  '--ozone-platform=wayland',
+  '--enable-features=UseOzonePlatform,WaylandWindowDecorations',
+];
+
+let lastSpawnedPid = null;
+
+async function isRunning() {
+  try {
+    const { stdout } = await execFileP('pgrep', ['-f', BIN]);
+    return stdout.trim().length > 0;
+  } catch (e) {
+    // pgrep exits 1 when no matches — that's "not running", not an error.
+    if (e.code === 1) return false;
+    throw e;
+  }
+}
+
+async function launch() {
+  if (await isRunning()) return { ok: true, alreadyRunning: true };
+
+  // Inherit the user session env so GTK/Wayland/D-Bus connect to the right
+  // session. Without DISPLAY/WAYLAND_DISPLAY/DBUS_SESSION_BUS_ADDRESS the
+  // GUI can't find the compositor.
+  const child = spawn(BIN, ARGS, {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env },
+  });
+  child.on('error', (e) => {
+    console.error('[gui] spawn error:', e.message);
+  });
+  child.unref();   // don't keep the controller alive on the GUI
+  lastSpawnedPid = child.pid;
+  return { ok: true, pid: child.pid, launched: true };
+}
+
+async function quit() {
+  // pkill matches every process running the binary path. -TERM (default)
+  // gives Electron time to close cleanly and reap its sandbox children;
+  // -KILL would orphan them.
+  try {
+    await execFileP('pkill', ['-f', BIN]);
+  } catch (e) {
+    // Exit 1 = no matches (already not running). That's success.
+    if (e.code !== 1) throw e;
+  }
+  lastSpawnedPid = null;
+  return { ok: true };
+}
+
+/** Wake / sleep the screen via GNOME Screensaver D-Bus. */
+async function setScreensaver(active) {
+  // Need the user's session bus. systemd user services inherit
+  // DBUS_SESSION_BUS_ADDRESS via XDG_RUNTIME_DIR/bus.
+  await execFileP('dbus-send', [
+    '--session', '--type=method_call',
+    '--dest=org.gnome.ScreenSaver',
+    '/org/gnome/ScreenSaver',
+    'org.gnome.ScreenSaver.SetActive',
+    `boolean:${active ? 'true' : 'false'}`,
+  ]);
+  return { ok: true, screensaverActive: active };
+}
+
+const wake  = () => setScreensaver(false);
+const sleep = () => setScreensaver(true);
+
+/**
+ * Best-effort focus. Wayland forbids third-party apps from raising another
+ * window, so the most we can do is launch if not running. Returns
+ * `focused:false, reason:'wayland-no-raise'` if the GUI was already up
+ * (so a PWA can decide whether to show the user a "GUI was already
+ * running, we couldn't raise it" hint).
+ */
+async function focus() {
+  if (await isRunning()) {
+    return { ok: true, focused: false, reason: 'wayland-no-raise' };
+  }
+  return launch();
+}
+
+module.exports = { isRunning, launch, quit, focus, wake, sleep };
+module.exports.BIN = BIN;

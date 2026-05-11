@@ -70,26 +70,6 @@ log "Setting hostname to $HOSTNAME"
 hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || echo "$HOSTNAME" > /etc/hostname
 grep -q "127.0.1.1.*$HOSTNAME" /etc/hosts || echo "127.0.1.1   $HOSTNAME" >> /etc/hosts
 
-# ── 5. Rebuild initramfs with the TrailCurrent Plymouth theme ───────────────
-# Belt-and-suspenders for hook 7 in the image build: that hook calls
-# update-initramfs inside a qemu-arm64 chroot, which sometimes silently fails
-# to actually rebuild the initramfs (we observed the Ubuntu Plymouth still
-# being shown on a freshly flashed board). Rebuilding here from the real
-# kernel guarantees the trailcurrent theme is in initramfs from boot 2 onward.
-# Boot 1 may still show the Ubuntu Plymouth — that's an accepted Stage-1 cost.
-if [ -d /usr/share/plymouth/themes/trailcurrent ]; then
-    log "Rebuilding initramfs to include TrailCurrent Plymouth theme"
-    update-initramfs -u -k all 2>&1 | sed 's/^/    /' || \
-        log "  WARNING: update-initramfs failed (will retry on next boot)"
-fi
-
-# ── 6. Refresh GNOME desktop database + icon cache ──────────────────────────
-# Same belt-and-suspenders rationale: hook 5b runs these in chroot but if the
-# qemu chroot run misses, the launcher icon and .desktop entry never show up
-# until something else triggers a rebuild. Force it from the real boot.
-update-desktop-database -q /usr/share/applications 2>/dev/null || true
-gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor 2>/dev/null || true
-
 # ── Done ────────────────────────────────────────────────────────────────────
 touch "$SENTINEL"
 log "First-boot setup complete; sentinel at $SENTINEL"

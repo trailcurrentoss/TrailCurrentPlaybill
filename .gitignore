@@ -19,6 +19,11 @@ CLAUDE.MD
 .sourcery.yaml
 
 # =============================================================================
+# Sandbox / scratch (local only — never commit)
+# =============================================================================
+sandbox/
+
+# =============================================================================
 # Editor / OS noise
 # =============================================================================
 .vscode/
@@ -42,17 +47,35 @@ yarn-debug.log*
 yarn-error.log*
 
 # =============================================================================
+# FCC ULS source files (downloaded by build-tools/uls/build-pubsafety.js).
+# Only the compact output pubsafety-by-zip3.json.gz is committed; the raw
+# 2 GB of .dat files and the 380 MB l_LMpriv.zip are too big for the repo.
+# =============================================================================
+build-tools/uls/l_LMpriv.zip
+build-tools/uls/extracted/
+build-tools/uls/pubsafety-by-zip3.json
+
+# =============================================================================
 # OS image build outputs (these are large — built artifacts, not source)
 # =============================================================================
 image/output/
 image/cache/
+image/out/
 image/rsdk/.cache/
+image/rsdk/out/
+image/rsdk/wget-log*
+image/embloader/output/
+image/embloader/cache/
 *.img
 *.img.xz
 *.img.gz
 *.img.zst
 *.qcow2
 *.iso
+*.tar
+*.tar.xz
+*.tar.gz
+*.tar.zst
 
 # =============================================================================
 # ComfyUI working files (the source prompts live in branding/comfyui-prompts.md;

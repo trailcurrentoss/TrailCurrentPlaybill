@@ -1,0 +1,32 @@
+{
+  "policies": {
+    "//comment": "TrailCurrent Playbill — system-wide Firefox-ESR defaults. Installed at /etc/firefox-esr/policies.json by hook 8b. Fixes the dark-theme + Wayland integration where Firefox's URL-bar autocomplete dropdown renders with a transparent background and unreadable list items (Mozilla Bug 1535230 / 1527048). Per Mozilla bugtracker workarounds: force chrome to honor GTK dark theme, force preferred color scheme to dark so internal HTML pages match.",
+
+    "Preferences": {
+      "widget.chrome.allow-gtk-dark-theme": {
+        "Value": true,
+        "Status": "default"
+      },
+      "widget.content.allow-gtk-dark-theme": {
+        "Value": true,
+        "Status": "default"
+      },
+      "browser.theme.preferred-color-scheme": {
+        "Value": "dark",
+        "Status": "default"
+      },
+      "ui.systemUsesDarkTheme": {
+        "Value": 1,
+        "Status": "default"
+      },
+      "layout.css.prefers-color-scheme.content-override": {
+        "Value": 0,
+        "Status": "default"
+      }
+    },
+
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DontCheckDefaultBrowser": true
+  }
+}

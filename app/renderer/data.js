@@ -1,7 +1,7 @@
 /* Stage 1 placeholder data — full TV shell rendered with empty content arrays.
-   The row titles and screen scaffolding stay so the shell is exercised in full;
-   actual content (continue-watching, trails, movies, music, EPG, library) lands
-   in Stage 2 when Headwaters NAS / antenna / external app integrations come online. */
+   Live TV channels and radio presets are loaded from the main process at
+   runtime (see live.jsx and radio.jsx); the rest of these arrays land in a
+   later stage when Headwaters NAS / external app integrations come online. */
 
 const TV_DATA = {
   featured: {
@@ -9,16 +9,28 @@ const TV_DATA = {
     tag: "Stage 1 · Empty Shell",
     meta: ["No content yet", "Wire in Stage 2"],
     rating: "—",
-    desc: "Headwaters media library, OTA antenna tuner, vehicle telemetry, exterior cameras, and external streaming apps wire up in Stage 2. For now this is the Playbill shell rendered against empty data so the design system, focus navigation, and theme can be validated end-to-end on the desktop.",
+    desc: "Headwaters media library, vehicle telemetry, exterior cameras, and external streaming apps wire up in later stages. Live TV and Radio are wired to real hardware (Hauppauge WinTV-dualHD + RTL-SDR) via the main-process services.",
     bg: null,
   },
 
   continue:  [],
-  apps:      [],
+
+  // Streaming-service launchers. Each entry's `launch` field names a handler
+  // registered in TV_APPS.launch below; that handler calls into the main
+  // process via the preload bridge.
+  apps: [
+    {
+      id: 'youtube',
+      label: 'YouTube',
+      icon: 'logo-youtube',
+      bg: '#FF0000',
+      launch: 'youtube',
+    },
+  ],
+
   rowTrails: [],
   movies:    [],
   music:     [],
-  channels:  [],
 
   // Camera tile labels stay — they're static UI scaffolding for the Rig screen,
   // not media. The actual feeds wire up in Stage 2.
@@ -30,4 +42,19 @@ const TV_DATA = {
   ],
 };
 
+/* App launch dispatcher. Apps in the grid map by `launch` key onto an
+   in-app screen name; the App component listens for the 'playbill:navigate'
+   CustomEvent and switches screens. Adding Netflix/Plex/Spotify later is
+   one case here + a `screen === 'X'` row in app.jsx + a screen JSX file. */
+const TV_APPS = {
+  launch(app) {
+    if (!app) return;
+    if (!app.launch) { console.warn('no launch key on app', app.id); return; }
+    window.dispatchEvent(new CustomEvent('playbill:navigate', {
+      detail: { screen: app.launch },
+    }));
+  },
+};
+
 window.TV_DATA = TV_DATA;
+window.TV_APPS = TV_APPS;

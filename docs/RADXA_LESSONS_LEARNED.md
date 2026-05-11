@@ -115,6 +115,43 @@ Boot reaches GDM in <30 s with these masked. Not "Stage 2 polish" — mandatory 
 ### Q6A is part of the QUSB / Q6 SoundWire family for WiFi-adjacent buses
 The WiFi connects via USB 2.0 through an FE1.1S hub. If the hub silently dies (firmware crash, EMI), WiFi disappears even though the AIC chip is fine. `lsusb` is the first diagnostic.
 
+### Force the aic8800 DKMS build — qemu-arm64 chroot won't match the target kernel
+At package install time, `aic8800-usb-dkms`'s postinst calls `dkms autoinstall` against `uname -r`. Inside the mmdebstrap qemu-arm64 chroot, `uname -r` reports the **build host's** kernel — not the Q6A kernel just installed into the chroot. dkms looks for matching headers, doesn't find them, and silently skips the build. The image flashes with no `aic8800_fdrv.ko` under `/lib/modules/<KVER>/updates/dkms/` and WiFi doesn't come up on the running board.
+
+**Fix in two layers** (defense in depth):
+- **Hook 4b in [`rootfs.jsonnet`](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet)** walks every kernel that has `/lib/modules/<KVER>/build/` (i.e. matching headers installed) and runs `dkms autoinstall -k <KVER>` for that specific kernel. Hard-fails the image build if the .ko doesn't land for at least one kernel.
+- **`trailcurrent-playbill-firstboot.sh` step 8** rebuilds DKMS against the live kernel as belt-and-suspenders — protects against the (rare) case where the chroot built against a different kernel than what's actually booted (kernel package version drift mid-build, ABI mismatch, etc.).
+
+### NetworkManager WiFi PSK prompt fails silently if the GNOME keyring is locked
+**Symptom:** Click the network indicator → pick SSID → Settings opens a tiny "authentication required" dialog, you type the PSK, click Connect, nothing happens (or the connect attempt fails with no obvious cause). Saved networks don't reconnect on reboot.
+
+**Root cause is the interaction of `chage -d 0` (force-password-change) with `pam_gnome_keyring`:**
+1. We used to call `chage -d 0 trailcurrent` in hook 3 so GDM forced a password change at first login.
+2. On first GDM login, PAM's `pam_unix` ran `passwd` to set a new UNIX password BEFORE `pam_gnome_keyring` opened the session.
+3. `pam_gnome_keyring` then opened (or auto-created) the user's login keyring with the OLD password it had captured at authentication time.
+4. From that moment, the login keyring was sealed with `trailcurrent` while the UNIX password was now whatever the user had typed. `pam_gnome_keyring` couldn't unlock it on subsequent sessions.
+5. NetworkManager's secret agent (which is gnome-shell, registered against the secret-service that gnome-keyring exposes) couldn't store or retrieve WiFi PSKs. PSK prompts went nowhere.
+
+**Fix:** do NOT force a password change at first login. Ship with the well-known default password (`trailcurrent`) documented in [SETUP.md](SETUP.md), and instruct the user to change it via Settings → Users (or `passwd`) on first login. Both paths run through the proper PAM stack and update the GNOME login keyring atomically with the new password — so subsequent sessions can unlock it and Wi-Fi PSKs survive reboots. See the prior-bug comment block above hook 3 in [`rootfs.jsonnet`](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet).
+
+### NetworkManager needs gnome-keyring + a secret agent — `ubuntu-desktop` doesn't pull `gnome-keyring` reliably
+Even with the chage trap fixed, the WiFi PSK prompt won't work unless `gnome-keyring` AND `libpam-gnome-keyring` AND `seahorse` (or another secret-service implementation) are explicitly installed and the PAM stack opens the keyring at session start. We add all three to the package list in [`rootfs.jsonnet`](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet) and verify in hook 26 that `gnome-keyring` and `libpam-gnome-keyring` are present. Without this, you get the silent "no agents were available for this request" failure from NetworkManager.
+
+**Quick diagnostic if WiFi PSK prompts still misbehave on a board:**
+```bash
+# Is the keyring daemon running?
+ps -ef | grep gnome-keyring-daemon
+
+# Does the secret-service bus exist?
+busctl --user list | grep -i secret
+
+# Can we see saved NM secrets?
+sudo nmcli -s connection show <SSID-name>
+
+# Is polkit (which mediates the prompt) running?
+systemctl status polkit
+```
+
 ## Audio — also harder than it looks
 
 ### Codec is WCD9385, on SoundWire, requiring the Q6 audio fabric
@@ -147,6 +184,16 @@ Per Radxa's audio docs, the ALSA card is `QCS6490RadxaDra [QCS6490-Radxa-Dragon-
 
 ### Neither Peregrine nor Headwaters validated the analog path
 Peregrine uses a Jabra Speak 510 over USB (USB Audio Class — bypasses the SoC audio path entirely). Headwaters is headless. **Playbill is the FIRST TrailCurrent project to use the Q6A's built-in 3.5 mm jack.** No prior in-tree precedent exists for this path. Test it on real hardware after every kernel/firmware roll.
+
+### Ubuntu Noble's `alsa-ucm-conf` is too old for the Q6A
+On the first board boot the codec attached but PipeWire showed only "Dummy Output". `wpctl status` saw the WCD9385 device, `aplay -l` showed the card, but no use-case profile could be loaded — so PipeWire couldn't open a real sink.
+
+**Root cause:** the QCS6490-Radxa-Dragon-Q6A use-case profile was added to the upstream `alsa-ucm-conf` repository AFTER the version Ubuntu Noble shipped (1.2.10, Q1 2024). Without that profile + the matching `conf.d` entry, PipeWire / PulseAudio cannot map the codec's mixer controls to a sink, and falls back to the dummy. Symptom matches *exactly* what you'd see if the audio stack was blacklisted, but it isn't — the kernel side is fine.
+
+**Fix:** vendor the entire upstream `alsa-ucm-conf` master `ucm2/` tree at [`image/files/alsa-ucm/ucm2/`](../image/files/alsa-ucm/ucm2/), overlay it on top of `/usr/share/alsa/ucm2/` in hook 6a of [`rootfs.jsonnet`](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet), and pin `alsa-ucm-conf` in [`50-trailcurrent-playbill-holds.pref`](../image/files/apt/50-trailcurrent-playbill-holds.pref) so apt cannot upgrade-and-stomp the overlay. Track the upstream commit hash in [`image/files/alsa-ucm/UPSTREAM_COMMIT`](../image/files/alsa-ucm/UPSTREAM_COMMIT) so the next agent who looks at this knows what they're holding against. Hook 26 verifies the Q6A profile file is present.
+
+### Force-load the audio modules — the DT compatible string isn't always reliable
+`snd_soc_qcm6490` is the QCS6490-specific machine driver (mainline since April 2024). Auto-loading is wired through device-tree compatible-string matching, and on at least one running kernel revision the wrong machine driver (`snd_soc_sc8280xp`) was probed instead with `use_count=0` — never bound, never registered the codec. Belt-and-suspenders: list the right modules in [`image/files/modules-load.d/q6a-audio.conf`](../image/files/modules-load.d/q6a-audio.conf) (`snd_soc_qcm6490`, `snd_soc_sc7280`, `snd_soc_wcd938x`, `snd_soc_qcom_q6apm_dai`, `audioreach`). Modules that don't exist in the running kernel fail silently; no harm.
 
 ## Desktop / Ubuntu environment
 
@@ -191,12 +238,58 @@ Don't lock user-preference keys (color-scheme, locale, timezone, keyboard) — t
 ### GDM has its own dconf profile
 The login screen runs as the `gdm` user with its own dconf database (`gdm.d`), separate from `local.d` for user sessions. To brand the login screen we need `/etc/dconf/db/gdm.d/00-trailcurrent-playbill-gdm` plus a `/etc/dconf/profile/gdm` file pointing at it. See hook 7 in [`rootfs.jsonnet`](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet).
 
-### libadwaita 1.4 (Ubuntu Noble) ignores naive `@define-color` overrides
-You can't just drop a `/etc/gtk-4.0/gtk.css` with `@define-color accent_color #52A441;` and expect Settings to recolor — Yaru's CSS via `XDG_DATA_DIRS` overrides it. The reliable paths:
-1. Set `org.gnome.desktop.interface accent-color 'green'` (Yaru's built-in green variant — quick win, ~80% match)
-2. AND ship a real `/usr/share/themes/TrailCurrent-Playbill/{gtk-3.0,gtk-4.0}/gtk.css` theme tree, set `gtk-theme` to point at it via dconf, lock the key
+### libadwaita explicitly does NOT honor user GTK themes
+**This bit us hard.** From the upstream libadwaita docs verbatim: *"Apps using libadwaita don't use system themes and look identical between desktop environments."* On Ubuntu Noble, every modern GNOME app (Settings, Files/Nautilus, Software, Calculator, Calendar, Maps, etc.) is libadwaita and **completely ignores `gtk-theme`** in dconf. Setting `gtk-theme='TrailCurrent-Playbill'` (or any custom theme name) is a no-op for them — they fall back to default Adwaita, which is blue accent + blue/purple selection highlights.
 
-We do BOTH for defense-in-depth. See [`image/files/gnome/themes/TrailCurrent-Playbill/`](../image/files/gnome/themes/TrailCurrent-Playbill/).
+Ubuntu's `org.gnome.desktop.interface accent-color` setting **only works because Yaru ships specific libadwaita CSS patches** that read the accent setting and apply tinting. Those patches are tied to Yaru being the active theme. The moment you set `gtk-theme` to anything other than `Yaru` / `Yaru-dark` / `Yaru-light`, you lose Yaru's libadwaita patches and the accent setting becomes a no-op for libadwaita apps.
+
+**Symptoms when you get this wrong** (we shipped this in our first build):
+- Toggle switches in Settings are blue (Adwaita default), not your accent
+- File manager (Nautilus) row selection is blue/purple, not your accent
+- Settings sidebar selected-row highlight is blue/purple
+- Buttons with `.suggested-action` class have an Adwaita-blue background
+- The login-screen password input box has a Yaru-orange focus ring (because GDM's gnome-shell theme is separate, see below)
+
+**Correct delivery path on Noble:**
+
+> **Critical Noble caveat (verified on Playbill v0.1.0, May 2026):** the runtime
+> `accent-color` dconf key under `org.gnome.desktop.interface` only exists in
+> libadwaita ≥ 1.6 (GNOME 47, Ubuntu 24.10+). Noble ships libadwaita 1.5.0,
+> where `accent-color` is **not a schema key** — `gsettings list-keys
+> org.gnome.desktop.interface | grep accent` returns nothing, and any value
+> placed at `/org/gnome/desktop/interface/accent-color` in dconf is silently
+> ignored. Do NOT set this key on Noble; it gives a false sense of "the theme
+> is configured" while the desktop falls back to Yaru's default orange.
+
+The Noble-correct mechanism is to point `gtk-theme` at one of the **pre-baked
+Yaru color variants** that ship with `yaru-theme-gtk` on Noble. Each variant
+is a full theme tree with its own accent baked into the gresource bundle.
+Available green-family variants and their `theme_selected_bg_color`:
+
+| `gtk-theme` value | Hex | Vibe |
+|---|---|---|
+| `Yaru-dark` | `#E95420` | default Ubuntu orange |
+| `Yaru-sage-dark` | `#657B69` | muted sage gray-green |
+| `Yaru-prussiangreen-dark` | `#308280` | deep blue-green |
+| `Yaru-viridian-dark` | `#03875B` | saturated green-teal **(Playbill picked this)** |
+| `Yaru-olive-dark` | `#4B8501` | olive (closest hue to brand `#52A441`) |
+| `Yaru-bark-dark` | `#787859` | brown-green woodsy |
+
+To extract the accent of any installed Yaru variant on a running board:
+
+```bash
+g=/usr/share/themes/Yaru-<variant>-dark/gtk-4.0/gtk.gresource
+gresource extract "$g" "$(gresource list "$g" | grep -E '/gtk\.css$')" \
+  | grep '@define-color theme_selected_bg_color'
+```
+
+Optional fallbacks that do NOT replace the variant choice:
+1. Ship `/usr/share/themes/TrailCurrent-Playbill/{gtk-3.0,gtk-4.0}/gtk.css` for legacy GTK3 apps that DO honor user themes (gnome-tweaks, some indicators).
+2. Ship `/etc/gtk-4.0/gtk.css` with `@define-color` overrides as defense-in-depth for non-libadwaita GTK4 apps (rare on Noble).
+
+**To get exactly your brand color (not Yaru's "close enough" green):** fork the closest Yaru variant from `/usr/share/themes/Yaru-<variant>-dark/`, decompile its `gtk.gresource`, find/replace the accent hex with your brand hex (e.g. `#52A441`), recompile the gresource, ship as a Yaru-derivative theme tree under a custom name. This is real Stage 2 work — deferred for Stage 1.
+
+**GDM is a separate beast.** The login screen runs as user `gdm` with its own dconf profile (`/etc/dconf/profile/gdm` → `system-db:gdm`), and the widgets are gnome-shell (NOT GTK) so even Yaru's `accent-color` propagation may not reach them. Set the same `gtk-theme='Yaru-dark'` + `accent-color='green'` in `/etc/dconf/db/gdm.d/` AS WELL AS the user-side `local.d/`. If GDM still ignores it, the next-level fix is `/usr/share/gnome-shell/gdm-css-name` overrides — gnarly Yaru-fork territory.
 
 ### Plymouth + qemu-arm64 chroot = silent failures
 Hook 7 in `rootfs.jsonnet` runs `update-initramfs -u -k all` inside the qemu-arm64 chroot to bake the TrailCurrent Plymouth theme into initramfs. **This silently fails sometimes** (the `2>&1 || echo WARNING` swallowed it the first time and we shipped Ubuntu Plymouth instead). Mitigations:

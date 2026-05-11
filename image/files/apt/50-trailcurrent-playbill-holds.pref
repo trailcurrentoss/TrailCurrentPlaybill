@@ -64,6 +64,41 @@ Package: linux-firmware
 Pin: release *
 Pin-Priority: -1
 
+# ── Radxa QCS6490 firmware bundle (Adreno + Venus + CDSP DSP firmware) ──────
+# Ships the matched cdsp.mbn + adsp.mbn + Adreno OpenCL ICD + Venus video
+# decode firmware as a coherent set. A silent upgrade that updates the DSP
+# image without the matching userspace shell breaks the NPU; an upgrade that
+# updates the Venus firmware without the kernel is just as bad. Treat as
+# part of the kernel/firmware bundle.
+Package: radxa-firmware-qcs6490
+Pin: release *
+Pin-Priority: -1
+
+# ── FastRPC userspace (kernel-coupled, must move with the kernel ABI) ───────
+# qcom-fastrpc1 + libcdsprpc1 talk to the in-kernel fastrpc driver. The
+# kernel is pinned (above), so these two must not slide forward independently
+# — the wifi DKMS bundle is held for the same reason.
+Package: qcom-fastrpc1
+Pin: release *
+Pin-Priority: -1
+
+Package: libcdsprpc1
+Pin: release *
+Pin-Priority: -1
+
+# ── alsa-ucm-conf (vendored master overlay for QCS6490-Radxa-Dragon-Q6A) ────
+# We overlay the upstream alsa-ucm-conf master tree on top of the distro
+# package's /usr/share/alsa/ucm2/ in hook 6a, because Noble ships 1.2.10 and
+# the QCS6490-Radxa-Dragon-Q6A use-case profile only landed in master after
+# that release. An apt upgrade that bumped alsa-ucm-conf would `dpkg`-replace
+# the directory contents and remove our overlay, and PipeWire would fall
+# back to "Dummy Output" again. Pin it so apt never touches it; if Ubuntu
+# eventually bumps to a release that contains the Q6A profile, do the
+# bump manually and drop the local overlay together.
+Package: alsa-ucm-conf
+Pin: release *
+Pin-Priority: -1
+
 # ── WiFi DKMS bundle (Quectel FCU760K / AIC8800D80) ─────────────────────────
 # WiFi on the Q6A is the Quectel FCU760K module (AIC8800D80 chipset, USB-
 # attached) per the v1.21 schematic. Radxa explicitly disables in-tree ath

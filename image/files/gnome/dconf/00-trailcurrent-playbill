@@ -21,16 +21,35 @@ secondary-color='#0d100c'
 picture-uri='file:///usr/share/backgrounds/trailcurrent-playbill/wallpaper-dark.png'
 picture-options='zoom'
 
-# Brand chrome:
-#   - gtk-theme: TrailCurrent-Playbill (our theme tree at
-#     /usr/share/themes/TrailCurrent-Playbill/, recolored libadwaita +
-#     Farwatch-derived widget chrome).
-#   - icon-theme: stay on Yaru (its symbolic icons honor our accent token).
-#   - accent-color: kept as 'green' as a libadwaita-side belt-and-suspenders.
+# Brand chrome — IMPORTANT context:
+#
+# libadwaita explicitly does NOT honor user-selected GTK themes (per the
+# upstream libadwaita docs: "Apps using libadwaita don't use system themes
+# and look identical between desktop environments"). On Ubuntu Noble, every
+# modern GNOME app (Settings, Files/Nautilus, Software, Calculator, etc.)
+# is a libadwaita app and ignores `gtk-theme` entirely.
+#
+# `accent-color` as a runtime dconf key only exists in libadwaita >= 1.6
+# (GNOME 47). Ubuntu Noble ships libadwaita 1.5.0 (GNOME 46), so the
+# accent-color key has NO schema entry — setting it is a no-op. The Noble-
+# correct way to recolor Yaru is to point gtk-theme at one of the pre-baked
+# Yaru color variants (Yaru-sage-dark, Yaru-prussiangreen-dark,
+# Yaru-viridian-dark, Yaru-olive-dark, Yaru-bark-dark) which ship with
+# yaru-theme-gtk on Noble. Each variant is a full theme tree with its own
+# accent baked in via the gresource bundle.
+#
+# We picked Yaru-viridian-dark (#03875B accent — saturated green-teal) as
+# the closest available green-family Yaru variant to the TrailCurrent brand
+# green (#52A441). Exact brand-green match is Stage-2 work (fork Yaru-dark
+# and swap the accent hex into a TrailCurrent-derivative theme) and is
+# documented in docs/RADXA_LESSONS_LEARNED.md.
+#
+# /usr/share/themes/TrailCurrent-Playbill/ remains installed as a fallback
+# for GTK3 / non-libadwaita apps that DO honor user themes (gnome-tweaks,
+# some indicators), but is NOT the gtk-theme name we point dconf at.
 [org/gnome/desktop/interface]
-gtk-theme='TrailCurrent-Playbill'
+gtk-theme='Yaru-viridian-dark'
 icon-theme='Yaru'
-accent-color='green'
 
 [org/gnome/shell]
 favorite-apps=['trailcurrent-playbill.desktop', 'firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.Settings.desktop']
@@ -40,5 +59,8 @@ favorite-apps=['trailcurrent-playbill.desktop', 'firefox.desktop', 'org.gnome.Na
 app-picker-layout=@aa{sv} []
 
 [org/gnome/login-screen]
-logo='/usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png'
+# Use the small corporate wordmark (480x96, white-on-dark) — NOT the 512x512
+# Playbill product icon. The product icon is too tall and overlaps the GDM
+# password input box.
+logo='/usr/share/backgrounds/trailcurrent-playbill/trailcurrent-wordmark.png'
 disable-user-list=false

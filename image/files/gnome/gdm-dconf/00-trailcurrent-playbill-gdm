@@ -5,20 +5,25 @@
 # `gdm` profile (separate from user-mode `local`), so user-side settings
 # don't apply here — we have to set GDM keys explicitly.
 
-# Login-screen branding — TrailCurrent logo (the one in
-# /usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png).
+# Login-screen branding — TrailCurrent wordmark (480x96, white-on-dark)
+# from the marketing site, NOT the Playbill product icon. The product icon
+# is 512x512 and overlaps the password input box on GDM.
 [org/gnome/login-screen]
-logo='/usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png'
+logo='/usr/share/backgrounds/trailcurrent-playbill/trailcurrent-wordmark.png'
 banner-message-enable=false
 disable-user-list=false
-fallback-logo='/usr/share/backgrounds/trailcurrent-playbill/playbill-logo.png'
+fallback-logo='/usr/share/backgrounds/trailcurrent-playbill/trailcurrent-wordmark.png'
 
-# GDM chrome — same TrailCurrent-Playbill theme + Yaru-green accent as the
-# user session, dark color-scheme always.
+# GDM chrome — Yaru-viridian-dark (saturated green-teal accent #03875B,
+# closest pre-baked Yaru variant to the TrailCurrent brand green #52A441).
+# NOT TrailCurrent-Playbill: libadwaita doesn't honor user themes (login
+# screen widgets are libadwaita). The accent-color dconf key is libadwaita
+# 1.6+; Noble has 1.5, so we recolor via gtk-theme variant instead. See
+# docs/RADXA_LESSONS_LEARNED.md and the comment block in
+# /etc/dconf/db/local.d/00-trailcurrent-playbill for the long version.
 [org/gnome/desktop/interface]
-gtk-theme='TrailCurrent-Playbill'
+gtk-theme='Yaru-viridian-dark'
 icon-theme='Yaru'
-accent-color='green'
 color-scheme='prefer-dark'
 
 # Background of the login screen — blurred dark wallpaper from our branding/.

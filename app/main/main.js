@@ -6,6 +6,23 @@
 const { app, BrowserWindow, screen, nativeTheme, ipcMain, globalShortcut, Menu } = require('electron');
 const path = require('path');
 
+const player = require('./services/player');
+const ControllerClient = require('./ipc-client');
+
+// Radio AND Live TV are owned by the controller daemon
+// (controller/src/services/{radio,livetv}.js) so a single rtl_fm /
+// dvbv5-zap process exists per device — PWA, CAN button, IR remote, and
+// the Electron GUI all drive them through the same command bus. The
+// renderer's `playbill.radio.*` and `playbill.dvb.*` calls below are thin
+// shims that forward to the controller; if the daemon isn't up the calls
+// return an error and the renderer's existing toast surface reports it.
+
+// The single connection to the playbill-controller daemon. Created at
+// app start; auto-reconnects if the daemon isn't up yet (common during
+// development) or restarts. The renderer talks to the controller via
+// preload-exposed methods that route through this client.
+const controller = new ControllerClient();
+
 // --- Wayland-native rendering on the GNOME desktop ----------------------------
 // Force Electron's Ozone Wayland backend so we hit the real Wayland path
 // instead of XWayland. NOTE: appendSwitch here runs AFTER Ozone has already
@@ -63,6 +80,87 @@ ipcMain.handle('playbill:getTheme', () => ({
   shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
 }));
 
+// ─── Controller daemon bridge ───────────────────────────────────────────
+// The renderer talks to the controller through these. Snapshot/delta
+// state is pushed to the renderer via webContents.send so React can
+// subscribe with useEffect.
+ipcMain.handle('playbill.controller.getState',  () => ({
+  state: controller.getState(),
+  connected: controller.isConnected(),
+}));
+ipcMain.handle('playbill.controller.command',   (_e, cmd) => controller.command(cmd));
+
+function broadcastControllerState(state) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('playbill.controller.state', state);
+}
+function broadcastControllerStatus(connected) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('playbill.controller.status', { connected });
+}
+controller.on('state',         broadcastControllerState);
+controller.on('connected',     () => broadcastControllerStatus(true));
+controller.on('disconnected',  () => broadcastControllerStatus(false));
+controller.start();
+
+/* ---------------------------------------------------------------------------
+   Tuner / radio / player IPC.
+
+   Each handler is a thin shim over the matching service module. The service
+   modules contain the actual control logic and are intentionally UI-agnostic
+   so the same surface can later be exposed over HTTP for the Headwaters PWA
+   (live-TV restream + remote control). When that day comes, the new HTTP
+   server mounts the same module exports — these IPC handlers stay as-is.
+   --------------------------------------------------------------------------- */
+
+// Radio AND Live TV — both forwarded to the controller daemon. The on-disk
+// services live at controller/src/services/{radio,livetv}.js; the bus
+// actions registered by controller/src/handlers/{radio,livetv}.js do the
+// work. We keep the legacy `playbill.radio.*` and `playbill.dvb.*` IPC
+// names so the renderer (radio.jsx, live.jsx) works unchanged. Each
+// handler below is a one-liner that dispatches a typed bus command.
+const fs = require('fs');
+function logFwd(tag, err) {
+  try {
+    const line = `[${new Date().toISOString()}] ${tag} ${err && (err.stack || err.message || String(err))}\n`;
+    fs.appendFileSync('/tmp/playbill-controller-fwd.log', line);
+  } catch (_) { /* best-effort; never let logging itself throw */ }
+}
+function forwardToController(action, valueFromArgs) {
+  return async (_e, args) => {
+    try {
+      const value = valueFromArgs ? valueFromArgs(args) : undefined;
+      return await controller.command(value === undefined ? { action } : { action, value });
+    } catch (e) { logFwd(action, e); throw e; }
+  };
+}
+
+// DVB → livetv. Renderer keeps calling playbill.dvb.* unchanged.
+ipcMain.handle('playbill.dvb.listAdapters', forwardToController('livetv.listAdapters'));
+ipcMain.handle('playbill.dvb.scan',         forwardToController('livetv.scan',         (a) => a || {}));
+ipcMain.handle('playbill.dvb.listChannels', forwardToController('livetv.listChannels'));
+ipcMain.handle('playbill.dvb.tune',         forwardToController('livetv.tune',         (a) => a || {}));
+ipcMain.handle('playbill.dvb.stopTune',     forwardToController('livetv.stopTune',     (a) => a || {}));
+ipcMain.handle('playbill.dvb.probeTools',   forwardToController('livetv.probeTools'));
+
+// RTL-SDR radio.
+ipcMain.handle('playbill.radio.listAdapters', forwardToController('radio.listAdapters'));
+ipcMain.handle('playbill.radio.tune',         forwardToController('radio.tune',         (a) => a || {}));
+ipcMain.handle('playbill.radio.stop',         forwardToController('radio.stop'));
+ipcMain.handle('playbill.radio.getState',     forwardToController('radio.getState'));
+ipcMain.handle('playbill.radio.scan',         forwardToController('radio.scan',         (a) => a || {}));
+ipcMain.handle('playbill.radio.lookupScanner',forwardToController('radio.lookupScanner',(a) => a || {}));
+ipcMain.handle('playbill.radio.listPresets',  forwardToController('radio.listPresets'));
+ipcMain.handle('playbill.radio.setPresets',   forwardToController('radio.setPresets',   (a) => a || []));
+ipcMain.handle('playbill.radio.probeTools',   forwardToController('radio.probeTools'));
+
+// mpv player
+ipcMain.handle('playbill.player.play',     (_e, args) => player.play(args || {}));
+ipcMain.handle('playbill.player.stop',     () => player.stop());
+ipcMain.handle('playbill.player.setVolume',(_e, v) => player.setVolume(v));
+ipcMain.handle('playbill.player.setMute',  (_e, m) => player.setMute(m));
+ipcMain.handle('playbill.player.probeTools',() => player.probeTools());
+
 app.whenReady().then(() => {
   createWindow();
 
@@ -101,7 +199,16 @@ app.whenReady().then(() => {
   globalShortcut.register('CommandOrControl+Shift+Q', () => app.quit());
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  // mpv playback is the only subprocess this process still owns directly.
+  // Radio (rtl_fm) and Live TV (dvbv5-zap) live in the controller daemon
+  // and are stopped during its own shutdown — closing the GUI doesn't
+  // stop audio playback, by design (see architecture-v2 §2 "Why a
+  // daemon-and-GUI split?", reason 2).
+  player.stop().catch(() => {});
+  try { controller.stop(); } catch (_) {}
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

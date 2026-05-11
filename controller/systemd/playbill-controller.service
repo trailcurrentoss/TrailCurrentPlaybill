@@ -1,0 +1,45 @@
+# TrailCurrent Playbill — control daemon
+#
+# Installed as a systemd user unit (NOT a system unit). Lives at
+# ~/.config/systemd/user/playbill-controller.service when installed for
+# a single user, or /usr/lib/systemd/user/playbill-controller.service
+# when shipped in the .deb. The daemon runs in the user's session,
+# stops at logout, restarts on the next login.
+#
+# Enable for the current user:
+#   systemctl --user enable --now playbill-controller.service
+#
+# Status:
+#   systemctl --user status playbill-controller.service
+#   journalctl --user -u playbill-controller.service -f
+#
+# This file's path inside the .deb output:
+#   /usr/lib/systemd/user/playbill-controller.service
+
+[Unit]
+Description=TrailCurrent Playbill — control daemon (MQTT subscriber, mpv owner)
+Documentation=https://github.com/trailcurrent/TrailCurrentPlaybill/blob/main/docs/app/architecture-v2.md
+
+# We do not depend on the network being up here — the controller comes up
+# in the unconfigured state if there's no broker reachable, and reconnects
+# on its own. Avoids needlessly delaying user-session startup.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/playbill-controller
+Restart=always
+RestartSec=3
+
+# The controller writes credentials and OAuth tokens to ~/.config/trailcurrent-playbill/
+# at file mode 0600. No special umask needed; the SettingsStore enforces mode on every
+# write. Logging goes to the systemd journal via stdout/stderr.
+StandardOutput=journal
+StandardError=journal
+
+# Don't allow runaway restarts to mask a real bug — if the daemon dies
+# 5 times in 60 seconds, give up and surface the failure to the user.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

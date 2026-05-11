@@ -53,15 +53,27 @@ function ContentCard({ item, focused, variant = 'landscape' }) {
   );
 }
 
-function AppCard({ app, focused }) {
+function AppCard({ app, focused, onLaunch }) {
+  // Accept either an ionicon name or fall back to the textual label/logo.
+  // Future apps (Netflix, Plex, Spotify) follow the same shape: pick an
+  // ion-icon for instant recognizability without bundling brand assets.
+  const inner = app.icon
+    ? <ion-icon name={app.icon} style={{fontSize: 56, color: '#fff'}}></ion-icon>
+    : (app.logo || app.label || '');
   return (
-    <div className={'app-card' + (focused ? ' focused' : '')} style={{ background: app.bg }}>
-      <div className="logo">{app.logo}</div>
+    <div
+      className={'app-card' + (focused ? ' focused' : '')}
+      style={{ background: app.bg }}
+      onClick={() => onLaunch && onLaunch(app)}
+      role="button"
+      tabIndex={-1}
+    >
+      <div className="logo">{inner}</div>
     </div>
   );
 }
 
-function Row({ title, sub, items, rowId, focusedRow, focusedCol, variant = 'landscape', isApps = false }) {
+function Row({ title, sub, items, rowId, focusedRow, focusedCol, variant = 'landscape', isApps = false, onLaunch }) {
   const trackRef = useRef(null);
   useEffect(() => {
     if (focusedRow === rowId && trackRef.current) {
@@ -80,7 +92,7 @@ function Row({ title, sub, items, rowId, focusedRow, focusedCol, variant = 'land
       <div className="row-track" ref={trackRef}>
         {items.map((it, i) => (
           isApps ? (
-            <AppCard key={it.id} app={it} focused={focusedRow === rowId && focusedCol === i} />
+            <AppCard key={it.id} app={it} focused={focusedRow === rowId && focusedCol === i} onLaunch={onLaunch} />
           ) : (
             <ContentCard
               key={it.id}
@@ -117,7 +129,8 @@ function HomeView({ focus }) {
 
         <Row title="Your Apps" sub={D.apps.length ? 'Installed' : 'No apps yet'}
           items={D.apps.slice(0, 8)} isApps={true}
-          rowId="apps" focusedRow={focus.row} focusedCol={focus.col} />
+          rowId="apps" focusedRow={focus.row} focusedCol={focus.col}
+          onLaunch={window.TV_APPS && window.TV_APPS.launch} />
 
         <Row title="Trails Nearby" sub={D.rowTrails.length ? 'Near you' : 'No trail data'} items={D.rowTrails}
           rowId="trails" focusedRow={focus.row} focusedCol={focus.col} />

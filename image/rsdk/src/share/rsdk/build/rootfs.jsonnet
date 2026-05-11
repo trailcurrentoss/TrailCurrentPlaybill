@@ -60,6 +60,17 @@ function(
         target:        rootfs,
         variant:       variant,
         hostname:      "trailcurrent-playbill",
+
+        // NOTE on packages+: this list is the *intended* desktop image
+        // contents, but mmdebstrap's `--include` mechanism silently rolls
+        // back the whole transaction on any single conflict / strict-equality
+        // failure (Status-Fd suppresses apt output, exit code 0, zero
+        // packages installed). For any package likely to swap with a
+        // distro version (qcom-fastrpc1 vs fastrpc) or hit strict-equality
+        // surprises (gnome-software-plugin-flatpak), the actual install is
+        // performed in customize-hook 3a below via a normal `apt-get
+        // install` so failures are loud. Leave the entries here for
+        // documentation; hook 3a is the authoritative installer.
         packages+: [
             // ── Core system tooling ──────────────────────────────────────
             "ca-certificates",
@@ -105,13 +116,73 @@ function(
             "yaru-theme-gtk",
             "yaru-theme-icon",
 
-            // ── GPU userspace (Adreno on QCS6490 via Mesa) ──────────────
+            // ── GPU userspace (Adreno 643 on QCS6490 via Mesa Turnip) ───
+            // Mesa Noble ships Turnip Vulkan + freedreno GL with full Adreno
+            // 6xx coverage including the 643. The firmware blobs (a630_sqe,
+            // a660_sqe, etc.) come from linux-firmware (above) AND from the
+            // Radxa-side radxa-firmware-qcs6490 bundle (below) — both are
+            // pinned in /etc/apt/preferences.d/.
             "mesa-vulkan-drivers",
             "libdrm2",
             "libgbm1",
             "libegl1",
             "libgl1-mesa-dri",
             "libglx-mesa0",
+            "mesa-utils",                       // glxinfo / eglinfo for diagnostics
+
+            // ── Hardware video decode (4K via Adreno Venus, V4L2 stateful) ──
+            // The Q6A's video decoder is exposed as a V4L2 stateful codec
+            // node (/dev/videoN) by the in-kernel `venus` driver. GStreamer's
+            // -bad plugin set contains the v4l2dec / v4l2videoconvert elements
+            // that media players (VLC, GNOME Videos, Electron's WebContents)
+            // actually use to hand off decode to the GPU. -libav fills in the
+            // long-tail codec coverage via ffmpeg.
+            "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-bad",
+            "gstreamer1.0-libav",
+            "v4l-utils",                        // v4l2-ctl --list-devices
+            "libva2",                           // VA-API surface (some apps probe)
+            "vainfo",
+
+            // ── OTA TV tuner + SDR radio userspace ──────────────────────
+            // The Q6A drives a Hauppauge WinTV-dualHD (USB ATSC tuner;
+            // kernel driver `dvb_usb_cxusb` is in-tree and loads on hot-
+            // plug) and an RTL-SDR USB dongle (kernel driver
+            // `dvb_usb_rtl28xxu`, also in-tree). The kernel side is free —
+            // just plug-and-play. These apt packages give us the userspace
+            // we need to actually tune and demod from the Playbill app:
+            //
+            //   dvb-tools     — dvbv5-scan / dvbv5-zap (channel scan +
+            //                   per-program TS capture for ATSC)
+            //   dtv-scan-tables — `/usr/share/dvb/atsc/us-Center-...` table
+            //                     consumed by dvbv5-scan
+            //   rtl-sdr       — rtl_test / rtl_fm (FM/AM demod to PCM)
+            //   mpv           — fullscreen video player; uses V4L2-M2M
+            //                   (Venus) for hardware-decoded ATSC playback
+            //                   on the Adreno GPU. Configured by the app
+            //                   with --hwdec=auto-safe --vo=gpu-next.
+            "dvb-tools",
+            "dtv-scan-tables",
+            "rtl-sdr",
+            "mpv",
+
+            // ── OpenCL on Adreno (for llama.cpp GGML_OPENCL etc.) ───────
+            // The ICD itself ships in radxa-firmware-qcs6490 (below). The
+            // ocl-icd-libopencl1 dispatch library + clinfo come from Ubuntu.
+            "ocl-icd-libopencl1",
+            "clinfo",
+
+            // ── NPU userspace (Hexagon CDSP via FastRPC) ────────────────
+            // Both packages come from the Radxa qcs6490-noble apt repo,
+            // which additional_repos.libjsonnet wires in automatically for
+            // the Q6A SoC. qcom-fastrpc1 contains cdsprpcd (the userspace
+            // RPC daemon) and the fastrpc test tools; libcdsprpc1 is the
+            // shared library QNN apps link against. Both are pinned (-1)
+            // so apt cannot upgrade them out of step with the held kernel.
+            "qcom-fastrpc1",
+            "libcdsprpc1",
+            // Adreno + Venus + DSP firmware bundle (also pinned).
+            "radxa-firmware-qcs6490",
 
             // ── Audio (PipeWire + WirePlumber + UCM profiles) ───────────
             "pipewire",
@@ -120,6 +191,18 @@ function(
             "alsa-ucm-conf",
             "alsa-utils",
             "pavucontrol",
+            "pulseaudio-utils",   // pactl for diagnostics + PA compat shims
+
+            // ── GNOME Keyring + secret agent (NetworkManager wifi password
+            // prompt is mediated by the secret agent gnome-shell registers
+            // when gnome-keyring is initialised. Without these, NM connect
+            // attempts get "No agents were available for this request." and
+            // silently fail; default Ubuntu prompts-on-connect breaks. We
+            // had this bug on first build.)
+            "gnome-keyring",
+            "libpam-gnome-keyring",
+            "seahorse",            // GUI keyring manager
+            "gcr",                 // crypto / secret-service framework
 
             // ── WiFi (Quectel FCU760K module, AIC8800D80 chipset, USB) ──
             // Confirmed via the Q6A schematic v1.21 (page 3 block diagram):
@@ -149,6 +232,27 @@ function(
             // real install here.
             "firefox-esr",
 
+            // ── Flatpak (for installing creator-tool apps from flathub) ──
+            // Apt PPAs for tools like KiCAD/FreeCAD/Blender are largely
+            // amd64-only; flathub maintains arm64 builds of all three. We
+            // ship the flatpak runtime so the user can install those apps
+            // post-flash. Hook 8c registers the flathub remote system-wide.
+            //
+            // NOTE: we deliberately do NOT include `gnome-software-plugin-
+            // flatpak`. That package has a strict-equality dependency
+            // `gnome-software (= 46.0-1ubuntu2)`. When noble-updates ships
+            // a newer point release of gnome-software (e.g. 46.0-1ubuntu3),
+            // the plugin becomes unsatisfiable, AND apt's solver responds
+            // by silently rolling back the entire `--include` set,
+            // installing ONLY the variant essentials + rsdk's task-*
+            // metapackages — leaving ubuntu-desktop, firefox-esr, etc.
+            // ALL missing. Verified May 2026: dropping this package alone
+            // restored the full GNOME desktop install. Users who want
+            // flatpak apps in the App Center can `apt install
+            // gnome-software-plugin-flatpak` post-flash, when the version
+            // skew (if any) is locally resolvable.
+            "flatpak",
+
             // ── Electron runtime libs (Playbill app links these) ────────
             "libnss3",
             "libnotify4",
@@ -156,6 +260,17 @@ function(
             "libxtst6",
             "libatspi2.0-0",
             "libasound2t64",
+
+            // ── Build-time tooling for customize-hooks ──────────────────
+            // libglib2.0-bin     → /usr/bin/gresource (used by hook 8d
+            //                      to extract+rebuild gnome-shell-theme)
+            // libglib2.0-dev-bin → /usr/bin/glib-compile-resources
+            //                      (also hook 8d, the actual gresource
+            //                      compiler — `-dev-bin` because it's a
+            //                      development tool, not pulled in by
+            //                      ubuntu-desktop normally)
+            "libglib2.0-bin",
+            "libglib2.0-dev-bin",
         ],
         "customize-hooks"+: [
 
@@ -213,29 +328,188 @@ function(
             // ════════════════════════════════════════════════════════════
             // Hook 3: Default user `trailcurrent` (password: trailcurrent)
             //
-            // The user logs into GNOME with this account. Force password change
-            // on first login is handled by GDM's chage settings + the chage call
-            // below. Passwordless sudo lets the user run the standard "Software
-            // Updater" GUI without a sudo prompt loop.
+            // The user logs into GNOME with this account. Passwordless sudo
+            // lets the user run the standard "Software Updater" GUI without
+            // a sudo prompt loop.
+            //
+            // PRIOR BUG (force-password-change vs gnome-keyring): we used to
+            // call `chage -d 0 trailcurrent` here so GDM forced a password
+            // change at first login. That broke the WiFi PSK prompt the very
+            // first time the user tried to connect to a network:
+            //
+            //   * On first GDM login, PAM's `pam_unix` ran `passwd` to set a
+            //     new UNIX password BEFORE `pam_gnome_keyring` opened the
+            //     session.
+            //   * `pam_gnome_keyring` then opened/auto-created the user's
+            //     login keyring with the OLD password it had captured at
+            //     authentication time.
+            //   * Result: the login keyring was sealed with `trailcurrent`
+            //     while the UNIX password was now whatever the user chose.
+            //     NetworkManager's secret-service agent (gnome-shell) could
+            //     not unlock the keyring on subsequent sessions, so storing
+            //     or retrieving WiFi PSKs failed silently — the user just
+            //     saw the SSID never connect.
+            //
+            // Fix: do NOT force a password change. Ship with the well-known
+            // `trailcurrent` password documented in SETUP.md and let the user
+            // change it later via Settings → Users (which uses the proper PAM
+            // stack and updates the keyring atomically) or via `passwd` (which
+            // does the same). gnome-keyring's auto-create then matches the
+            // login password on every fresh session.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
                 echo "[hook 3] creating trailcurrent user"
+                # `render` is required for /dev/fastrpc-* and /dev/dri/render*
+                # access on QCS6490 — the FastRPC udev rule (hook 13a) opens
+                # the device nodes 0666 but the dma_heap path still wants the
+                # caller in render on some Noble kernels.
                 if ! chroot "$1" id trailcurrent >/dev/null 2>&1; then
                     chroot "$1" useradd -m -s /bin/bash \
-                        -G sudo,plugdev,systemd-journal,adm,dialout,audio,video,netdev \
+                        -G sudo,plugdev,systemd-journal,adm,dialout,audio,video,netdev,render \
                         trailcurrent
                 else
-                    chroot "$1" usermod -aG sudo,plugdev,systemd-journal,adm,dialout,audio,video,netdev trailcurrent
+                    chroot "$1" usermod -aG sudo,plugdev,systemd-journal,adm,dialout,audio,video,netdev,render trailcurrent
                 fi
                 echo "trailcurrent:trailcurrent" | chroot "$1" chpasswd
-                # Force password change on first login.
-                chroot "$1" chage -d 0 trailcurrent
+                # NOTE: deliberately NOT calling `chage -d 0 trailcurrent`.
+                # See the comment block above the hook.
                 chroot "$1" passwd -l root || true
 
                 echo "trailcurrent ALL=(ALL) NOPASSWD: ALL" \
                     > "$1/etc/sudoers.d/010_trailcurrent-nopasswd"
                 chmod 440 "$1/etc/sudoers.d/010_trailcurrent-nopasswd"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 3a: Install desktop + app userspace via apt-get (LOUD)
+            //
+            // mmdebstrap's `--include` mechanism (the `packages+:` list above)
+            // is unreliable for any list that contains a package with a
+            // conflict, swap, or strict-equality dep. It runs apt under
+            // `-oAPT::Status-Fd=...` which suppresses normal apt output, so
+            // when apt's solver hits ONE unsatisfiable constraint it silently
+            // rolls back the ENTIRE include transaction (zero packages
+            // installed, exit code 0) and the build proceeds with a
+            // half-baked rootfs. Two confirmed failures here:
+            //
+            //   * gnome-software-plugin-flatpak (= gnome-software 46.0-1ubuntu2)
+            //     becoming unsatisfiable when noble-updates ships a newer
+            //     point release of gnome-software (May 2026)
+            //   * qcom-fastrpc1 (Qualcomm PPA) Breaks `fastrpc` (Radxa repo),
+            //     which is pulled in transitively by task-qualcomm-npu via
+            //     `task-radxa-dragon-q6a --install-recommends` in the
+            //     essential-hook. apt is unwilling to do the swap inside the
+            //     suppressed --include transaction (May 2026).
+            //
+            // Fix: install the desktop / vendor-swap / Electron set
+            // explicitly here via a real `apt-get install` invocation. This
+            // gives us:
+            //   * full apt output in the build log
+            //   * a real non-zero exit code on failure (set -e fails the hook)
+            //   * apt's normal "remove fastrpc to install qcom-fastrpc1" swap
+            //     behaviour, which works fine outside the Status-Fd context
+            //
+            // Order: AFTER user creation (hook 3) but BEFORE apt pinning
+            // (hook 4). The pinning sets mesa-* / libgbm1 / libegl1 etc. to
+            // Pin-Priority -1, which makes them un-installable; we must
+            // install them BEFORE the pin lands.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 3a] installing desktop + app userspace via apt-get (loud — bypasses --include silent rollback)"
+
+                chroot "$1" apt-get update
+
+                # The list below mirrors `packages+:` for the desktop /
+                # vendor-swap / Electron groups. Anything pulled in
+                # transitively by `task-radxa-dragon-q6a --install-recommends`
+                # in the essential-hook is omitted; only the packages that
+                # `--include` was responsible for go here.
+                chroot "$1" env DEBIAN_FRONTEND=noninteractive \
+                    apt-get install -y --install-recommends \
+                        ubuntu-desktop \
+                        gnome-shell \
+                        gdm3 \
+                        nautilus \
+                        gnome-control-center \
+                        gnome-terminal \
+                        gnome-tweaks \
+                        network-manager-gnome \
+                        yaru-theme-gtk \
+                        yaru-theme-icon \
+                        mesa-vulkan-drivers \
+                        libdrm2 \
+                        libgbm1 \
+                        libegl1 \
+                        libgl1-mesa-dri \
+                        libglx-mesa0 \
+                        mesa-utils \
+                        gstreamer1.0-plugins-good \
+                        gstreamer1.0-plugins-bad \
+                        gstreamer1.0-libav \
+                        v4l-utils \
+                        libva2 \
+                        vainfo \
+                        dvb-tools \
+                        dtv-scan-tables \
+                        rtl-sdr \
+                        mpv \
+                        ocl-icd-libopencl1 \
+                        clinfo \
+                        qcom-fastrpc1 \
+                        libcdsprpc1 \
+                        radxa-firmware-qcs6490 \
+                        pipewire \
+                        pipewire-pulse \
+                        wireplumber \
+                        alsa-ucm-conf \
+                        alsa-utils \
+                        pavucontrol \
+                        pulseaudio-utils \
+                        gnome-keyring \
+                        libpam-gnome-keyring \
+                        seahorse \
+                        gcr \
+                        firefox-esr \
+                        flatpak \
+                        libnss3 \
+                        libnotify4 \
+                        libxss1 \
+                        libxtst6 \
+                        libatspi2.0-0 \
+                        libasound2t64 \
+                        libglib2.0-bin \
+                        libglib2.0-dev-bin
+
+                # Fail-fast verification: hook 8c expects flatpak; hook 5
+                # expects libnss3/libxss1/libxtst6/libatspi2.0-0; the
+                # GNOME hooks expect ubuntu-desktop / gdm3 / gnome-shell;
+                # the Playbill app expects the OTA-tuner + SDR-radio userspace
+                # (dvb-tools / dtv-scan-tables / rtl-sdr / mpv) — without those
+                # the FM/AM and live-TV features fail at runtime with no apt
+                # log signal at build time. Verified May 2026: an earlier build
+                # shipped without rtl-sdr/dvb-tools/dtv-scan-tables/mpv even
+                # though the apt-get install above listed them; the verification
+                # list did not catch it. This list now covers the AV path.
+                # If the apt install above silently dropped any of them,
+                # surface that here rather than letting downstream hooks
+                # fail with cryptic messages.
+                MISSING=""
+                for pkg in ubuntu-desktop gnome-shell gdm3 firefox-esr flatpak \
+                           qcom-fastrpc1 mesa-vulkan-drivers libnss3 libxss1 \
+                           libxtst6 libatspi2.0-0t64 libasound2t64 \
+                           rtl-sdr librtlsdr2 dvb-tools dtv-scan-tables mpv; do
+                    if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
+                        MISSING="$MISSING $pkg"
+                    fi
+                done
+                if [ -n "$MISSING" ]; then
+                    echo "  ERROR: hook 3a apt-get install reported success but these packages are NOT installed:" >&2
+                    echo "   $MISSING" >&2
+                    exit 1
+                fi
+                echo "  ✓ desktop + app userspace installed; key packages verified"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -267,6 +541,71 @@ function(
                 mkdir -p "$1/etc/apt/apt.conf.d"
                 install -m 644 "$FILES/apt/60-trailcurrent-playbill-no-recommends.conf" \
                     "$1/etc/apt/apt.conf.d/60-trailcurrent-playbill-no-recommends.conf"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // ════════════════════════════════════════════════════════════
+            // Hook 4b: Verify aic8800 DKMS module built during package install
+            //
+            // The aic8800-usb-dkms postinst (from radxa-pkg) runs `dkms
+            // autoinstall` against the kernel installed in the chroot and —
+            // in current package versions (4.0+git20250410.b99ca8b6+) —
+            // correctly detects the chroot kernel rather than the host's,
+            // so the .ko files land under
+            // /lib/modules/<KVER>/updates/dkms/ at install time. We just
+            // verify here. Module names: aic8800_fdrv_usb.ko (the wifi
+            // driver), aic_load_fw_usb.ko, aic_btusb_usb.ko.
+            //
+            // Verify by globbing the .ko file directly. Do NOT use `-e` on
+            // /lib/modules/<KVER>/build — it's a symlink whose target is
+            // valid INSIDE the chroot but unresolvable from the host (the
+            // path is /usr/src/linux-headers-<KVER> on the chroot, not on
+            // the build host), so `[ -e ... ]` returns false and the loop
+            // skips every kernel.
+            //
+            // Fallback rebuild: if the .ko is genuinely missing (rare —
+            // happens with older aic8800-usb-dkms versions that didn't
+            // autodetect chroot kernels), rebuild via `dkms autoinstall`
+            // for every kernel that has a `linux-image-*` package
+            // installed. We discover those by querying dpkg INSIDE the
+            // chroot, which sidesteps the host-vs-chroot symlink trap.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 4b] verifying aic8800 DKMS .ko present after package install"
+                if ! chroot "$1" dpkg -l aic8800-usb-dkms 2>/dev/null | grep -q "^ii"; then
+                    echo "  aic8800-usb-dkms not installed; skipping (hook 26 will fail loud)"
+                elif ls "$1"/lib/modules/*/updates/dkms/aic8800_fdrv*.ko* 1>/dev/null 2>&1; then
+                    echo "  ✓ aic8800 driver .ko present:"
+                    ls "$1"/lib/modules/*/updates/dkms/aic8800_fdrv*.ko* | sed 's|^|    |'
+                else
+                    echo "  ! aic8800 driver .ko missing — package install didn't build it; rebuilding"
+                    # List /lib/modules/* from INSIDE the chroot. This avoids
+                    # the host-vs-chroot symlink trap (the directories under
+                    # /lib/modules are real, but their `build` and `source`
+                    # children are symlinks that don't resolve from outside
+                    # the chroot).
+                    KVERS=$(chroot "$1" sh -c 'ls /lib/modules/ 2>/dev/null' || true)
+                    if [ -z "$KVERS" ]; then
+                        echo "  ERROR: no kernels under /lib/modules/ inside chroot; cannot rebuild" >&2
+                        exit 1
+                    fi
+                    BUILT_ANY=0
+                    for KVER in $KVERS; do
+                        echo "    rebuilding for $KVER"
+                        chroot "$1" dkms autoinstall -k "$KVER" 2>&1 || \
+                            echo "    ✗ dkms autoinstall failed for $KVER (continuing)"
+                        if ls "$1"/lib/modules/"$KVER"/updates/dkms/aic8800_fdrv*.ko* 1>/dev/null 2>&1; then
+                            echo "    ✓ aic8800 driver .ko built for $KVER"
+                            BUILT_ANY=1
+                        fi
+                    done
+                    if [ "$BUILT_ANY" -eq 0 ]; then
+                        echo "  ERROR: aic8800 DKMS module did not build for ANY installed kernel" >&2
+                        echo "  WiFi will not work on the running board. Refusing to ship the image." >&2
+                        exit 1
+                    fi
+                fi
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -374,6 +713,54 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
+            // Hook 6a: Vendored alsa-ucm-conf master (Q6A use-case profiles)
+            //
+            // Ubuntu Noble ships alsa-ucm-conf 1.2.10 (Q1 2024). The
+            // QCS6490-Radxa-Dragon-Q6A profile + matching conf.d entry were
+            // added to alsa-ucm-conf master after that release (commit
+            // 980fb83 in alsa-ucm-conf upstream). Without these files,
+            // PipeWire / PulseAudio sees the WCD9385 codec attach but
+            // can't load a use-case profile for the Q6A board, so it falls
+            // back to "Dummy Output" — the symptom the user hit on the
+            // running board.
+            //
+            // We vendor the entire master ucm2/ tree at
+            // image/files/alsa-ucm/ucm2/ (4.2 MB) and overlay it on top of
+            // the distro-installed /usr/share/alsa/ucm2/. cp -a preserves
+            // distro files we don't ship and adds the new ones (including
+            // the Q6A profile). The apt pin on alsa-ucm-conf
+            // (50-trailcurrent-playbill-holds.pref) prevents an upstream
+            // upgrade from removing or stomping our overlay.
+            //
+            // UPSTREAM_COMMIT pinned in image/files/alsa-ucm/UPSTREAM_COMMIT.
+            // Hook 26 verifies the Q6A profile file is present.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 6a] overlaying vendored alsa-ucm-conf master onto /usr/share/alsa/ucm2/"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                FILES="$STAGING/files"
+
+                if [ ! -d "$FILES/alsa-ucm/ucm2" ]; then
+                    echo "  ERROR: $FILES/alsa-ucm/ucm2 missing — staging incomplete" >&2
+                    exit 1
+                fi
+                # Sanity-check the Q6A profile is in the staged tree before
+                # we overlay; cheaper to fail here than at hook 26.
+                Q6A_PROFILE="$FILES/alsa-ucm/ucm2/Qualcomm/qcs6490/QCS6490-Radxa-Dragon-Q6A/QCS6490-Radxa-Dragon-Q6A.conf"
+                if [ ! -f "$Q6A_PROFILE" ]; then
+                    echo "  ERROR: vendored UCM tree is missing the Q6A profile: ${Q6A_PROFILE#$FILES/}" >&2
+                    exit 1
+                fi
+
+                mkdir -p "$1/usr/share/alsa/ucm2"
+                cp -a "$FILES/alsa-ucm/ucm2/." "$1/usr/share/alsa/ucm2/"
+
+                COMMIT=$(cat "$FILES/alsa-ucm/UPSTREAM_COMMIT" 2>/dev/null || echo "unknown")
+                echo "  vendored alsa-ucm-conf @ $COMMIT (incl. QCS6490-Radxa-Dragon-Q6A)"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
             // Hook 7: Branding — Plymouth, GDM background, GNOME wallpapers, dconf
             // ════════════════════════════════════════════════════════════
             |||
@@ -405,6 +792,28 @@ function(
                     echo "  WARNING: update-initramfs failed in chroot (qemu-arm64);"
                     echo "  firstboot will retry from the real kernel. Continuing build."
                 fi
+                # Verify the new Plymouth assets actually landed inside the
+                # rebuilt initramfs. Without this, a silent qemu failure leaves
+                # the old initramfs in place and we ship Ubuntu's purple
+                # Plymouth theme instead of ours.
+                #
+                # The initramfs in Noble is at /boot/initrd.img-<KVER>; it's
+                # a concatenation of an early-uncompressed cpio (microcode,
+                # nothing relevant here) and a compressed cpio with the
+                # actual root. lsinitramfs is the standard tool to list it.
+                INITRD_HAS_THEME=0
+                for img in "$1"/boot/initrd.img-*; do
+                    [ -f "$img" ] || continue
+                    if chroot "$1" lsinitramfs "${img#$1}" 2>/dev/null | grep -q 'plymouth/themes/trailcurrent/'; then
+                        INITRD_HAS_THEME=1
+                        break
+                    fi
+                done
+                if [ "$INITRD_HAS_THEME" -eq 0 ]; then
+                    echo "  WARNING: trailcurrent Plymouth theme not present in any initramfs;"
+                    echo "  firstboot will rebuild from the real kernel — first boot will show"
+                    echo "  the default theme briefly, subsequent boots will be branded."
+                fi
 
                 # GNOME wallpapers (light + dark variants)
                 WP_DIR="$1/usr/share/backgrounds/trailcurrent-playbill"
@@ -412,8 +821,16 @@ function(
                 install -m 644 "$STAGING/branding/wallpaper-light.png" "$WP_DIR/wallpaper-light.png"
                 install -m 644 "$STAGING/branding/wallpaper-dark.png"  "$WP_DIR/wallpaper-dark.png"
                 install -m 644 "$STAGING/branding/playbill-logo.svg"   "$WP_DIR/playbill-logo.svg"
-                # Rasterized logo for GDM
+                # Rasterized Playbill product icon (square, 512x512). Used by
+                # Activities / dock; NOT for GDM — too tall for the login
+                # screen, would cover the password input box.
                 install -m 644 "$FILES/icons/512x512.png"              "$WP_DIR/playbill-logo.png"
+                # TrailCurrent corporate wordmark (480x96, white-on-dark) —
+                # this is what GDM's `logo` key points at. Sourced from
+                # /Marketing/ClaudWebSite/src/images/logo/trailcurrent-logo-white.svg.
+                # Hook 26 verifies this file is present.
+                install -m 644 "$STAGING/branding/trailcurrent-wordmark.svg"  "$WP_DIR/trailcurrent-wordmark.svg"
+                install -m 644 "$STAGING/branding/trailcurrent-wordmark.png"  "$WP_DIR/trailcurrent-wordmark.png"
 
                 # System-wide dconf defaults (wallpapers, theme, dock favorites)
                 mkdir -p "$1/etc/dconf/db/local.d"
@@ -441,8 +858,32 @@ function(
                 install -m 644 "$FILES/gnome/gdm-dconf/profile-gdm" \
                     "$1/etc/dconf/profile/gdm"
 
+                # Compile the dconf binary databases. Both /etc/dconf/db/local
+                # (user session) and /etc/dconf/db/gdm (login screen) need to
+                # be regenerated whenever local.d/ or gdm.d/ keyfiles change,
+                # otherwise GNOME / GDM read no overrides at all and we ship
+                # vanilla Ubuntu.
+                #
+                # PRIOR BUG: this used `dconf update 2>&1 || echo WARNING`,
+                # which silently accepted compile failures. The fallout was
+                # a GDM that never picked up our gdm.d wallpaper / logo / theme
+                # overrides because the binary db didn't exist. Now: if dconf
+                # update fails, we still don't fail the build (qemu-arm64 has
+                # historic dbus issues that prevent it), but we DO walk the
+                # output and verify the binary db was actually produced.
+                # Hook 26 fail-fasts on missing binary dbs.
                 chroot "$1" dconf update 2>&1 || \
-                    echo "  WARNING: dconf update failed (non-fatal under qemu)"
+                    echo "  WARNING: dconf update returned non-zero (qemu dbus quirk)"
+                if [ -f "$1/etc/dconf/db/local" ]; then
+                    echo "  ✓ dconf local binary db compiled"
+                else
+                    echo "  WARNING: /etc/dconf/db/local NOT compiled — GNOME overrides will not apply"
+                fi
+                if [ -f "$1/etc/dconf/db/gdm" ]; then
+                    echo "  ✓ dconf gdm binary db compiled"
+                else
+                    echo "  WARNING: /etc/dconf/db/gdm NOT compiled — GDM overrides will not apply"
+                fi
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -475,6 +916,212 @@ function(
                 mkdir -p "$1/etc/gtk-4.0" "$1/etc/gtk-3.0"
                 install -m 644 "$FILES/gnome/gtk-4.0/gtk.css" "$1/etc/gtk-4.0/gtk.css"
                 install -m 644 "$FILES/gnome/gtk-3.0/gtk.css" "$1/etc/gtk-3.0/gtk.css"
+
+                # (c) Recolor gnome-shell (top bar + GDM login screen) to match
+                # the Yaru-viridian-dark accent we use for GTK widgets.
+                #
+                # The gnome-shell theme is selected by `stylesheetName` in
+                # /usr/share/gnome-shell/modes/ubuntu.json. The default value
+                # is "Yaru/gnome-shell.css" (orange). Yaru's package ships
+                # standalone .css files for every variant under
+                # /usr/share/gnome-shell/theme/Yaru-<variant>-dark/, so we
+                # just point at the viridian-dark one. The .gresource bundles
+                # (theme + icons) only exist under Yaru/ and contain assets
+                # for ALL variants — leave those references alone.
+                #
+                # Affects BOTH the user session's top bar AND the GDM login
+                # screen (which is also gnome-shell, in greeter mode reading
+                # the same ubuntu.json mode).
+                #
+                # PRIOR BUG: a sed that rewrote themeResourceName +
+                # iconsResourceName too pointed gnome-shell at .gresource
+                # files that don't exist under Yaru-viridian-dark/ (only
+                # Yaru/ has them). gnome-shell would silently fall back to
+                # Adwaita default styling. Only stylesheetName should change.
+                MODE_FILE="$1/usr/share/gnome-shell/modes/ubuntu.json"
+                if [ -f "$MODE_FILE" ]; then
+                    cp -a "$MODE_FILE" "${MODE_FILE}.upstream"
+                    sed -i 's|"Yaru/gnome-shell.css"|"Yaru-viridian-dark/gnome-shell.css"|g' "$MODE_FILE"
+                    if grep -q '"Yaru-viridian-dark/gnome-shell.css"' "$MODE_FILE"; then
+                        echo "  ✓ gnome-shell mode points at Yaru-viridian-dark/gnome-shell.css"
+                    else
+                        echo "  ✗ ubuntu.json patch did not take" >&2
+                        exit 1
+                    fi
+                else
+                    echo "  WARNING: $MODE_FILE not present — gnome-shell-common may be missing"
+                fi
+
+                # Verify the variant stylesheet file is actually shipped (it's
+                # part of yaru-theme-gnome-shell). If apt's solver dropped it
+                # for any reason, gnome-shell would fail to load the theme.
+                VARIANT_CSS="$1/usr/share/gnome-shell/theme/Yaru-viridian-dark/gnome-shell.css"
+                if [ -f "$VARIANT_CSS" ]; then
+                    echo "  ✓ Yaru-viridian-dark/gnome-shell.css present"
+                else
+                    echo "  ✗ $VARIANT_CSS missing — yaru-theme-gnome-shell broken" >&2
+                    exit 1
+                fi
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 8b: Audio modules-load + Firefox dark-theme policies
+            //
+            // Audio fix complement (#F): force-load the QCS6490 + WCD9385
+            // audio chain at boot via /etc/modules-load.d/. Without this,
+            // the running board picked up snd_soc_sc8280xp (wrong SoC) at
+            // probe time and got use_count=0 — no card surfaced. The right
+            // machine driver (snd_soc_qcm6490, mainline since April 2024)
+            // is autoloaded only if the DT compatible string is exact;
+            // forcing the load defends against compat-string mismatches.
+            //
+            // Firefox fix (#G): policies.json forces Firefox-ESR to honor
+            // the GTK dark theme on Wayland (Mozilla Bug 1535230 / 1527048
+            // workaround). Without it, the URL-bar autocomplete dropdown
+            // renders with a transparent background and unreadable items.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 8b] installing audio modules-load + Firefox dark-theme policies"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                FILES="$STAGING/files"
+
+                # Audio modules force-load
+                mkdir -p "$1/etc/modules-load.d"
+                install -m 644 "$FILES/modules-load.d/q6a-audio.conf" \
+                    "$1/etc/modules-load.d/q6a-audio.conf"
+
+                # Firefox-ESR system-wide policy (dark-theme + autocomplete fix)
+                # /etc/firefox-esr/policies.json is the documented Mozilla path
+                # for system-wide ESR policies on Debian/Ubuntu packaging.
+                mkdir -p "$1/etc/firefox-esr"
+                install -m 644 "$FILES/firefox/policies.json" \
+                    "$1/etc/firefox-esr/policies.json"
+                # Distribution variant — picked up regardless of where the
+                # ESR build looks. Both paths are inert if Firefox isn't
+                # installed; harmless.
+                mkdir -p "$1/etc/firefox-esr/distribution"
+                install -m 644 "$FILES/firefox/policies.json" \
+                    "$1/etc/firefox-esr/distribution/policies.json"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 8c: Register flathub remote system-wide
+            //
+            // The flatpak package itself is in the package list (above).
+            // This hook just adds the flathub remote so the user can run
+            // `flatpak install flathub <app>` (or browse via the GNOME
+            // Software App Center) without having to add the remote first.
+            //
+            // Why flathub matters on arm64: KiCAD/FreeCAD/Blender PPAs are
+            // largely amd64-only on Noble. Flathub maintains arm64 builds
+            // of all three at the latest stable. We deliberately do NOT
+            // install those apps in the chroot — KiCAD's flatpak alone is
+            // ~10 GB with the KDE Platform runtime + KiCAD libraries, and
+            // baking it in would balloon the image for a feature most
+            // users don't need. User installs on demand post-flash.
+            //
+            // remote-add is a config-write only operation (no network, no
+            // download), so it works fine inside the qemu-arm64 chroot.
+            // The actual app install at user-time pulls aarch64 binaries
+            // from flathub.
+            //
+            // PRIOR BUG: this used `chroot "$1" command -v flatpak` to test
+            // whether flatpak is installed. `command` is a POSIX shell
+            // BUILTIN, not a binary in /usr/bin — so `chroot foo command`
+            // always fails with "exec: command: not found" regardless of
+            // whether flatpak is installed. The test was permanently false,
+            // and the hook just printed "flatpak not installed" and exited
+            // 1 the first time anything in --include actually succeeded.
+            // Use `[ -x "$1/usr/bin/flatpak" ]` from the host side (no
+            // chroot, no qemu, no shell-builtin trap).
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 8c] registering flathub remote system-wide"
+                if [ -x "$1/usr/bin/flatpak" ]; then
+                    chroot "$1" flatpak remote-add --if-not-exists flathub \
+                        https://dl.flathub.org/repo/flathub.flatpakrepo
+                    chroot "$1" flatpak remotes | sed 's/^/  /'
+                else
+                    echo "  ERROR: flatpak not installed; package list change didn't land" >&2
+                    exit 1
+                fi
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 8d: Install pre-built viridian-dark GDM gresource
+            //
+            // Hook 8 (c) above patches /usr/share/gnome-shell/modes/ubuntu.json to
+            // point at Yaru-viridian-dark/gnome-shell.css. That covers the user
+            // session's gnome-shell (top bar, activities, etc.) but does NOT
+            // affect the GDM login screen — GDM loads from a separate
+            // gresource bundle via the `gdm-theme.gresource` update-alternatives
+            // slot.
+            //
+            // We ship a pre-built gnome-shell-theme.gresource at
+            // image/files/gnome/shell/gnome-shell-theme.gresource (sourced byte-
+            // for-byte from the live Playbill v0.1.0 board's
+            // /usr/share/gnome-shell/gnome-shell-theme.gresource — sha256
+            // 6c1f1b18...c1c). Contains gdm.css mirrored from the viridian-
+            // dark gnome-shell.css plus a /org/gnome/shell/theme/custom-theme
+            // marker resource that hook 26 grep-checks.
+            //
+            // Earlier iterations of this hook ran the gresource recompilation
+            // pipeline (extract Yaru / overlay viridian / glib-compile-resources)
+            // INSIDE the chroot under qemu-arm64 user emulation. That was
+            // multi-fragile — symlink-vs-cp-rT semantics, libglib2.0-dev-bin
+            // not present by default, qemu mishandling of nested `bash -c`
+            // quoting all bit us in turn. Pre-building on the host (gresource
+            // is architecture-independent — it's CSS + SVG bytes in a glib
+            // container) sidesteps every one of those failure modes.
+            //
+            // The gresource is regenerated by re-running the original
+            // recompilation pipeline ON THE LIVE BOARD (or any working
+            // GNOME 46 system) with set-gdm-theme — see
+            // github.com/realmazharhussain/gdm-tools — and scp'ing the result
+            // back into image/files/gnome/shell/.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 8d] installing pre-built viridian-dark GDM gresource"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                FILES="$STAGING/files"
+                SRC="$FILES/gnome/shell/gnome-shell-theme.gresource"
+                DEST="$1/usr/share/gnome-shell/gnome-shell-theme.gresource"
+
+                if [ ! -f "$SRC" ]; then
+                    echo "  ERROR: staged gresource missing at $SRC" >&2
+                    echo "  (regenerate via gdm-tools on a working board and scp into image/files/gnome/shell/)" >&2
+                    exit 1
+                fi
+
+                install -m 644 "$SRC" "$DEST"
+                echo "  installed gresource: $(stat -c '%s bytes' "$DEST"), sha256 $(sha256sum "$DEST" | cut -d' ' -f1)"
+
+                # Verify the marker resource is present (sanity check that
+                # we didn't accidentally ship the stock Yaru gresource).
+                if chroot "$1" gresource list /usr/share/gnome-shell/gnome-shell-theme.gresource 2>/dev/null \
+                        | grep -q "/org/gnome/shell/theme/custom-theme"; then
+                    echo "  ✓ gresource contains custom-theme marker"
+                else
+                    echo "  ✗ gresource missing custom-theme marker — wrong file in image/files/gnome/shell/" >&2
+                    exit 1
+                fi
+
+                # Register at higher priority (50) than the stock Yaru gresource
+                # (15) so update-alternatives makes our file the active one for
+                # the gdm-theme.gresource slot.
+                chroot "$1" update-alternatives --install \
+                    /usr/share/gnome-shell/gdm-theme.gresource \
+                    gdm-theme.gresource \
+                    /usr/share/gnome-shell/gnome-shell-theme.gresource \
+                    50
+                chroot "$1" update-alternatives --set gdm-theme.gresource \
+                    /usr/share/gnome-shell/gnome-shell-theme.gresource
+
+                chroot "$1" update-alternatives --display gdm-theme.gresource 2>&1 \
+                    | grep "currently points to" | sed "s/^/  /"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -535,21 +1182,61 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 13: Minimal modprobe blacklist (NPU only)
+            // Hook 13: Modprobe drop-in (currently empty — no blacklists)
             //
-            // PRIOR BUG: this used to also blacklist q6asm_dai, q6adm, q6afe,
-            // q6core, q6routing, audioreach. Those are the Q6 audio routing
-            // fabric on QCS6490 — blacklisting them gave us the "dummy output"
-            // sink and broke the analog jack entirely. Only NPU stays
-            // blacklisted now.
+            // PRIOR BUGS this file documents:
+            //   * audio: q6asm_dai/q6adm/q6afe/q6core/q6routing/audioreach
+            //     were blacklisted "for cleanup" — that broke the analog jack.
+            //   * NPU: fastrpc/qcom_fastrpc/qcom_q6v5_pas/qcom_pil_info/
+            //     qcom_q6v5 were blacklisted "for idle power" — that conflicts
+            //     with using the Hexagon NPU.
+            // The file ships empty-but-commented so the rationale stays in the
+            // image and the staging path stays exercised.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
-                echo "[hook 13] installing minimal modprobe blacklist (NPU only)"
+                echo "[hook 13] installing modprobe drop-in (no active blacklists)"
                 STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
                 FILES="$STAGING/files"
                 install -m 644 "$FILES/modprobe/disable-unused.conf" \
                     "$1/etc/modprobe.d/disable-unused.conf"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 13a: NPU userspace plumbing (FastRPC udev + ADSP path)
+            //
+            // The kernel FastRPC driver (`fastrpc`, `qcom_fastrpc`) and the
+            // CDSP firmware loader (`qcom_q6v5_pas`) load by default once
+            // the NPU blacklist (formerly hook 13) is gone. What still needs
+            // staging from us:
+            //   (a) /etc/udev/rules.d/99-fastrpc.rules — opens
+            //       /dev/fastrpc-cdsp{,-secure}, /dev/fastrpc-adsp, and the
+            //       dma_heap/system node to mode 0666 so the user-session
+            //       trailcurrent can talk to the NPU without sudo.
+            //   (b) /etc/profile.d/adsp-library-path.sh — exports
+            //       ADSP_LIBRARY_PATH=/usr/lib/dsp/cdsp:/usr/lib/dsp/adsp:/dsp
+            //       so QNN clients (libQnnHtp*, genie-t2t-run, llama.cpp
+            //       Hexagon backend) find the Skel libs.
+            //
+            // The userspace daemon `cdsprpcd.service` ships with qcom-fastrpc1
+            // (Radxa qcs6490-noble repo). Its enablement happens in hook 19
+            // alongside the other system services.
+            //
+            // No QNN runtime libs (libQnnHtp*.so, libQnnSystem.so, Genie) are
+            // staged in this image. Those are application-supplied; an app
+            // that wants on-NPU inference drops them next to its binary and
+            // ADSP_LIBRARY_PATH picks them up.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 13a] installing NPU userspace plumbing (udev + profile.d)"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                FILES="$STAGING/files"
+                mkdir -p "$1/etc/udev/rules.d"
+                install -m 644 "$FILES/udev/99-fastrpc.rules" \
+                    "$1/etc/udev/rules.d/99-fastrpc.rules"
+                install -m 644 "$FILES/profile/adsp-library-path.sh" \
+                    "$1/etc/profile.d/adsp-library-path.sh"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -678,7 +1365,8 @@ function(
                     avahi-daemon.service \
                     NetworkManager.service \
                     gdm.service \
-                    trailcurrent-playbill-firstboot.service
+                    trailcurrent-playbill-firstboot.service \
+                    cdsprpcd.service
                 chroot "$1" systemctl set-default graphical.target
             |||,
 
@@ -846,6 +1534,18 @@ function(
 
             // ════════════════════════════════════════════════════════════
             // Hook 25: SSH readiness verification
+            //
+            // PRIOR BUG: `sshd -t` was run inside the chroot without first
+            // creating /run/sshd. sshd -t needs /run/sshd to exist (the
+            // privsep dir) and fails immediately with "Missing privilege
+            // separation directory: /run/sshd" when it doesn't. The fallback
+            // branch then ran `rm -f /etc/ssh/sshd_config.d/*.conf` and
+            // deleted our config drop-ins — the OPPOSITE of what we want.
+            //
+            // Fix: create /run/sshd before validating, and on validation
+            // failure, fail the build LOUDLY instead of silently removing
+            // configuration. If the drop-in is wrong we want to know at
+            // build time, not boot time.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
@@ -857,10 +1557,15 @@ function(
                             -f "/etc/ssh/ssh_host_${type}_key" -N "" -q
                     done
                 fi
-                chroot "$1" sshd -t 2>&1 || {
-                    echo "  WARNING: sshd -t failed — removing drop-ins"
-                    rm -f "$1"/etc/ssh/sshd_config.d/*.conf
-                }
+                # sshd -t needs the privsep dir. systemd-tmpfiles creates it
+                # at boot via /usr/lib/tmpfiles.d/sshd.conf, but we're in a
+                # chroot — make it ourselves so validation works.
+                mkdir -p "$1/run/sshd"
+                if ! chroot "$1" sshd -t 2>&1; then
+                    echo "  ERROR: sshd -t failed; refusing to silently delete sshd_config.d drop-ins" >&2
+                    echo "  Inspect $1/etc/ssh/sshd_config.d/ — fix or remove the offending drop-in." >&2
+                    exit 1
+                fi
                 chroot "$1" systemctl is-enabled ssh.service >/dev/null 2>&1 \
                     || chroot "$1" systemctl enable ssh.service
             |||,
@@ -884,6 +1589,85 @@ function(
                 check   "$1" /usr/share/plymouth/themes/trailcurrent/trailcurrent.plymouth
                 check   "$1" /usr/share/backgrounds/trailcurrent-playbill/wallpaper-light.png
                 check   "$1" /usr/share/backgrounds/trailcurrent-playbill/wallpaper-dark.png
+                check   "$1" /usr/share/backgrounds/trailcurrent-playbill/trailcurrent-wordmark.png
+
+                # Hook 8b additions
+                check   "$1" /etc/modules-load.d/q6a-audio.conf
+                check   "$1" /etc/firefox-esr/policies.json
+
+                # Hook 8(c): gnome-shell mode points at viridian-dark stylesheet
+                # (recolors top bar + GDM login screen to match Yaru-viridian-dark
+                # accent). If apt-upgrades of gnome-shell-common ever overwrite
+                # ubuntu.json, this catches it before flashing.
+                if grep -q '"Yaru-viridian-dark/gnome-shell.css"' \
+                   "$1/usr/share/gnome-shell/modes/ubuntu.json" 2>/dev/null; then
+                    echo "  ✓ gnome-shell mode patched (viridian-dark stylesheet)"
+                else
+                    echo "  ✗ ubuntu.json NOT patched — login screen will be orange"
+                    FAIL=$((FAIL+1))
+                fi
+
+                # Hook 8d: GDM greeter recolored via recompiled gresource.
+                # Marker file inside the gresource confirms it's our build,
+                # not the distro default.
+                if chroot "$1" gresource list /usr/share/gnome-shell/gnome-shell-theme.gresource 2>/dev/null \
+                        | grep -q "/org/gnome/shell/theme/custom-theme"; then
+                    echo "  ✓ gnome-shell-theme.gresource is our viridian-dark recompile"
+                else
+                    echo "  ✗ gnome-shell-theme.gresource is NOT our build — GDM will be orange"
+                    FAIL=$((FAIL+1))
+                fi
+                if chroot "$1" update-alternatives --query gdm-theme.gresource 2>/dev/null \
+                        | grep -q "Value: /usr/share/gnome-shell/gnome-shell-theme.gresource"; then
+                    echo "  ✓ update-alternatives points at our recompiled gresource"
+                else
+                    echo "  ✗ update-alternatives NOT pointing at our recompile — GDM will be orange"
+                    FAIL=$((FAIL+1))
+                fi
+
+                # Hook 8c: flatpak + flathub remote (lets user install latest
+                # stable KiCAD/FreeCAD/etc. arm64 builds post-flash).
+                # Use a host-side file test — `chroot ... command -v` doesn't
+                # work because `command` is a shell builtin, not a binary.
+                if [ -x "$1/usr/bin/flatpak" ]; then
+                    echo "  ✓ flatpak installed"
+                else
+                    echo "  ✗ flatpak NOT installed"
+                    FAIL=$((FAIL+1))
+                fi
+                if chroot "$1" flatpak remotes 2>/dev/null | grep -q "^flathub"; then
+                    echo "  ✓ flathub remote registered"
+                else
+                    echo "  ✗ flathub remote NOT registered"
+                    FAIL=$((FAIL+1))
+                fi
+
+                # Hook 6a: vendored alsa-ucm-conf overlay (Q6A use-case profile)
+                # The Q6A profile + matching conf.d entry MUST be present, else
+                # PipeWire will fall back to "Dummy Output" on the running board.
+                check   "$1" /usr/share/alsa/ucm2/Qualcomm/qcs6490/QCS6490-Radxa-Dragon-Q6A/QCS6490-Radxa-Dragon-Q6A.conf
+                check   "$1" /usr/share/alsa/ucm2/Qualcomm/qcs6490/QCS6490-Radxa-Dragon-Q6A/HiFi.conf
+                check   "$1" /usr/share/alsa/ucm2/conf.d/qcs6490/QCS6490-Radxa-Dragon-Q6A.conf
+
+                # dconf binary databases — both must be COMPILED, not just
+                # the keyfiles present. If these are missing, GNOME / GDM
+                # don't read our overrides and we ship vanilla Ubuntu chrome.
+                check   "$1" /etc/dconf/db/local
+                check   "$1" /etc/dconf/db/gdm
+
+                # GNOME secret-agent infrastructure (so NM can prompt for WiFi PSK)
+                if chroot "$1" dpkg -l gnome-keyring 2>/dev/null | grep -q "^ii"; then
+                    echo "  ✓ gnome-keyring installed"
+                else
+                    echo "  ✗ gnome-keyring NOT installed (NM PSK prompt will fail)"
+                    FAIL=$((FAIL+1))
+                fi
+                if chroot "$1" dpkg -l libpam-gnome-keyring 2>/dev/null | grep -q "^ii"; then
+                    echo "  ✓ libpam-gnome-keyring installed"
+                else
+                    echo "  ✗ libpam-gnome-keyring NOT installed (keyring won't unlock at login)"
+                    FAIL=$((FAIL+1))
+                fi
                 check   "$1" /etc/dconf/db/local.d/00-trailcurrent-playbill
                 check   "$1" /etc/dconf/db/local.d/locks/00-trailcurrent-playbill-locks
                 check   "$1" /etc/dconf/profile/user
@@ -916,13 +1700,17 @@ function(
                     echo "  ✗ aic8800-firmware NOT installed"
                     FAIL=$((FAIL+1))
                 fi
-                # The DKMS module should have been built against the kernel
-                # we just installed; the .ko lands under /lib/modules/<KVER>/updates/dkms/.
-                if ls "$1"/lib/modules/*/updates/dkms/aic8800_fdrv.ko* 1>/dev/null 2>&1; then
-                    echo "  ✓ aic8800_fdrv.ko built against installed kernel"
+                # The DKMS module MUST have been built against the kernel we
+                # just installed (hook 4b force-builds it). The .ko lands under
+                # /lib/modules/<KVER>/updates/dkms/. The upstream package
+                # renames the module with a `_usb` suffix from
+                # 4.0+git20250410.b99ca8b6 onward — match either name.
+                # Hard-fail here because WiFi-broken images shouldn't ship.
+                if ls "$1"/lib/modules/*/updates/dkms/aic8800_fdrv*.ko* 1>/dev/null 2>&1; then
+                    echo "  ✓ aic8800 driver .ko built against installed kernel"
                 else
-                    echo "  ✗ aic8800_fdrv.ko NOT built (DKMS rebuild required at first boot)"
-                    # Not a hard fail — first-boot DKMS retry can recover.
+                    echo "  ✗ aic8800 driver .ko NOT built (hook 4b should have done this)"
+                    FAIL=$((FAIL+1))
                 fi
 
                 # Firefox: snap-shim purged, firefox-esr installed
@@ -941,6 +1729,55 @@ function(
 
                 # Audio
                 check   "$1" /etc/wireplumber/wireplumber.conf.d/50-playbill-default-sink.conf
+
+                # GPU userspace + 4K HW decode pipeline
+                if chroot "$1" dpkg -l mesa-vulkan-drivers 2>/dev/null | grep -q "^ii"; then
+                    echo "  ✓ mesa-vulkan-drivers installed"
+                else
+                    echo "  ✗ mesa-vulkan-drivers NOT installed"
+                    FAIL=$((FAIL+1))
+                fi
+                for pkg in gstreamer1.0-plugins-bad gstreamer1.0-libav v4l-utils \
+                           ocl-icd-libopencl1 mesa-utils; do
+                    if chroot "$1" dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+                        echo "  ✓ $pkg installed"
+                    else
+                        echo "  ✗ $pkg NOT installed"
+                        FAIL=$((FAIL+1))
+                    fi
+                done
+
+                # NPU userspace (kernel modules unblocked, CDSP packages installed)
+                if [ ! -f "$1/etc/modprobe.d/disable-unused.conf" ] || \
+                   ! grep -q "blacklist fastrpc" "$1/etc/modprobe.d/disable-unused.conf" 2>/dev/null; then
+                    echo "  ✓ NPU kernel modules NOT blacklisted"
+                else
+                    echo "  ✗ NPU still blacklisted in disable-unused.conf"
+                    FAIL=$((FAIL+1))
+                fi
+                check   "$1" /etc/udev/rules.d/99-fastrpc.rules
+                check   "$1" /etc/profile.d/adsp-library-path.sh
+                for pkg in qcom-fastrpc1 libcdsprpc1 radxa-firmware-qcs6490; do
+                    if chroot "$1" dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+                        echo "  ✓ $pkg installed (Radxa qcs6490-noble repo)"
+                    else
+                        echo "  ✗ $pkg NOT installed"
+                        FAIL=$((FAIL+1))
+                    fi
+                done
+                if chroot "$1" systemctl is-enabled cdsprpcd.service >/dev/null 2>&1; then
+                    echo "  ✓ cdsprpcd.service enabled"
+                else
+                    echo "  ✗ cdsprpcd.service NOT enabled"
+                    FAIL=$((FAIL+1))
+                fi
+                if id -nG trailcurrent 2>/dev/null | tr ' ' '\n' | grep -qx render \
+                   || chroot "$1" id -nG trailcurrent 2>/dev/null | tr ' ' '\n' | grep -qx render; then
+                    echo "  ✓ trailcurrent in render group"
+                else
+                    echo "  ✗ trailcurrent NOT in render group"
+                    FAIL=$((FAIL+1))
+                fi
 
                 # Firstboot
                 check_x "$1" /usr/local/sbin/trailcurrent-playbill-firstboot.sh

@@ -2,7 +2,7 @@
 
 function AppsView({ focus }) {
   const D = window.TV_DATA;
-  const col = focus.col % 6, rowIdx = Math.floor(focus.col / 6);
+  const launch = window.TV_APPS && window.TV_APPS.launch;
   return (
     <div className="apps-view">
       <div className="view-hdr">
@@ -13,16 +13,18 @@ function AppsView({ focus }) {
       <div className="row-sub" style={{marginBottom: 14}}>Featured</div>
       <div className="app-grid">
         {D.apps.slice(0, 6).map((app, i) => (
-          <AppCard key={app.id} app={app} focused={focus.row === 'apps' && focus.col === i} />
+          <AppCard key={app.id} app={app} focused={focus.row === 'apps' && focus.col === i} onLaunch={launch} />
         ))}
       </div>
 
-      <div className="row-sub" style={{marginBottom: 14}}>All Installed</div>
-      <div className="app-grid">
-        {D.apps.slice(6).map((app, i) => (
-          <AppCard key={app.id} app={app} focused={focus.row === 'apps' && focus.col === (i + 6)} />
-        ))}
-      </div>
+      {D.apps.length > 6 && <>
+        <div className="row-sub" style={{marginBottom: 14}}>All Installed</div>
+        <div className="app-grid">
+          {D.apps.slice(6).map((app, i) => (
+            <AppCard key={app.id} app={app} focused={focus.row === 'apps' && focus.col === (i + 6)} onLaunch={launch} />
+          ))}
+        </div>
+      </>}
     </div>
   );
 }

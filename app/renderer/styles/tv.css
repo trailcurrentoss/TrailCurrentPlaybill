@@ -240,7 +240,66 @@ body {
 
 .app-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 32px; }
 
-/* Live TV schedule grid */
+/* Live TV — channel grid + empty / error states */
+.live-error {
+  background: var(--tc-danger-bg-subtle);
+  border: 1px solid rgba(255,84,83,0.4);
+  color: var(--tc-danger);
+  padding: 12px 16px; border-radius: 8px;
+  font-size: 13px; margin-bottom: 16px;
+  font-family: var(--font-mono);
+}
+
+.live-empty, .radio-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 80px 20px; text-align: center;
+  color: rgba(255,255,255,0.6);
+}
+.live-empty ion-icon, .radio-empty ion-icon {
+  font-size: 56px; color: var(--tc-primary); margin-bottom: 18px;
+}
+.live-empty .t, .radio-empty .t { font: 600 22px var(--font-sans); color: #fff; margin-bottom: 8px; }
+.live-empty .b, .radio-empty .b { font-size: 14px; max-width: 480px; line-height: 1.5; }
+
+.ch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.ch-tile {
+  position: relative;
+  background: #0e0e0e;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 16px 18px;
+  text-align: left;
+  color: #fff;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+  font-family: var(--font-sans);
+}
+.ch-tile:hover { border-color: rgba(255,255,255,0.16); }
+.ch-tile.focused {
+  outline: 3px solid var(--tc-primary); outline-offset: 3px;
+  transform: scale(1.04); z-index: 5;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.6), 0 0 0 6px rgba(82,164,65,0.15);
+}
+.ch-tile .ch-num  { font: 700 28px var(--font-mono); color: var(--tc-primary); line-height: 1; }
+.ch-tile .ch-name { font: 600 14px var(--font-sans); margin-top: 4px; }
+.ch-tile .ch-meta { font: 400 11px var(--font-mono); color: rgba(255,255,255,0.45); }
+.ch-tile.tuning {
+  border-color: var(--tc-primary);
+  box-shadow: var(--tc-glow-primary);
+}
+.ch-tile .ch-tuning {
+  position: absolute; top: 12px; right: 14px;
+  font: 600 10px var(--font-mono); color: var(--tc-primary);
+  background: rgba(82,164,65,0.15); padding: 3px 8px; border-radius: 4px;
+  letter-spacing: 1px; text-transform: uppercase;
+}
+
+/* Live TV schedule grid (kept for future EPG view; current grid is .ch-grid) */
 .epg-grid { display: grid; grid-template-columns: 200px 1fr; gap: 2px; background: rgba(255,255,255,0.06); border-radius: 8px; overflow: hidden; }
 .epg-row { display: contents; }
 .epg-ch {
@@ -267,6 +326,255 @@ body {
 .epg-show .t { font: 600 12px var(--font-sans); margin-top: 2px; white-space: nowrap; }
 .epg-time-header { padding: 10px 14px; background: rgba(255,255,255,0.02); display: flex; gap: 100px; font: 500 11px var(--font-mono); color: rgba(255,255,255,0.4); }
 .epg-corner { background: transparent; padding: 10px 16px; font-size: 10px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.6px; }
+
+/* ============ Radio view ============ */
+.radio-view {
+  position: absolute; inset: 0; overflow-y: auto;
+  padding: 80px 48px 40px 80px;
+  display: flex; flex-direction: column;
+}
+.radio-view::-webkit-scrollbar { display: none; }
+
+.radio-band-row {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 24px;
+}
+.radio-band {
+  padding: 10px 28px; border-radius: 9999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.7);
+  font: 700 14px var(--font-sans); letter-spacing: 1px;
+  cursor: pointer;
+}
+.radio-band.active { background: var(--tc-primary); color: #000; border-color: var(--tc-primary); }
+.radio-band.focused {
+  outline: 3px solid var(--tc-primary); outline-offset: 3px;
+  transform: scale(1.05);
+}
+.radio-band-spacer { flex: 1; }
+
+.radio-dial {
+  background: linear-gradient(180deg, #0e1410, #050807);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px;
+  padding: 32px 36px 26px;
+  margin-bottom: 28px;
+  position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.radio-dial.focused {
+  border-color: var(--tc-primary);
+  box-shadow: 0 0 0 3px rgba(82,164,65,0.25);
+}
+.radio-dial-freq {
+  display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px;
+}
+.radio-dial-freq .num {
+  font: 700 96px/1 var(--font-mono);
+  color: var(--tc-primary);
+  letter-spacing: -3px;
+  font-variant-numeric: tabular-nums;
+}
+.radio-dial-freq .unit {
+  font: 600 22px var(--font-sans);
+  color: rgba(255,255,255,0.5);
+  letter-spacing: 2px;
+}
+.radio-dial-hint {
+  font: 500 11px var(--font-mono);
+  color: rgba(255,255,255,0.35);
+  letter-spacing: 1px;
+  margin-bottom: 18px;
+  text-transform: uppercase;
+}
+
+.radio-strip {
+  position: relative;
+  margin: 6px 0 14px;
+}
+.radio-strip-bar {
+  height: 4px; background: rgba(255,255,255,0.08); border-radius: 4px;
+  overflow: hidden;
+}
+.radio-strip-bar .fill {
+  height: 100%; background: var(--tc-primary);
+  box-shadow: 0 0 8px rgba(82,164,65,0.6);
+}
+.radio-strip-ticks {
+  position: relative;
+  display: flex; justify-content: space-between;
+  margin-top: 10px;
+  height: 28px;
+}
+.radio-strip-ticks .tick {
+  flex: 1;
+  position: relative;
+  height: 100%;
+  cursor: pointer;
+  display: flex; flex-direction: column; align-items: center;
+}
+.radio-strip-ticks .tick::before {
+  content: '';
+  width: 1px; height: 8px;
+  background: rgba(255,255,255,0.25);
+}
+.radio-strip-ticks .tick.cursor::before {
+  width: 2px; height: 14px; background: var(--tc-primary);
+  box-shadow: 0 0 6px var(--tc-primary);
+}
+.radio-strip-ticks .tick .lbl {
+  position: absolute; top: 16px;
+  font: 700 11px var(--font-mono); color: var(--tc-primary);
+  white-space: nowrap;
+}
+
+.radio-now {
+  font: 500 13px var(--font-mono);
+  color: rgba(255,255,255,0.55);
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+.radio-presets {
+  margin-top: 8px;
+}
+.radio-presets-hdr {
+  font: 600 11px var(--font-sans);
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.radio-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 10px;
+}
+.radio-preset {
+  background: #0e0e0e;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: left;
+  color: #fff;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--font-sans);
+  min-height: 78px;
+}
+.radio-preset:hover { border-color: rgba(255,255,255,0.16); }
+.radio-preset.focused {
+  outline: 3px solid var(--tc-primary); outline-offset: 3px;
+  transform: scale(1.05); z-index: 5;
+}
+.radio-preset .slot {
+  font: 600 10px var(--font-mono);
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 1px;
+}
+.radio-preset .freq {
+  font: 700 18px var(--font-mono);
+  color: var(--tc-primary);
+  font-variant-numeric: tabular-nums;
+}
+.radio-preset .band {
+  font: 600 10px var(--font-sans);
+  color: rgba(255,255,255,0.5);
+  letter-spacing: 1px;
+}
+.radio-preset.empty .empty-label {
+  font: 500 11px var(--font-sans);
+  color: rgba(255,255,255,0.3);
+  margin-top: 4px;
+}
+
+/* Scanner: ZIP code prompt (replaces the dial when band === 'scanner') */
+.radio-zip {
+  text-align: center;
+}
+.radio-zip-prompt {
+  font: 600 12px var(--font-sans);
+  color: rgba(255,255,255,0.5);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+.radio-zip-digits {
+  display: inline-flex;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+.radio-zip-slot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 64px; height: 84px;
+  border: 2px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  font: 700 44px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: rgba(255,255,255,0.25);
+  background: #0e0e0e;
+}
+.radio-zip-slot.filled {
+  color: var(--tc-primary);
+  border-color: rgba(82,164,65,0.4);
+}
+.radio-zip-slot.cursor {
+  border-color: var(--tc-primary);
+  box-shadow: 0 0 0 3px rgba(82,164,65,0.18);
+}
+
+/* Compact scanner-station tile: same shape as scan results, just denser */
+.radio-scanner-tile .freq    { font-size: 15px; }
+.radio-scanner-tile .signal  { font-size: 11px; color: rgba(255,255,255,0.7); }
+
+/* Seek/scan results */
+.radio-scan-results {
+  margin-top: 14px;
+}
+.radio-scan-hdr {
+  font: 600 11px var(--font-sans);
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.radio-scan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+.radio-scan-result {
+  background: #0e0e0e;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 10px;
+  text-align: left;
+  color: #fff;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--font-sans);
+}
+.radio-scan-result:hover { border-color: var(--tc-primary); }
+.radio-scan-result.focused {
+  outline: 3px solid var(--tc-primary); outline-offset: 3px;
+  transform: scale(1.05); z-index: 5;
+}
+.radio-scan-result .freq {
+  font: 700 16px var(--font-mono);
+  color: var(--tc-primary);
+  font-variant-numeric: tabular-nums;
+}
+.radio-scan-result .band {
+  font: 600 9px var(--font-sans);
+  color: rgba(255,255,255,0.5);
+  letter-spacing: 1px;
+}
+.radio-scan-result .signal {
+  font: 500 10px var(--font-mono);
+  color: rgba(255,255,255,0.45);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
 
 /* Rig overlay view */
 .rig-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
@@ -365,3 +673,91 @@ body {
   font: 500 11px var(--font-sans); border-radius: 6px; cursor: pointer;
 }
 .tv-tweaks-panel .tw-btns button.active { background: var(--tc-primary); color: #000; border-color: var(--tc-primary); }
+
+/* ============ YouTube screen (Phase 6b) ============ */
+.yt-view {
+  position: absolute; inset: 0;
+  padding: 80px 60px 40px 96px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 24px;
+}
+.yt-view::-webkit-scrollbar { display: none; }
+
+.yt-header h1 {
+  font: 700 36px var(--font-sans); letter-spacing: -1px; margin: 0 0 18px;
+  display: flex; align-items: center; gap: 12px;
+}
+.yt-header h1 ion-icon { font-size: 42px; }
+
+.yt-search {
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px; padding: 8px 12px 8px 18px;
+  max-width: 760px;
+}
+.yt-search:focus-within {
+  border-color: var(--tc-primary);
+  box-shadow: 0 0 0 3px rgba(82,164,65,0.2);
+}
+.yt-search ion-icon { font-size: 20px; color: rgba(255,255,255,0.5); flex-shrink: 0; }
+.yt-search input {
+  flex: 1; min-width: 0;
+  background: transparent; border: 0; outline: 0; color: #fff;
+  font: 16px var(--font-sans); padding: 12px 4px;
+}
+.yt-search input::placeholder { color: rgba(255,255,255,0.4); }
+.yt-search button { flex-shrink: 0; padding: 12px 22px; }
+
+.yt-nowplaying {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 14px 18px; border-radius: 10px;
+  background: rgba(82,164,65,0.08);
+  border: 1px solid rgba(82,164,65,0.25);
+}
+.yt-np-title { display: flex; align-items: center; gap: 10px; font-size: 14px; min-width: 0; }
+.yt-np-title ion-icon { font-size: 22px; flex-shrink: 0; }
+.yt-np-title strong { font-weight: 600; max-width: 540px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.yt-np-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.yt-np-actions .tv-btn { padding: 8px 16px; font-size: 12px; }
+
+.yt-error {
+  padding: 12px 16px; border-radius: 8px; font-size: 13px;
+  background: rgba(255,84,83,0.1); border: 1px solid rgba(255,84,83,0.3);
+  color: #ff5453; display: flex; align-items: center; gap: 8px;
+}
+.yt-empty {
+  text-align: center; padding: 60px 20px; color: rgba(255,255,255,0.4);
+}
+.yt-empty p { font-size: 14px; margin-top: 12px; }
+
+.yt-results { display: flex; flex-direction: column; gap: 10px; padding-bottom: 40px; }
+
+.yt-card {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px; border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.yt-card:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); }
+.yt-card.busy { opacity: 0.6; }
+
+.yt-thumb {
+  width: 200px; height: 112px; border-radius: 8px; flex-shrink: 0;
+  background-color: #1a1a1a; background-size: cover; background-position: center;
+  position: relative; overflow: hidden;
+}
+.yt-dur {
+  position: absolute; bottom: 6px; right: 6px;
+  background: rgba(0,0,0,0.85); color: #fff;
+  font: 600 11px var(--font-sans); padding: 2px 6px; border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.yt-meta { flex: 1; min-width: 0; }
+.yt-title { font: 600 16px var(--font-sans); margin-bottom: 4px; line-height: 1.3; max-height: 2.6em; overflow: hidden; }
+.yt-channel { font-size: 13px; color: rgba(255,255,255,0.6); }
+.yt-views { font-size: 12px; color: rgba(255,255,255,0.4); margin-top: 2px; }
+
+.yt-card .tv-btn { flex-shrink: 0; padding: 10px 18px; }

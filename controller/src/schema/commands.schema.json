@@ -1,0 +1,502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trailcurrent-playbill-commands",
+  "title": "TrailCurrent Playbill — command bus payloads",
+  "description": "Shape of every command accepted by the controller's CommandBus, regardless of origin (local IPC, MQTT, internal). Validated at the bus boundary by Ajv before dispatch. Each command's `x-class` field is informational: 'A' = also exists as a CAN message in TrailCurrent.dbc (see x-dbc); 'B' = MQTT/IPC only.",
+
+  "oneOf": [
+    { "$ref": "#/$defs/SystemEcho" },
+    { "$ref": "#/$defs/SystemCommands" },
+    { "$ref": "#/$defs/SystemLaunchGui" },
+    { "$ref": "#/$defs/SystemQuitGui" },
+    { "$ref": "#/$defs/SystemFocus" },
+    { "$ref": "#/$defs/SystemWake" },
+    { "$ref": "#/$defs/SystemSleep" },
+
+    { "$ref": "#/$defs/SettingsGet" },
+    { "$ref": "#/$defs/SettingsReplace" },
+    { "$ref": "#/$defs/SettingsPatch" },
+
+    { "$ref": "#/$defs/ConnectionGet" },
+    { "$ref": "#/$defs/ConnectionSet" },
+    { "$ref": "#/$defs/ConnectionClear" },
+    { "$ref": "#/$defs/ConnectionSetCa" },
+
+    { "$ref": "#/$defs/NavDpad" },
+
+    { "$ref": "#/$defs/TransportPlay" },
+    { "$ref": "#/$defs/TransportPause" },
+    { "$ref": "#/$defs/TransportStop" },
+    { "$ref": "#/$defs/TransportToggle" },
+    { "$ref": "#/$defs/TransportNext" },
+    { "$ref": "#/$defs/TransportPrevious" },
+    { "$ref": "#/$defs/TransportSeekRel" },
+    { "$ref": "#/$defs/TransportSeekAbs" },
+    { "$ref": "#/$defs/TransportVolumeUp" },
+    { "$ref": "#/$defs/TransportVolumeDown" },
+    { "$ref": "#/$defs/TransportVolumeSet" },
+    { "$ref": "#/$defs/TransportMuteOn" },
+    { "$ref": "#/$defs/TransportMuteOff" },
+    { "$ref": "#/$defs/TransportMuteToggle" },
+
+    { "$ref": "#/$defs/RadioTune" },
+    { "$ref": "#/$defs/RadioStop" },
+    { "$ref": "#/$defs/RadioGetState" },
+    { "$ref": "#/$defs/RadioScan" },
+    { "$ref": "#/$defs/RadioListAdapters" },
+    { "$ref": "#/$defs/RadioListPresets" },
+    { "$ref": "#/$defs/RadioSetPresets" },
+    { "$ref": "#/$defs/RadioLookupScanner" },
+    { "$ref": "#/$defs/RadioProbeTools" },
+
+    { "$ref": "#/$defs/LivetvTune" },
+    { "$ref": "#/$defs/LivetvStopTune" },
+    { "$ref": "#/$defs/LivetvScan" },
+    { "$ref": "#/$defs/LivetvListChannels" },
+    { "$ref": "#/$defs/LivetvListAdapters" },
+    { "$ref": "#/$defs/LivetvProbeTools" },
+
+    { "$ref": "#/$defs/SourceLaunch" },
+    { "$ref": "#/$defs/SourceList" },
+    { "$ref": "#/$defs/SourceResolve" },
+    { "$ref": "#/$defs/SourceSearch" },
+
+    { "$ref": "#/$defs/YoutubeGetSettings" },
+    { "$ref": "#/$defs/YoutubeSetSettings" },
+    { "$ref": "#/$defs/YoutubeSignInStart" },
+    { "$ref": "#/$defs/YoutubeSignInPoll" },
+    { "$ref": "#/$defs/YoutubeSignInCancel" },
+    { "$ref": "#/$defs/YoutubeSignOut" },
+    { "$ref": "#/$defs/YoutubeGetAccount" }
+  ],
+
+  "$defs": {
+
+    "_NoValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"]
+    },
+    "_AnyValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": { "action": { "type": "string" }, "value": {} }
+    },
+
+    "SystemEcho": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "system.echo" }, "value": {} }
+    },
+    "SystemCommands": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "system.commands" } }
+    },
+    "SystemLaunchGui": {
+      "x-class": "A", "x-dbc": "PlaybillSystemCmd", "x-dbc-action": "LaunchGui",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "system.launchGui" } }
+    },
+    "SystemQuitGui": {
+      "x-class": "A", "x-dbc": "PlaybillSystemCmd", "x-dbc-action": "QuitGui",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "system.quitGui" } }
+    },
+    "SystemFocus": {
+      "x-class": "A", "x-dbc": "PlaybillSystemCmd", "x-dbc-action": "Focus",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "system.focus" } }
+    },
+    "SystemWake": {
+      "x-class": "A", "x-dbc": "PlaybillSystemCmd", "x-dbc-action": "Wake",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "system.wake" } }
+    },
+    "SystemSleep": {
+      "x-class": "A", "x-dbc": "PlaybillSystemCmd", "x-dbc-action": "Sleep",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "system.sleep" } }
+    },
+
+    "SettingsGet": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "settings.get" } }
+    },
+    "SettingsReplace": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": { "action": { "const": "settings.replace" }, "value": { "type": "object" } }
+    },
+    "SettingsPatch": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": { "action": { "const": "settings.patch" }, "value": { "type": "object" } }
+    },
+
+    "ConnectionGet": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "connection.get" } }
+    },
+    "ConnectionSet": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "connection.set" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["brokerUrl", "username", "password"],
+          "properties": {
+            "brokerUrl": { "type": "string", "format": "uri" },
+            "username":  { "type": "string", "minLength": 1 },
+            "password":  { "type": "string", "minLength": 1 },
+            "tlsCertHostname": { "type": ["string", "null"] },
+            "caCertProvided":  { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "ConnectionClear": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "connection.clear" } }
+    },
+    "ConnectionSetCa": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "connection.setCa" },
+        "value":  { "type": "string", "minLength": 26 }
+      }
+    },
+
+    "NavDpad": {
+      "x-class": "A", "x-dbc": "PlaybillNavCmd",
+      "type": "object", "additionalProperties": false, "required": ["action", "key"],
+      "properties": {
+        "action": { "const": "nav.dpad" },
+        "key": { "enum": ["up", "down", "left", "right", "select", "back", "home", "menu"] }
+      }
+    },
+
+    "TransportPlay": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "Play",
+      "description": "Two shapes: {sourceId,itemId} for resolve-then-play, OR {url,headers?,mediaType?,metadata?} for a pre-resolved Playable.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action":    { "const": "transport.play" },
+        "sourceId":  { "type": "string" },
+        "itemId":    { "type": "string" },
+        "url":       { "type": "string", "minLength": 1 },
+        "headers":   { "type": "object" },
+        "mediaType": { "enum": ["video", "audio"] },
+        "metadata":  { "type": "object" }
+      }
+    },
+    "TransportPause": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "Pause",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.pause" } }
+    },
+    "TransportStop": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "Stop",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.stop" } }
+    },
+    "TransportToggle": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "Toggle",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.toggle" } }
+    },
+    "TransportNext": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "Next",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.next" } }
+    },
+    "TransportPrevious": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "Previous",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.previous" } }
+    },
+    "TransportSeekRel": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "SeekRel",
+      "type": "object", "additionalProperties": false, "required": ["action", "deltaMs"],
+      "properties": {
+        "action":  { "const": "transport.seekRel" },
+        "deltaMs": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }
+      }
+    },
+    "TransportSeekAbs": {
+      "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "SeekAbs",
+      "type": "object", "additionalProperties": false, "required": ["action", "positionMs"],
+      "properties": {
+        "action":     { "const": "transport.seekAbs" },
+        "positionMs": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "TransportVolumeUp": {
+      "x-class": "A", "x-dbc": "PlaybillVolumeCmd", "x-dbc-action": "Up",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "transport.volumeUp" },
+        "step":   { "type": "integer", "minimum": 1, "maximum": 100, "default": 5 }
+      }
+    },
+    "TransportVolumeDown": {
+      "x-class": "A", "x-dbc": "PlaybillVolumeCmd", "x-dbc-action": "Down",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "transport.volumeDown" },
+        "step":   { "type": "integer", "minimum": 1, "maximum": 100, "default": 5 }
+      }
+    },
+    "TransportVolumeSet": {
+      "x-class": "A", "x-dbc": "PlaybillVolumeCmd", "x-dbc-action": "Set",
+      "type": "object", "additionalProperties": false, "required": ["action", "percent"],
+      "properties": {
+        "action":  { "const": "transport.volumeSet" },
+        "percent": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "TransportMuteOn": {
+      "x-class": "A", "x-dbc": "PlaybillVolumeCmd", "x-dbc-action": "MuteOn",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.muteOn" } }
+    },
+    "TransportMuteOff": {
+      "x-class": "A", "x-dbc": "PlaybillVolumeCmd", "x-dbc-action": "MuteOff",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.muteOff" } }
+    },
+    "TransportMuteToggle": {
+      "x-class": "A", "x-dbc": "PlaybillVolumeCmd", "x-dbc-action": "MuteToggle",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "transport.muteToggle" } }
+    },
+
+    "RadioTune": {
+      "x-class": "A", "x-dbc": "PlaybillRadioTuneReq",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "radio.tune" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["band", "frequencyHz"],
+          "properties": {
+            "band":        { "enum": ["fm", "am", "scanner"] },
+            "frequencyHz": { "type": "integer", "minimum": 0 },
+            "gain":        { "type": ["string", "number", "null"] },
+            "modulation":  { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "RadioStop": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "radio.stop" } }
+    },
+    "RadioGetState": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "radio.getState" } }
+    },
+    "RadioScan": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "radio.scan" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "band": { "enum": ["fm", "am"] } }
+        }
+      }
+    },
+    "RadioListAdapters": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "radio.listAdapters" } }
+    },
+    "RadioListPresets": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "radio.listPresets" } }
+    },
+    "RadioSetPresets": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "radio.setPresets" },
+        "value":  { "type": "array" }
+      }
+    },
+    "RadioLookupScanner": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "radio.lookupScanner" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["zip"],
+          "properties": { "zip": { "type": "string", "pattern": "^[0-9]{5}$" } }
+        }
+      }
+    },
+    "RadioProbeTools": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "radio.probeTools" } }
+    },
+
+    "LivetvTune": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "livetv.tune" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel"],
+          "properties": {
+            "adapter": { "type": "integer", "minimum": 0 },
+            "channel": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "LivetvStopTune": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "livetv.stopTune" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "adapter": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+    "LivetvScan": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "livetv.scan" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "adapter": { "type": "integer", "minimum": 0 },
+            "country": { "type": "string", "minLength": 2, "maxLength": 3 }
+          }
+        }
+      }
+    },
+    "LivetvListChannels": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "livetv.listChannels" } }
+    },
+    "LivetvListAdapters": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "livetv.listAdapters" } }
+    },
+    "LivetvProbeTools": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "livetv.probeTools" } }
+    },
+
+    "YoutubeGetSettings": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "youtube.getSettings" } }
+    },
+    "YoutubeSetSettings": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "youtube.setSettings" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "clientId":     { "type": "string", "minLength": 1 },
+            "clientSecret": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "YoutubeSignInStart": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "youtube.signInStart" } }
+    },
+    "YoutubeSignInPoll": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "youtube.signInPoll" } }
+    },
+    "YoutubeSignInCancel": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "youtube.signInCancel" } }
+    },
+    "YoutubeSignOut": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "youtube.signOut" } }
+    },
+    "YoutubeGetAccount": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "youtube.getAccount" } }
+    },
+
+    "SourceLaunch": {
+      "x-class": "A", "x-dbc": "PlaybillLaunchSourceCmd",
+      "type": "object", "additionalProperties": false, "required": ["action", "sourceId"],
+      "properties": {
+        "action":     { "const": "source.launch" },
+        "sourceId":   { "enum": ["youtube", "livetv", "radio", "local", "plex", "spotify", "netflix"] },
+        "subScreen":  { "enum": ["default", "signin", "settings", "search"], "default": "default" }
+      }
+    },
+    "SourceList": {
+      "x-class": "B",
+      "description": "Both fields optional. With no sourceId: list registered sources (the apps grid uses this). With sourceId only: list the source's root. With sourceId+path: list a sub-directory.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action":   { "const": "source.list" },
+        "sourceId": { "type": "string" },
+        "path":     { "type": "string" }
+      }
+    },
+    "SourceResolve": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "sourceId", "itemId"],
+      "properties": {
+        "action":   { "const": "source.resolve" },
+        "sourceId": { "type": "string" },
+        "itemId":   { "type": "string" }
+      }
+    },
+    "SourceSearch": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "sourceId", "query"],
+      "properties": {
+        "action":   { "const": "source.search" },
+        "sourceId": { "type": "string" },
+        "query":    { "type": "string", "minLength": 1 },
+        "limit":    { "type": "integer", "minimum": 1, "maximum": 200 }
+      }
+    }
+  }
+}

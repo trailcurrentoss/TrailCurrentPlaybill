@@ -25,6 +25,7 @@ function SideNav({ active, onSelect, focusId, expanded, onHover }) {
     { id: 'nav-home',   icon: 'home',            label: 'Home' },
     { id: 'nav-apps',   icon: 'apps',            label: 'Apps' },
     { id: 'nav-live',   icon: 'tv-outline',      label: 'Live TV' },
+    { id: 'nav-radio',  icon: 'radio-outline',   label: 'Radio' },
     { id: 'nav-local',  icon: 'albums-outline',  label: 'Library' },
     { id: 'nav-rig',    icon: 'videocam-outline',label: 'Rig View' },
     { id: 'nav-search', icon: 'search-outline',  label: 'Search' },
@@ -73,6 +74,7 @@ function RemoteHint() {
       <span className="chip">⏎ Select</span>
       <span className="chip">⌫ Back</span>
       <span className="chip">H Home</span>
+      <span className="chip">Ctrl+Shift+⌫ Exit App</span>
     </div>
   );
 }

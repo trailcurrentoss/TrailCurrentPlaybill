@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trailcurrent-playbill-settings",
+  "title": "TrailCurrent Playbill — settings",
+  "description": "Single source of truth for app-level settings. Auto-rendered into the Settings UI by the GUI. Connection credentials live in connection.schema.json (separate file, separate disk file) because they contain a secret.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-instance identity. A rig can have several Playbills (living room, bedroom, ...); each gets a stable id used in MQTT topics and a friendly name shown to users.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$",
+          "description": "Stable lowercase slug used as a topic segment. Auto-generated on first run from hostname; never changes after first run so existing subscriptions keep working. Reserved value 'all' is forbidden — that's the broadcast target."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "default": "Playbill",
+          "description": "User-friendly display name shown in PWAs and on the Now Playing chrome. Editable any time."
+        },
+        "canInstance": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 2,
+          "default": null,
+          "description": "Which CAN address block this Playbill claims (0 → 0x100-0x10F, 1 → 0x110-0x11F, 2 → 0x120-0x12F). null = MQTT-only; this Playbill ignores the CAN bridge. See docs/app/dbc-additions.md."
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "theme": {
+          "type": "string",
+          "enum": ["auto", "light", "dark"],
+          "default": "auto",
+          "description": "auto follows the GNOME system preference"
+        },
+        "idleTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Seconds of remote/keyboard inactivity before showing the screensaver. 0 disables."
+        }
+      }
+    },
+    "behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resumeLastSessionOnLaunch": {
+          "type": "boolean",
+          "default": true,
+          "description": "On GUI launch, restore the last visited screen and selection."
+        }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dvbAdapterIndex": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "default": null,
+          "description": "Preferred /dev/dvb/adapterN. null lets the controller auto-pick."
+        },
+        "rtlSdrAdapterIndex": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "default": null,
+          "description": "Preferred RTL-SDR device index. null lets the controller auto-pick."
+        }
+      }
+    }
+  }
+}

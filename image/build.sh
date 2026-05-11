@@ -114,9 +114,15 @@ rsync -a "$SCRIPT_DIR/files/" "$STAGING_DIR/files/"
 
 # Branding assets (wallpapers + logo SVG)
 log "Staging branding assets"
-install -m 644 "$BRANDING_DIR/wallpaper-light.png" "$STAGING_DIR/branding/wallpaper-light.png"
-install -m 644 "$BRANDING_DIR/wallpaper-dark.png"  "$STAGING_DIR/branding/wallpaper-dark.png"
-install -m 644 "$BRANDING_DIR/playbill-logo.svg"   "$STAGING_DIR/branding/playbill-logo.svg"
+install -m 644 "$BRANDING_DIR/wallpaper-light.png"        "$STAGING_DIR/branding/wallpaper-light.png"
+install -m 644 "$BRANDING_DIR/wallpaper-dark.png"         "$STAGING_DIR/branding/wallpaper-dark.png"
+install -m 644 "$BRANDING_DIR/playbill-logo.svg"          "$STAGING_DIR/branding/playbill-logo.svg"
+# TrailCurrent corporate wordmark — used as the GDM login-screen logo and
+# anywhere else we want a small horizontal wordmark instead of the square
+# product icon. Sourced from /Marketing/ClaudWebSite/.../trailcurrent-logo-white.svg
+# (the version used on the marketing site dark header).
+install -m 644 "$BRANDING_DIR/trailcurrent-wordmark.svg"  "$STAGING_DIR/branding/trailcurrent-wordmark.svg"
+install -m 644 "$BRANDING_DIR/trailcurrent-wordmark.png"  "$STAGING_DIR/branding/trailcurrent-wordmark.png"
 
 # Icon set (already rasterized in app/packaging/icons/)
 log "Staging icon set"
@@ -224,7 +230,7 @@ echo "         sudo ./image/flash.sh --firmware"
 echo "    4. Flash OS image to NVMe:"
 echo "         sudo ./image/flash.sh --os $FINAL_IMG"
 echo "    5. Power on. Plymouth → GDM (~30s) → log in as trailcurrent"
-echo "       (default password trailcurrent — forced change on first login)"
+echo "       (default password trailcurrent — change via Settings → Users after login)"
 echo "    6. Configure WiFi via the GNOME network indicator"
 echo "    7. Click TrailCurrent Playbill in the dock to launch"
 echo ""

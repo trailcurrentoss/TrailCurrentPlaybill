@@ -79,7 +79,7 @@ What you should see, in order:
 | 0 s   | Embloader autoboots (no menu) | If you see a menu, the patched embloader didn't get installed — re-flash the OS image |
 | ~5 s  | Plymouth boot splash with the Playbill logo on a dark background | Centered logo, gentle pulse |
 | ~30 s | GDM login screen with the dark brand wallpaper | Native panel resolution |
-| —     | Log in as `trailcurrent` (default password `trailcurrent`) | GDM forces a password change on first login |
+| —     | Log in as `trailcurrent` (default password `trailcurrent`) | We deliberately do NOT force a password change at first login (that breaks gnome-keyring; see notes below) |
 | —     | GNOME desktop appears with the brand wallpaper, themed top bar | Top right has Wi-Fi, sound, power, calendar indicators |
 
 ## Step 5 — Configure WiFi
@@ -90,12 +90,20 @@ GNOME's network indicator is in the top-right of the panel.
 2. Pick your SSID, enter the PSK, click **Connect**
 3. NetworkManager remembers the network — subsequent boots reconnect automatically
 
-If WiFi doesn't appear at all (no Wi-Fi adapter in Settings → Wi-Fi), the most likely cause is `linux-firmware` missing the ath11k blob. Verify:
+The WiFi adapter is the on-board Quectel FCU760K module (AICSemi AIC8800D80, USB-attached). The driver ships as a DKMS package (`aic8800-usb-dkms`) that is built into the image at build time. If WiFi doesn't appear at all (no Wi-Fi adapter in Settings → Wi-Fi):
 
 ```bash
-ls /lib/firmware/ath11k/WCN6855/  # should contain board-2.bin, hw2.0/, etc.
-dmesg | grep -i ath11k             # should show the radio probing
+lsusb | grep -i 'aic\|wifi'        # should show the AICSemi USB device
+dmesg | grep -i aic8800            # should show the driver attaching
+ls /lib/modules/$(uname -r)/updates/dkms/aic8800_fdrv*.ko*  # the .ko should exist (newer pkgs ship aic8800_fdrv_usb.ko)
+sudo dkms autoinstall               # rebuild if the .ko is missing
 ```
+
+## Step 6 — Change your password (and unlock the keyring properly)
+
+Once you're connected, change the default password through **Settings → Users → Password** (or `passwd` from a terminal). Both paths run through the proper PAM stack and update the GNOME login keyring atomically with the new password — meaning Wi-Fi PSKs you save remain accessible on the next reboot.
+
+> **Why we don't force a password change at first login.** The "force change at first login" pattern (`chage -d 0`) is incompatible with `pam_gnome_keyring`: PAM changes the UNIX password before the keyring is opened, the keyring then auto-creates sealed with the old password, and from that point on NetworkManager can't unlock it to retrieve saved Wi-Fi PSKs. Changing your password through Settings or `passwd` after first login avoids the trap.
 
 If it's missing, see [KERNEL_UPDATE_POLICY.md](KERNEL_UPDATE_POLICY.md) §Recovery — your `linux-firmware` may have been silently rolled (it shouldn't be, the apt pins prevent this).
 
@@ -122,10 +130,74 @@ Common failure: WCD938x codec doesn't appear in `aplay -l`. This is a known Qual
 
 1. Hover the dock at the bottom of the screen — the Playbill icon (forest-green folded brochure with a play triangle) is pinned there.
 2. Click it.
-3. Electron opens fullscreen, dark TrailCurrent TV shell. Top bar shows brand chrome (`TrailCurrent Playbill` + system status icons). Sidebar (Home / Apps / Live TV / Library / Rig View / Search / Settings) on the left. Hero in the center with placeholder Stage-1 copy. Empty rows below (Continue Watching, Your Apps, Trails Nearby, Offline Library — Movies) — Stage 2 will populate them.
+3. Electron opens fullscreen, dark TrailCurrent TV shell. Top bar shows brand chrome (`TrailCurrent Playbill` + system status icons). Sidebar (Home / Apps / Live TV / Radio / Library / Rig View / Search / Settings) on the left. Hero in the center with placeholder Stage-1 copy. Empty rows below (Continue Watching, Your Apps, Trails Nearby, Offline Library — Movies) — later stages will populate them.
 4. Arrow keys navigate. `H` returns to Home. `Esc` or `Backspace` backs out. `Ctrl+Q` quits.
 
-## Step 8 — Verify the apt-pinning policy
+### Live TV — Hauppauge WinTV-dualHD (USB ATSC tuner)
+
+1. Plug the WinTV-dualHD into a USB port. The kernel's `dvb_usb_cxusb` driver claims it on hot-plug — verify with `ls /dev/dvb/` (you should see `adapter0/` and `adapter1/`, one per tuner).
+2. Connect an OTA antenna to the tuner's RF input.
+3. Sidebar → **Live TV**. The empty state will say "No channels yet." Click **Rescan**.
+4. Channel scan runs `dvbv5-scan` against the US ATSC frequency table (`dtv-scan-tables` package). On a strong signal it takes 1–3 minutes and writes `~/.config/trailcurrent-playbill/channels.conf`.
+5. Click any channel tile to tune. The app spawns a fullscreen mpv overlay (`--hwdec=auto-safe --vo=gpu-next`) — MPEG-2 / H.264 frames decode on the Adreno Venus V4L2-M2M codec, not the CPU. Press **Esc** to exit playback.
+
+### Radio — RTL-SDR USB dongle (FM/AM)
+
+1. Plug the RTL-SDR. The image blacklists `dvb_usb_rtl28xxu` (see `/etc/modprobe.d/disable-unused.conf`) so librtlsdr can claim it directly.
+2. Verify the dongle is visible: `rtl_test -t` should list it as device `0`.
+3. Sidebar → **Radio**. Use the **FM/AM** toggle, the dial (← / → step, **Enter** tunes), and the 10 preset slots.
+4. The app spawns `rtl_fm | pw-cat` — demodulated PCM goes straight into PipeWire's default sink. Click an empty preset slot to save the current frequency to it.
+
+## Step 8 — Verify the GPU + 4K hardware video decode
+
+The Q6A's Adreno 643 GPU runs through Mesa Turnip (Vulkan) and freedreno (GL). Hardware video decode goes through the in-kernel `venus` driver as a V4L2 stateful codec on `/dev/videoN`.
+
+```bash
+# GL renderer should mention "FD643" or "Turnip Adreno 643"
+glxinfo -B | grep -E "OpenGL renderer|Vendor"
+
+# Vulkan device
+vulkaninfo --summary | grep -E "deviceName|driverName"
+
+# OpenCL — Adreno platform comes from radxa-firmware-qcs6490
+clinfo -l
+
+# Venus video decode/encode nodes
+v4l2-ctl --list-devices
+
+# Smoke-test the v4l2 H.264 decoder element from gstreamer-bad
+gst-inspect-1.0 v4l2slh264dec >/dev/null && echo "v4l2slh264dec: present"
+```
+
+If `v4l2-ctl --list-devices` shows no Venus codec, check `dmesg | grep -i venus` — the Venus firmware (`venus.mbn` / `venus-5.4.fw`) is in `linux-firmware` and the Radxa firmware bundle, both of which are pinned. Don't reach for `apt upgrade linux-firmware` to "fix" it without unpinning carefully (see [KERNEL_UPDATE_POLICY.md](KERNEL_UPDATE_POLICY.md)).
+
+## Step 9 — Verify the NPU (Hexagon CDSP via FastRPC)
+
+The Q6A exposes Qualcomm's Hexagon NPU via the in-kernel `fastrpc` driver and the userspace daemon `cdsprpcd` (from `qcom-fastrpc1`, Radxa qcs6490-noble repo). Kernel modules and CDSP firmware load on every boot; the NPU is available to any user-session app that opens `/dev/fastrpc-cdsp`.
+
+```bash
+# Kernel modules loaded (NOT blacklisted)
+lsmod | grep -E "fastrpc|q6v5"
+
+# CDSP firmware loaded and remote-proc running
+cat /sys/class/remoteproc/remoteproc*/name
+cat /sys/class/remoteproc/remoteproc*/state    # should print "running" for cdsp
+
+# Device nodes — should be 0666 thanks to the udev rule
+ls -l /dev/fastrpc-* /dev/dma_heap/system
+
+# Daemon running
+systemctl status cdsprpcd.service --no-pager
+
+# DSP library search path picked up by login shells
+echo "$ADSP_LIBRARY_PATH"
+```
+
+The image installs the *plumbing* (kernel + libcdsprpc + udev + cdsprpcd) but no application-level QNN runtime. Apps that want to run on-NPU inference (a Hexagon-aware llama.cpp build, a QNN-using Electron module, etc.) ship their own `libQnnHtp*.so` / model files. Drop those into `/usr/lib/dsp/cdsp/` (system-wide) or alongside the binary; `ADSP_LIBRARY_PATH` is preset so they load without further setup.
+
+If `state` reads `crashed` instead of `running`, see the [Foadsf NPU troubleshooting gist](https://gist.github.com/Foadsf/2972e8059102ad9bc9c5848ae1fc7cc3) — the most common cause is a `cdsp.mbn` ↔ `fastrpc_shell_unsigned_3` version mismatch, which our `radxa-firmware-qcs6490` apt pin is meant to prevent.
+
+## Step 10 — Verify the apt-pinning policy
 
 From a terminal:
 

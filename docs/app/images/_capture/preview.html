@@ -1,0 +1,224 @@
+<!doctype html>
+<!--
+  Preview wrapper for capturing documentation screenshots from the Playbill
+  renderer outside of Electron. Runs in headless Chromium with a stub
+  window.playbill so the views render with realistic data WITHOUT real DVB
+  hardware or RTL-SDR tools present.
+
+  Scene selector: pass `?scene=<name>` in the URL.
+    home                    Home screen (default)
+    sidebar-live            Sidebar expanded, Live TV focused
+    sidebar-radio           Sidebar expanded, Radio focused
+    livetv-empty-no-tuner   Live TV, no tuner connected
+    livetv-empty-no-channels Live TV, tuner present but no scan run
+    livetv-scanning         Live TV, scan in progress
+    livetv-channel-grid     Live TV, channels populated, one focused
+    livetv-channel-tuning   Live TV, mid-tune state on a channel tile
+    radio-empty-no-dongle   Radio, no RTL-SDR detected
+    radio-full-layout       Radio, FM tuned, presets filled
+    radio-dial-detail       Radio, dial focused (close-up)
+    radio-presets           Radio, focus on the preset row
+
+  Run via capture.sh — that script handles chromium invocation and ImageMagick
+  callout overlays.
+-->
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <title>Playbill — Documentation Preview</title>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' file:; img-src 'self' file: data: blob:; style-src 'self' file: 'unsafe-inline'; script-src 'self' file: 'unsafe-inline'; font-src 'self' file: data:; connect-src 'self' file:;">
+
+  <link rel="stylesheet" href="../../../../app/renderer/styles/colors_and_type.css">
+  <link rel="stylesheet" href="../../../../app/renderer/styles/tv.css">
+  <link rel="stylesheet" href="../../../../app/renderer/styles/electron-overrides.css">
+
+  <script type="module" src="../../../../app/renderer/vendor/ionicons/ionicons/ionicons.esm.js"></script>
+  <script nomodule src="../../../../app/renderer/vendor/ionicons/ionicons/ionicons.js"></script>
+
+  <script src="../../../../app/renderer/vendor/react.js"></script>
+  <script src="../../../../app/renderer/vendor/react-dom.js"></script>
+</head>
+<body>
+  <div id="tv-root"></div>
+
+  <script>
+    // ─── Mock window.playbill ────────────────────────────────────────────
+    // Each scene name selects a different fixture for the IPC mocks below.
+    // The renderer code is unchanged — what changes is what the IPC stubs
+    // return, plus a few post-mount effects to simulate focus / busy states.
+    const params = new URLSearchParams(location.search);
+    const scene = params.get('scene') || 'home';
+
+    const FIXTURE_CHANNELS = [
+      { name: 'WCBS-DT',  serviceId: 0x0201, frequency: 503000000, modulation: 'ATSC 8VSB' },
+      { name: 'WNBC-DT',  serviceId: 0x0401, frequency: 569000000, modulation: 'ATSC 8VSB' },
+      { name: 'WNYW-DT',  serviceId: 0x0501, frequency: 545000000, modulation: 'ATSC 8VSB' },
+      { name: 'WABC-DT',  serviceId: 0x0701, frequency: 575000000, modulation: 'ATSC 8VSB' },
+      { name: 'WWOR-DT',  serviceId: 0x0901, frequency: 581000000, modulation: 'ATSC 8VSB' },
+      { name: 'WPIX-DT',  serviceId: 0x0B01, frequency: 533000000, modulation: 'ATSC 8VSB' },
+      { name: 'WNET-DT',  serviceId: 0x0D01, frequency: 587000000, modulation: 'ATSC 8VSB' },
+      { name: 'WPXN-DT',  serviceId: 0x1F01, frequency: 521000000, modulation: 'ATSC 8VSB' },
+      { name: 'WNJU-DT',  serviceId: 0x2F01, frequency: 555000000, modulation: 'ATSC 8VSB' },
+      { name: 'WXTV-DT',  serviceId: 0x2901, frequency: 491000000, modulation: 'ATSC 8VSB' },
+    ];
+    const FIXTURE_PRESETS = [
+      { slot: 1, band: 'fm', frequencyHz: 101_500_000, label: '101.5 FM' },
+      { slot: 2, band: 'fm', frequencyHz:  93_900_000, label: '93.9 FM'  },
+      { slot: 3, band: 'fm', frequencyHz:  88_300_000, label: '88.3 FM'  },
+      { slot: 4, band: 'fm', frequencyHz:  98_700_000, label: '98.7 FM'  },
+      { slot: 5, band: 'fm', frequencyHz: null, label: '' },
+      { slot: 6, band: 'fm', frequencyHz: null, label: '' },
+      { slot: 7, band: 'am', frequencyHz:    660_000, label: '660 AM'   },
+      { slot: 8, band: 'am', frequencyHz:    880_000, label: '880 AM'   },
+      { slot: 9, band: 'am', frequencyHz: null, label: '' },
+      { slot: 10,band: 'am', frequencyHz: null, label: '' },
+    ];
+
+    function selectDvbFixture() {
+      switch (scene) {
+        case 'livetv-empty-no-tuner':
+          return { adapters: [], channels: [], scanning: false, tuning: null };
+        case 'livetv-empty-no-channels':
+          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' },
+                                 { index: 1, name: 'Adapter 1 (dvb_usb_cxusb)' }],
+                   channels: [], scanning: false, tuning: null };
+        case 'livetv-scanning':
+          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' }],
+                   channels: [], scanning: true, tuning: null };
+        case 'livetv-channel-tuning':
+          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' },
+                                 { index: 1, name: 'Adapter 1 (dvb_usb_cxusb)' }],
+                   channels: FIXTURE_CHANNELS, scanning: false, tuning: 'WNBC-DT' };
+        case 'livetv-channel-grid':
+        default:
+          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' },
+                                 { index: 1, name: 'Adapter 1 (dvb_usb_cxusb)' }],
+                   channels: FIXTURE_CHANNELS, scanning: false, tuning: null };
+      }
+    }
+
+    function selectRadioFixture() {
+      switch (scene) {
+        case 'radio-empty-no-dongle':
+          return { adapters: [], state: { running: false } };
+        default:
+          return { adapters: [{ index: 0, name: 'Realtek, RTL2838UHIDIR, SN: 00000001' }],
+                   state: { running: true, band: 'fm', frequencyHz: 101_500_000 } };
+      }
+    }
+
+    const dvbFixture   = selectDvbFixture();
+    const radioFixture = selectRadioFixture();
+    const dvbToolsAvailable   = scene !== 'livetv-tools-missing';
+    const radioToolsAvailable = scene !== 'radio-tools-missing';
+
+    window.playbill = {
+      shouldUseDarkColors: true,
+      onThemeChange: () => () => {},
+      dvb: {
+        listAdapters: async () => dvbFixture.adapters,
+        scan:         async () => dvbFixture.channels,
+        listChannels: async () => dvbFixture.channels,
+        tune:         async ({ channel }) => ({ tsPath: '/tmp/playbill-runtime/tuner0.ts', channel, adapter: 0 }),
+        stopTune:     async () => {},
+        probeTools:   async () => ({ scan: dvbToolsAvailable, zap: dvbToolsAvailable }),
+      },
+      radio: {
+        listAdapters: async () => radioFixture.adapters,
+        tune:         async ({ band, frequencyHz }) => ({ band, frequencyHz, gain: 'auto' }),
+        stop:         async () => {},
+        getState:     async () => radioFixture.state,
+        listPresets:  async () => FIXTURE_PRESETS,
+        setPresets:   async (a) => a,
+        probeTools:   async () => ({ rtl_fm: radioToolsAvailable, rtl_test: radioToolsAvailable, pw_cat: true }),
+      },
+      player: {
+        play:       async () => ({ ipcPath: '/tmp/playbill-runtime/mpv.sock' }),
+        stop:       async () => {},
+        setVolume:  async () => {},
+        setMute:    async () => {},
+        probeTools: async () => ({ mpv: true }),
+      },
+    };
+
+    // ─── Post-mount tweaks ───────────────────────────────────────────────
+    // After React mounts, drive screen + focus state to match the scene.
+    // We rely on the same keyboard events the real app handles, so this
+    // exercises the production code path rather than poking React state.
+    function dispatchKey(key) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    }
+    function clickNav(label) {
+      const btn = [...document.querySelectorAll('.tv-sidenav .nav-btn')]
+        .find(b => b.querySelector('.l')?.textContent.trim() === label);
+      if (btn) btn.click();
+    }
+    function expandSidebarAndFocus(navLabel) {
+      // React listens for mouseenter via synthetic events that don't always
+      // pick up dispatched native mouseenter (it doesn't bubble). For the
+      // screenshot just add the `.expanded` class directly and tag the
+      // matching button as `.focused` — bypasses the onHover state path.
+      const rail = document.querySelector('.tv-sidenav');
+      if (rail) rail.classList.add('expanded');
+      // Also bump content-area `.left` so the sidebar doesn't clip the page.
+      const content = document.querySelector('.tv-content');
+      if (content) content.style.left = '260px';
+      requestAnimationFrame(() => {
+        const btn = [...document.querySelectorAll('.tv-sidenav .nav-btn')]
+          .find(b => b.querySelector('.l')?.textContent.trim() === navLabel);
+        if (btn) btn.classList.add('focused');
+      });
+    }
+
+    // Wait for the renderer to mount, then drive the scene via clicks
+    // (more reliable than dispatching keys since clicks are direct DOM
+    // events that React handlers always see fresh state for).
+    function whenMounted(fn, retries = 20) {
+      const ready = document.querySelector('.tv-sidenav .nav-btn');
+      if (ready) return fn();
+      if (retries <= 0) return;
+      setTimeout(() => whenMounted(fn, retries - 1), 50);
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      whenMounted(() => {
+        if (scene === 'home') return;
+
+        if (scene === 'sidebar-live')  return expandSidebarAndFocus('Live TV');
+        if (scene === 'sidebar-radio') return expandSidebarAndFocus('Radio');
+
+        if (scene.startsWith('livetv-')) {
+          clickNav('Live TV');
+          // For tile-focused scenes, simulate keyboard ArrowDown into the grid
+          // after the view paints.
+          if (scene === 'livetv-channel-grid' || scene === 'livetv-channel-tuning') {
+            setTimeout(() => dispatchKey('ArrowDown'), 200);
+          }
+          return;
+        }
+
+        if (scene.startsWith('radio-')) {
+          clickNav('Radio');
+          if (scene === 'radio-dial-detail') setTimeout(() => dispatchKey('ArrowDown'), 250);
+          if (scene === 'radio-presets')     setTimeout(() => { dispatchKey('ArrowDown'); setTimeout(() => dispatchKey('ArrowDown'), 80); }, 250);
+          return;
+        }
+      });
+    });
+  </script>
+
+  <script src="../../../../app/renderer/bootstrap-theme.js"></script>
+  <script src="../../../../app/renderer/react-globals.js"></script>
+  <script src="../../../../app/renderer/data.js"></script>
+  <script src="../../../../app/build/components/chrome.js"></script>
+  <script src="../../../../app/build/components/home.js"></script>
+  <script src="../../../../app/build/components/apps.js"></script>
+  <script src="../../../../app/build/components/live.js"></script>
+  <script src="../../../../app/build/components/radio.js"></script>
+  <script src="../../../../app/build/components/local.js"></script>
+  <script src="../../../../app/build/components/rig.js"></script>
+  <script src="../../../../app/build/components/app.js"></script>
+  <script src="../../../../app/renderer/bootstrap-app.js"></script>
+</body>
+</html>

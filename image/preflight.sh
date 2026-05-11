@@ -37,7 +37,28 @@ echo ""
 # ── 1. APT build dependencies ───────────────────────────────────────────────
 step "1. Build host tooling"
 
-REQUIRED_TOOLS=(jsonnet mmdebstrap guestfish qemu-aarch64-static sgdisk parted git curl gpg dtc rsync unzip nasm iasl pkg-config aarch64-linux-gnu-gcc)
+REQUIRED_TOOLS=(jsonnet mmdebstrap guestfish sgdisk parted git curl gpg dtc rsync unzip nasm iasl pkg-config)
+
+# qemu-aarch64-static is only needed when the build host's architecture
+# does not match the target (arm64). On a native arm64 host (e.g.
+# building Playbill ON the Q6A board), all binaries run directly and
+# no user-mode emulation is needed.
+HOST_ARCH=$(uname -m)
+if [ "$HOST_ARCH" != "aarch64" ] && [ "$HOST_ARCH" != "arm64" ]; then
+    REQUIRED_TOOLS+=(qemu-aarch64-static)
+fi
+
+# aarch64-linux-gnu-gcc is the cross-compiler used to build the
+# embloader on x86 hosts. On an arm64 host the system's plain `gcc`
+# already produces aarch64 binaries, so the cross-prefixed name isn't
+# present (and isn't needed).
+if [ "$HOST_ARCH" != "aarch64" ] && [ "$HOST_ARCH" != "arm64" ]; then
+    REQUIRED_TOOLS+=(aarch64-linux-gnu-gcc)
+else
+    # Native arm64: ensure plain `gcc` exists and can produce aarch64.
+    REQUIRED_TOOLS+=(gcc)
+fi
+
 for tool in "${REQUIRED_TOOLS[@]}"; do
     if command -v "$tool" >/dev/null 2>&1; then
         ok "$tool"

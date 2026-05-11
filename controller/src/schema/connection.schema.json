@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trailcurrent-playbill-connection",
+  "title": "TrailCurrent Playbill — MQTT broker connection",
+  "description": "Stored separately from settings.json because it contains a secret. The Settings → Connection screen in the GUI is the only thing that writes to it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["brokerUrl", "username", "password"],
+  "properties": {
+    "brokerUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Full broker URL, e.g. mqtts://headwaters.local:8883",
+      "examples": ["mqtts://headwaters.local:8883"]
+    },
+    "username": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MQTT username for the rig broker"
+    },
+    "password": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MQTT password. Persisted at file mode 0600. Never published over MQTT or written to logs."
+    },
+    "tlsCertHostname": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Optional TLS hostname override. Used when the broker cert was issued for a different hostname than we connect to (e.g., 'mosquitto' inside the container network vs. 'headwaters.local' on the LAN). Mirrors Headwaters' TLS_CERT_HOSTNAME env var."
+    },
+    "caCertProvided": {
+      "type": "boolean",
+      "default": false,
+      "description": "True if a CA cert has been written to ~/.config/trailcurrent-playbill/ca.pem. Set automatically when the user uploads/pastes one in the Settings UI."
+    }
+  }
+}
