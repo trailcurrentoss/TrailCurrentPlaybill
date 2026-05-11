@@ -23,77 +23,161 @@ function ConnectionStatusPill({ status, lastError }) {
   );
 }
 
+// ─── Field-level + structured error helpers ──────────────────────────
+
+// Client-side validators — catch obviously-bad input before submitting so
+// the user fixes typos here instead of waiting for a 401 from Headwaters.
+// Each returns null on OK or a short user-facing message on failure.
+const validate = {
+  username(v) {
+    if (!v || !v.trim())            return 'Username is required.';
+    if (v !== v.trim())             return 'Username has leading or trailing whitespace.';
+    if (/\s/.test(v))               return 'Username can\'t contain spaces.';
+    return null;
+  },
+  password(v) {
+    if (!v)                         return 'Password is required.';
+    if (/^\s+$/.test(v))            return 'Password can\'t be only whitespace.';
+    if (v !== v.trim())             return 'Password has leading or trailing whitespace (this trips up brokers — paste it again).';
+    return null;
+  },
+  caCert(v, opts = {}) {
+    if (!v || !v.trim()) {
+      return opts.alreadyProvided ? null
+        : 'Paste the Headwaters CA certificate so this Playbill can verify the broker\'s TLS identity.';
+    }
+    if (!/-----BEGIN CERTIFICATE-----/.test(v) || !/-----END CERTIFICATE-----/.test(v)) {
+      return 'That doesn\'t look like a PEM certificate. It should start with "-----BEGIN CERTIFICATE-----" and end with "-----END CERTIFICATE-----".';
+    }
+    return null;
+  },
+  apiKey(v) {
+    if (!v || !v.trim())            return 'API key is required.';
+    const t = v.trim();
+    if (!/^rv_[A-Za-z0-9_-]+$/.test(t))
+                                    return 'Headwaters API keys start with "rv_" and contain only letters, numbers, dashes, or underscores.';
+    if (t.length < 20)              return 'That key looks too short. Make sure you copied the full value from Headwaters.';
+    return null;
+  },
+};
+
+// Maps a server-side error `kind` to an icon. Kept here so the UI knows
+// only this small vocabulary; the controller's classifier owns the rules.
+const ERROR_ICON = {
+  dns:     'globe-outline',
+  refused: 'close-circle-outline',
+  network: 'cloud-offline-outline',
+  timeout: 'time-outline',
+  tls:     'shield-half-outline',
+  auth:    'key-outline',
+  http:    'alert-circle-outline',
+  unknown: 'warning-outline',
+  empty:   'warning-outline',
+};
+
+function FieldError({ children }) {
+  if (!children) return null;
+  return (
+    <div style={{marginTop:6, fontSize:12, color:'#ff5453',
+                  display:'inline-flex', alignItems:'center', gap:6}}>
+      <ion-icon name="alert-circle-outline"></ion-icon>
+      {children}
+    </div>
+  );
+}
+
+function ErrorAlert({ kind, title, message }) {
+  return (
+    <div style={{padding:'12px 14px', background:'rgba(255,84,83,0.1)',
+                 border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
+                 color:'#ff5453', fontSize:13,
+                 display:'flex', alignItems:'flex-start', gap:10}}>
+      <ion-icon name={ERROR_ICON[kind] || ERROR_ICON.unknown}
+                style={{fontSize:18, flexShrink:0, marginTop:1}}></ion-icon>
+      <div>
+        {title && <div style={{fontWeight:600, marginBottom:4}}>{title}</div>}
+        <div>{message}</div>
+      </div>
+    </div>
+  );
+}
+
+function SuccessAlert({ title, message }) {
+  return (
+    <div style={{padding:'12px 14px', background:'rgba(82,164,65,0.1)',
+                 border:'1px solid rgba(82,164,65,0.3)', borderRadius:8,
+                 color:'#52a441', fontSize:13,
+                 display:'flex', alignItems:'center', gap:10}}>
+      <ion-icon name="checkmark-circle-outline" style={{fontSize:18}}></ion-icon>
+      <div>
+        {title && <span style={{fontWeight:600, marginRight:6}}>{title}</span>}
+        {message}
+      </div>
+    </div>
+  );
+}
+
 function ConnectionForm({ initial, onSave, busy }) {
-  const [brokerUrl, setBrokerUrl] = useState(initial?.brokerUrl || '');
-  const [username,  setUsername]  = useState(initial?.username  || '');
-  const [password,  setPassword]  = useState('');
-  const [tlsHost,   setTlsHost]   = useState(initial?.tlsCertHostname || '');
-  const [caCert,    setCaCert]    = useState('');
-  const [error,     setError]     = useState(null);
+  const [username, setUsername] = useState(initial?.username || '');
+  const [password, setPassword] = useState('');
+  const [caCert,   setCaCert]   = useState('');
+  const [fieldErrs, setFieldErrs] = useState({});
 
   const submit = async (e) => {
     e.preventDefault();
-    setError(null);
-    try {
-      await onSave({
-        brokerUrl, username, password,
-        tlsCertHostname: tlsHost || null,
-        caCertProvided: !!caCert || !!initial?.caCertProvided,
-        ca: caCert || undefined,
-      });
-    } catch (err) {
-      setError(String(err.message || err));
-    }
+    // Client-side first pass — catch empty / malformed before round trip.
+    const errs = {
+      username: validate.username(username),
+      password: validate.password(password),
+      caCert:   validate.caCert(caCert, { alreadyProvided: !!initial?.caCertProvided }),
+    };
+    setFieldErrs(errs);
+    if (errs.username || errs.password || errs.caCert) return;
+
+    await onSave({
+      username: username.trim(),
+      password,
+      caCertProvided: !!caCert || !!initial?.caCertProvided,
+      ca: caCert || undefined,
+    });
   };
 
   const labelStyle = { display:'block', fontSize:12, letterSpacing:1,
                        textTransform:'uppercase', color:'rgba(255,255,255,0.6)',
                        marginBottom:6 };
-  const inputStyle = { width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
-                       border:'1px solid rgba(255,255,255,0.1)', borderRadius:8,
-                       color:'#fff', font:'14px var(--font-sans)' };
+  const inputStyle = (hasErr) => ({
+    width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
+    border:`1px solid ${hasErr ? 'rgba(255,84,83,0.6)' : 'rgba(255,255,255,0.1)'}`,
+    borderRadius:8, color:'#fff', font:'14px var(--font-sans)',
+  });
 
   return (
-    <form onSubmit={submit} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:18}}>
-      <div>
-        <label style={labelStyle}>Broker hostname</label>
-        <input style={inputStyle} type="text" placeholder="headwaters.local"
-               value={brokerUrl} onChange={(e) => setBrokerUrl(e.target.value)} required />
-        <div style={{fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:6}}>
-          Always TLS (mqtts://). Port defaults to 8883 — append <code>:&lt;port&gt;</code> only if your broker uses a different one.
-        </div>
+    <form onSubmit={submit} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:18}} noValidate>
+      <div style={{fontSize:11, color:'rgba(255,255,255,0.4)'}}>
+        Connecting to <code>mqtts://headwaters.local:8883</code> (the rig's Headwaters host).
       </div>
       <div>
         <label style={labelStyle}>Username</label>
-        <input style={inputStyle} type="text" placeholder="rig MQTT username"
-               value={username} onChange={(e) => setUsername(e.target.value)} required />
+        <input style={inputStyle(!!fieldErrs.username)} type="text" placeholder="rig MQTT username"
+               value={username} onChange={(e) => setUsername(e.target.value)}
+               autoComplete="username" />
+        <FieldError>{fieldErrs.username}</FieldError>
       </div>
       <div>
-        <label style={labelStyle}>Password {initial && !password && '(leave blank to keep current)'}</label>
-        <input style={inputStyle} type="password"
+        <label style={labelStyle}>Password</label>
+        <input style={inputStyle(!!fieldErrs.password)} type="password"
                placeholder={initial ? '••••••••' : 'rig MQTT password'}
                value={password} onChange={(e) => setPassword(e.target.value)}
-               required={!initial} />
+               autoComplete="current-password" />
+        <FieldError>{fieldErrs.password}</FieldError>
       </div>
       <div>
-        <label style={labelStyle}>TLS Cert Hostname (optional)</label>
-        <input style={inputStyle} type="text"
-               placeholder="e.g. mosquitto — only if cert hostname differs from broker URL"
-               value={tlsHost} onChange={(e) => setTlsHost(e.target.value)} />
-      </div>
-      <div>
-        <label style={labelStyle}>CA Certificate (PEM) {initial?.caCertProvided && '(currently set)'}</label>
-        <textarea style={{...inputStyle, minHeight:120, fontFamily:'var(--font-mono)', fontSize:12}}
+        <label style={labelStyle}>CA Certificate (PEM) {initial?.caCertProvided && '(currently set; leave blank to keep)'}</label>
+        <textarea style={{...inputStyle(!!fieldErrs.caCert), minHeight:120, fontFamily:'var(--font-mono)', fontSize:12}}
                   placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
                   value={caCert} onChange={(e) => setCaCert(e.target.value)} />
+        <FieldError>{fieldErrs.caCert}</FieldError>
       </div>
-      {error && (
-        <div style={{padding:'12px 14px', background:'rgba(255,84,83,0.1)',
-                     border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
-                     color:'#ff5453', fontSize:13}}>
-          {error}
-        </div>
-      )}
       <div style={{display:'flex', gap:12}}>
         <button type="submit" className="tv-btn primary" disabled={busy}>
           <ion-icon name="save-outline"></ion-icon>
@@ -194,7 +278,6 @@ function HeadwatersScreen({ ctrlState }) {
   const apiKeySet = !!(ctrlState && ctrlState.headwaters && ctrlState.headwaters.apiKeySet);
   const [apiKey, setApiKey]             = useState('');
   const [apiKeyBusy, setApiKeyBusy]     = useState(false);
-  const [apiKeyError, setApiKeyError]   = useState(null);
   const [apiKeySaved, setApiKeySaved]   = useState(false);
 
   useEffect(() => {
@@ -207,36 +290,44 @@ function HeadwatersScreen({ ctrlState }) {
     })();
   }, []);
 
-  const onSave = async ({ brokerUrl, username, password, tlsCertHostname, caCertProvided, ca }) => {
-    setBusy(true);
+  // After saving, poll state.connection.status (already mirrored into
+  // ctrlState by the parent subscription) until MQTT either connects or
+  // errors out. The classifier in the controller categorises whatever the
+  // broker reported (DNS / refused / TLS / auth / timeout) so the UI can
+  // show a specific message instead of "broker connection failed".
+  const VALIDATE_MS = 12000;
+  const [brokerResult, setBrokerResult] = useState(null);   // {ok, kind?, message?}
+  async function waitForMqttResult() {
+    const start = Date.now();
+    while (Date.now() - start < VALIDATE_MS) {
+      let snap = null;
+      try { snap = (await window.playbill.controller.getState()).state; }
+      catch (_) { /* keep trying */ }
+      const c = snap && snap.connection;
+      if (c) {
+        if (c.status === 'connected') return { ok: true };
+        if (c.status === 'error')     return { ok: false,
+                                                kind: c.lastErrorKind || 'unknown',
+                                                message: c.lastError || 'Broker connection failed.' };
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return { ok: false, kind: 'timeout',
+             message: `The broker didn't respond within ${VALIDATE_MS/1000} seconds. Check that Headwaters is powered on and on the same network as this Playbill.` };
+  }
+
+  const onSave = async ({ username, password, caCertProvided, ca }) => {
+    setBusy(true); setBrokerResult(null);
     try {
-      // 1. Save the cert first (if a new one was provided) so caCertProvided
-      //    is true by the time we save the connection. The controller also
-      //    installs it into the system trust store so browsers and curl on
-      //    this box trust trailcurrent.* hostnames automatically.
       if (ca && ca.trim()) {
         await window.playbill.controller.command({ action: 'connection.setCa', value: ca });
       }
-      // 2. If user left password blank and we have an existing connection,
-      //    we need to keep the old password — but the controller doesn't
-      //    return it (security). For now, password is required when blank
-      //    means "you must re-enter it". A future improvement: a separate
-      //    "rotate password only" command. For now, force re-entry.
-      if (!password && !conn) {
-        throw new Error('password required on first setup');
-      }
-      const value = {
-        brokerUrl, username,
-        password: password || (conn?.brokerUrl === brokerUrl ? '__keep__' : password),
-        tlsCertHostname: tlsCertHostname || null,
-        caCertProvided: !!ca || !!conn?.caCertProvided,
-      };
-      // Reject the placeholder; we don't actually have a "keep current password" path yet.
-      if (value.password === '__keep__') {
-        throw new Error('Re-enter the password to save changes (password retention not implemented yet)');
-      }
-      await window.playbill.controller.command({ action: 'connection.set', value });
-      // Refresh display
+      await window.playbill.controller.command({
+        action: 'connection.set',
+        value:  { username, password, caCertProvided: !!ca || !!conn?.caCertProvided },
+      });
+      const result = await waitForMqttResult();
+      setBrokerResult(result);
       const cur = await window.playbill.controller.command({ action: 'connection.get' });
       setConn(cur);
     } finally {
@@ -254,28 +345,48 @@ function HeadwatersScreen({ ctrlState }) {
     } finally { setBusy(false); }
   };
 
+  // apiKeyResult tracks the structured outcome so we can render a kinded
+  // error block (same shape brokerResult uses).
+  const [apiKeyResult, setApiKeyResult] = useState(null);  // {ok, kind?, message?}
+  const [apiKeyFieldErr, setApiKeyFieldErr] = useState(null);
+
   async function saveApiKey(e) {
     if (e) e.preventDefault();
-    setApiKeyError(null); setApiKeySaved(false); setApiKeyBusy(true);
+    setApiKeyResult(null); setApiKeySaved(false);
+
+    // Client-side first: format check catches paste errors instantly.
+    const fieldErr = validate.apiKey(apiKey);
+    setApiKeyFieldErr(fieldErr);
+    if (fieldErr) return;
+
+    setApiKeyBusy(true);
     try {
-      if (!apiKey.trim()) throw new Error('Enter an API key');
+      // Validate against Headwaters BEFORE persisting — controller
+      // returns {ok, kind, error} so we render the right icon.
+      const v = await window.playbill.controller.command({
+        action: 'headwaters.validateApiKey',
+        value:  { apiKey: apiKey.trim() },
+      });
+      if (!v.ok) { setApiKeyResult({ ok: false, kind: v.kind || 'unknown', message: v.error }); return; }
       await window.playbill.controller.command({
         action: 'headwaters.setSettings',
         value:  { apiKey: apiKey.trim() },
       });
       setApiKey('');
       setApiKeySaved(true);
-    } catch (e) { setApiKeyError(String(e.message || e)); }
-    finally { setApiKeyBusy(false); }
+    } catch (e) {
+      setApiKeyResult({ ok: false, kind: 'unknown', message: String(e.message || e) });
+    } finally { setApiKeyBusy(false); }
   }
 
   async function clearApiKey() {
     if (!confirm('Remove the stored Headwaters API key?')) return;
-    setApiKeyBusy(true); setApiKeyError(null); setApiKeySaved(false);
+    setApiKeyBusy(true); setApiKeyResult(null); setApiKeySaved(false);
     try {
       await window.playbill.controller.command({ action: 'headwaters.clear' });
-    } catch (e) { setApiKeyError(String(e.message || e)); }
-    finally { setApiKeyBusy(false); }
+    } catch (e) {
+      setApiKeyResult({ ok: false, kind: 'unknown', message: String(e.message || e) });
+    } finally { setApiKeyBusy(false); }
   }
 
   const sectionHdr = { font:'600 11px var(--font-sans)', letterSpacing:2,
@@ -305,6 +416,16 @@ function HeadwatersScreen({ ctrlState }) {
 
       <section style={{marginBottom:32}}>
         <h2 style={sectionHdr}>Broker</h2>
+        {brokerResult && brokerResult.ok && (
+          <div style={{marginBottom:14}}>
+            <SuccessAlert title="Broker connected." message="Remote commands and live state are flowing." />
+          </div>
+        )}
+        {brokerResult && !brokerResult.ok && (
+          <div style={{marginBottom:14}}>
+            <ErrorAlert kind={brokerResult.kind} title="Broker connection failed" message={brokerResult.message} />
+          </div>
+        )}
         {loading
           ? <div style={{color:'rgba(255,255,255,0.4)'}}>Loading current configuration…</div>
           : <ConnectionForm initial={conn} onSave={onSave} busy={busy} />}
@@ -343,28 +464,31 @@ function HeadwatersScreen({ ctrlState }) {
           Authenticates HTTP calls to the Headwaters APIs. Stored on this Playbill at file mode
           0600 and never returned over IPC after saving — paste it again to rotate.
         </p>
-        {apiKeyError && (
-          <div style={{padding:'12px 14px', marginBottom:14, background:'rgba(255,84,83,0.1)',
-                       border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
-                       color:'#ff5453', fontSize:13}}>{apiKeyError}</div>
+        {apiKeyResult && !apiKeyResult.ok && (
+          <div style={{marginBottom:14}}>
+            <ErrorAlert kind={apiKeyResult.kind} title="API key validation failed" message={apiKeyResult.message} />
+          </div>
         )}
         {apiKeySaved && (
-          <div style={{padding:'12px 14px', marginBottom:14, background:'rgba(82,164,65,0.1)',
-                       border:'1px solid rgba(82,164,65,0.3)', borderRadius:8,
-                       color:'#52a441', fontSize:13}}>API key saved.</div>
+          <div style={{marginBottom:14}}>
+            <SuccessAlert title="API key saved." message="Headwaters accepted the key on validation." />
+          </div>
         )}
-        <form onSubmit={saveApiKey} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:14}}>
+        <form onSubmit={saveApiKey} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:14}} noValidate>
           <div>
-            <label style={labelStyle}>API Key {apiKeySet && '(currently set; leave blank to keep)'}</label>
-            <input style={inputStyle} type="password"
-                   placeholder={apiKeySet ? '••••••••' : 'paste Headwaters API key'}
-                   value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+            <label style={labelStyle}>API Key {apiKeySet && '(currently set; paste again to rotate)'}</label>
+            <input style={{...inputStyle,
+                            border: `1px solid ${apiKeyFieldErr ? 'rgba(255,84,83,0.6)' : 'rgba(255,255,255,0.1)'}`}}
+                   type="password"
+                   placeholder={apiKeySet ? '••••••••' : 'rv_...'}
+                   value={apiKey} onChange={(e) => { setApiKey(e.target.value); setApiKeyFieldErr(null); }}
                    autoComplete="off" spellCheck="false" />
+            <FieldError>{apiKeyFieldErr}</FieldError>
           </div>
           <div style={{display:'flex', gap:12}}>
             <button type="submit" className="tv-btn primary" disabled={apiKeyBusy || !apiKey.trim()}>
               <ion-icon name="save-outline"></ion-icon>
-              {apiKeyBusy ? 'Saving…' : 'Save API key'}
+              {apiKeyBusy ? 'Validating…' : 'Save API key'}
             </button>
             {apiKeySet && (
               <button type="button" className="tv-btn" onClick={clearApiKey} disabled={apiKeyBusy}

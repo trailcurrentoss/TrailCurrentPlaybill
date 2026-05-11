@@ -10,7 +10,8 @@
     "brokerUrl": {
       "type": "string",
       "pattern": "^mqtts://[^/]+:[0-9]+$",
-      "description": "Canonical mqtts://host:port form. The Settings UI accepts a hostname-only input (e.g. 'headwaters.local') and the controller's normalizeBrokerUrl() in mqtt-bridge.js prepends mqtts:// + default port 8883 before persistence. We never connect insecurely.",
+      "description": "Canonical mqtts://host:port form. The Settings UI no longer exposes this field — the controller defaults it to 'mqtts://headwaters.local:8883' on save (the rig's broker is always Headwaters). Persisted form is always strict mqtts://host:port.",
+      "default": "mqtts://headwaters.local:8883",
       "examples": ["mqtts://headwaters.local:8883"]
     },
     "username": {

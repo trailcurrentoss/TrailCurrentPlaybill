@@ -72,7 +72,8 @@
 
     { "$ref": "#/$defs/HeadwatersGetSettings" },
     { "$ref": "#/$defs/HeadwatersSetSettings" },
-    { "$ref": "#/$defs/HeadwatersClear" }
+    { "$ref": "#/$defs/HeadwatersClear" },
+    { "$ref": "#/$defs/HeadwatersValidateApiKey" }
   ],
 
   "$defs": {
@@ -500,6 +501,20 @@
       "x-class": "B",
       "type": "object", "additionalProperties": false, "required": ["action"],
       "properties": { "action": { "const": "headwaters.clear" } }
+    },
+    "HeadwatersValidateApiKey": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "headwaters.validateApiKey" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiKey": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
     },
 
     "SourceLaunch": {

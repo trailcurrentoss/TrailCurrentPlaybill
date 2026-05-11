@@ -455,16 +455,20 @@ function registerSystemHandlers({ bus, state, settings, connection, mqtt }) {
     return safe;
   });
 
-  // connection.set — write or replace the MQTT connection config. Same
-  // brokerUrl normalization as the claim-server (hostname-only accepted,
-  // mqtt:// upgraded to mqtts://, default port 8883). Persisted form is
-  // always strict `mqtts://host:port`.
+  // connection.set — write or replace the MQTT connection config. The
+  // broker URL is no longer accepted from the UI; we always target the
+  // rig's canonical Headwaters broker on mqtts://headwaters.local:8883.
+  // (A PWA can still override by passing brokerUrl explicitly — this
+  // exists to support claim-server flows that pre-pair the device.)
+  const DEFAULT_BROKER_URL = 'mqtts://headwaters.local:8883';
   bus.register('connection.set', async (cmd) => {
     if (!cmd.value || typeof cmd.value !== 'object') {
       throw new Error('connection.set: value must be an object');
     }
     const v = { ...cmd.value };
-    if (v.brokerUrl !== undefined) {
+    if (v.brokerUrl === undefined || v.brokerUrl === null || v.brokerUrl === '') {
+      v.brokerUrl = DEFAULT_BROKER_URL;
+    } else {
       const { normalizeBrokerUrl } = require('./mqtt-bridge');
       v.brokerUrl = normalizeBrokerUrl(v.brokerUrl);
     }

@@ -252,7 +252,13 @@ class MqttBridge {
 
     client.on('error', (err) => {
       console.error('[mqtt] error:', err.message);
-      this._setConnState('error', err.message);
+      const host = (() => {
+        try { return new URL(this._opts.getConnection().brokerUrl).hostname; }
+        catch (_) { return 'Headwaters'; }
+      })();
+      const { classify } = require('./services/error-classify');
+      const c = classify(err, { host, protocol: 'mqtt' });
+      this._setConnState('error', c.message, c.kind);
     });
 
     client.on('close', () => {
@@ -335,13 +341,14 @@ class MqttBridge {
     ]);
   }
 
-  _setConnState(status, lastError) {
+  _setConnState(status, lastError, lastErrorKind) {
     const cur = this._opts.stateStore.get();
     this._opts.stateStore.patch({
       connection: {
         ...(cur.connection || {}),
         status,
         lastError: lastError || null,
+        lastErrorKind: lastErrorKind || null,
       },
     });
   }
