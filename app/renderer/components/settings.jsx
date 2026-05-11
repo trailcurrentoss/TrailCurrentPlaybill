@@ -104,10 +104,73 @@ function ConnectionForm({ initial, onSave, busy }) {
   );
 }
 
-function ConnectionScreen({ ctrlState }) {
+// Commands the user runs in a terminal to install / remove the
+// TrailCurrent CA in the system trust store. Kept here as constants
+// (not assembled from controller state) so the UI is the canonical place
+// users copy them from, and so they survive a controller restart.
+const TRUST_INSTALL_CMD =
+  'sudo install -m 0644 ~/.config/trailcurrent-playbill/ca.pem ' +
+  '/usr/local/share/ca-certificates/trailcurrent.crt && sudo update-ca-certificates';
+const TRUST_REMOVE_CMD =
+  'sudo rm -f /usr/local/share/ca-certificates/trailcurrent.crt && ' +
+  'sudo update-ca-certificates --fresh';
+
+// Copyable terminal-command block. Used to surface privileged actions
+// (sudo update-ca-certificates) that the daemon won't perform on its own
+// — the user runs them explicitly so the elevation is auditable.
+function CommandBlock({ title, hint, command, accent = '#52a441' }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (_) { /* clipboard may be unavailable; user can select manually */ }
+  }
+  return (
+    <div style={{marginTop:18, padding:'14px 16px', background:'rgba(255,255,255,0.03)',
+                 border:`1px solid ${accent}40`, borderRadius:8}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:8}}>
+        <div>
+          <div style={{font:'600 12px var(--font-sans)', letterSpacing:1, textTransform:'uppercase', color: accent}}>
+            {title}
+          </div>
+          {hint && <div style={{fontSize:12, color:'rgba(255,255,255,0.55)', marginTop:4}}>{hint}</div>}
+        </div>
+        <button type="button" onClick={copy}
+                style={{padding:'6px 12px', background:'rgba(255,255,255,0.06)',
+                        border:'1px solid rgba(255,255,255,0.12)', borderRadius:6,
+                        color:'#fff', fontSize:12, cursor:'pointer',
+                        display:'inline-flex', alignItems:'center', gap:6}}>
+          <ion-icon name={copied ? 'checkmark-outline' : 'copy-outline'}></ion-icon>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre style={{margin:0, padding:'10px 12px', background:'rgba(0,0,0,0.35)',
+                    border:'1px solid rgba(255,255,255,0.06)', borderRadius:6,
+                    fontFamily:'var(--font-mono)', fontSize:12, color:'#cfe',
+                    whiteSpace:'pre-wrap', wordBreak:'break-all', overflow:'auto'}}>
+        {command}
+      </pre>
+    </div>
+  );
+}
+
+function HeadwatersScreen({ ctrlState }) {
   const [conn, setConn] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // After Forget, surface the removal command for one cycle.
+  const [showRemoveCmd, setShowRemoveCmd] = useState(false);
+
+  // API key state — co-located on this screen because everything here
+  // configures how this Playbill talks to its Headwaters host (broker for
+  // realtime nav/state, API key for HTTP calls).
+  const apiKeySet = !!(ctrlState && ctrlState.headwaters && ctrlState.headwaters.apiKeySet);
+  const [apiKey, setApiKey]             = useState('');
+  const [apiKeyBusy, setApiKeyBusy]     = useState(false);
+  const [apiKeyError, setApiKeyError]   = useState(null);
+  const [apiKeySaved, setApiKeySaved]   = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -123,7 +186,9 @@ function ConnectionScreen({ ctrlState }) {
     setBusy(true);
     try {
       // 1. Save the cert first (if a new one was provided) so caCertProvided
-      //    is true by the time we save the connection.
+      //    is true by the time we save the connection. The controller also
+      //    installs it into the system trust store so browsers and curl on
+      //    this box trust trailcurrent.* hostnames automatically.
       if (ca && ca.trim()) {
         await window.playbill.controller.command({ action: 'connection.setCa', value: ca });
       }
@@ -155,31 +220,137 @@ function ConnectionScreen({ ctrlState }) {
   };
 
   const onForget = async () => {
-    if (!confirm('Forget MQTT credentials? Playbill will return to the unconfigured state.')) return;
+    if (!confirm('Forget Headwaters credentials? Playbill will return to the unconfigured state. To also remove the trusted CA from the system store you will need to run the removal command shown after this.')) return;
     setBusy(true);
     try {
       await window.playbill.controller.command({ action: 'connection.clear' });
       setConn(null);
+      setShowRemoveCmd(true);
     } finally { setBusy(false); }
   };
+
+  async function saveApiKey(e) {
+    if (e) e.preventDefault();
+    setApiKeyError(null); setApiKeySaved(false); setApiKeyBusy(true);
+    try {
+      if (!apiKey.trim()) throw new Error('Enter an API key');
+      await window.playbill.controller.command({
+        action: 'headwaters.setSettings',
+        value:  { apiKey: apiKey.trim() },
+      });
+      setApiKey('');
+      setApiKeySaved(true);
+    } catch (e) { setApiKeyError(String(e.message || e)); }
+    finally { setApiKeyBusy(false); }
+  }
+
+  async function clearApiKey() {
+    if (!confirm('Remove the stored Headwaters API key?')) return;
+    setApiKeyBusy(true); setApiKeyError(null); setApiKeySaved(false);
+    try {
+      await window.playbill.controller.command({ action: 'headwaters.clear' });
+    } catch (e) { setApiKeyError(String(e.message || e)); }
+    finally { setApiKeyBusy(false); }
+  }
+
+  const sectionHdr = { font:'600 11px var(--font-sans)', letterSpacing:2,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.45)',
+                       margin:'0 0 14px' };
+  const labelStyle = { display:'block', fontSize:12, letterSpacing:1,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.6)',
+                       marginBottom:6 };
+  const inputStyle = { width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
+                       border:'1px solid rgba(255,255,255,0.1)', borderRadius:8,
+                       color:'#fff', font:'14px var(--font-sans)' };
 
   return (
     <div style={{padding:'40px 60px', maxWidth:900}}>
       <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24}}>
-        <h1 style={{margin:0, font:'700 32px var(--font-sans)', letterSpacing:-1}}>Connection</h1>
+        <h1 style={{margin:0, font:'700 32px var(--font-sans)', letterSpacing:-1}}>Headwaters</h1>
         <ConnectionStatusPill
           status={ctrlState?.connection?.status || 'unconfigured'}
           lastError={ctrlState?.connection?.lastError}
         />
       </div>
       <p style={{color:'rgba(255,255,255,0.6)', fontSize:14, marginBottom:32, maxWidth:680}}>
-        TrailCurrent uses a single MQTT broker per rig (typically running on Headwaters) for
-        device-to-device communication. Enter the broker address and your rig's MQTT credentials
-        to let this Playbill receive remote commands and publish what's playing.
+        Configure how this Playbill talks to its Headwaters host: the MQTT broker for realtime
+        nav/state, the CA that signs trailcurrent.* hostnames, and the API key used for HTTP
+        calls into Headwaters services.
       </p>
-      {loading
-        ? <div style={{color:'rgba(255,255,255,0.4)'}}>Loading current configuration…</div>
-        : <ConnectionForm initial={conn} onSave={onSave} busy={busy} />}
+
+      <section style={{marginBottom:32}}>
+        <h2 style={sectionHdr}>Broker</h2>
+        {loading
+          ? <div style={{color:'rgba(255,255,255,0.4)'}}>Loading current configuration…</div>
+          : <ConnectionForm initial={conn} onSave={onSave} busy={busy} />}
+        {conn?.caCertProvided && (
+          <CommandBlock
+            title="Install CA in system trust store"
+            hint="Run this in a terminal so curl, Chromium, and other tools on this box trust trailcurrent.* hostnames automatically. Replaces any prior TrailCurrent cert."
+            command={TRUST_INSTALL_CMD}
+          />
+        )}
+        {showRemoveCmd && (
+          <CommandBlock
+            title="Remove TrailCurrent CA from system trust store"
+            hint="Run this to delete the cert installed by the previous step. The credentials are already cleared."
+            command={TRUST_REMOVE_CMD}
+            accent="#ff5453"
+          />
+        )}
+      </section>
+
+      <section style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+        <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:14}}>
+          <h2 style={{...sectionHdr, margin:0}}>API Key</h2>
+          {apiKeySet && (
+            <div style={{display:'inline-flex', alignItems:'center', gap:8, padding:'4px 12px',
+                         borderRadius:9999, background:'rgba(82,164,65,0.1)',
+                         border:'1px solid rgba(82,164,65,0.3)', color:'#52a441',
+                         fontSize:11, letterSpacing:0.5, textTransform:'uppercase'}}>
+              <span style={{width:6, height:6, borderRadius:'50%', background:'#52a441',
+                            boxShadow:'0 0 8px #52a44180'}}></span>
+              Key stored
+            </div>
+          )}
+        </div>
+        <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:18, maxWidth:680}}>
+          Authenticates HTTP calls to the Headwaters APIs. Stored on this Playbill at file mode
+          0600 and never returned over IPC after saving — paste it again to rotate.
+        </p>
+        {apiKeyError && (
+          <div style={{padding:'12px 14px', marginBottom:14, background:'rgba(255,84,83,0.1)',
+                       border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
+                       color:'#ff5453', fontSize:13}}>{apiKeyError}</div>
+        )}
+        {apiKeySaved && (
+          <div style={{padding:'12px 14px', marginBottom:14, background:'rgba(82,164,65,0.1)',
+                       border:'1px solid rgba(82,164,65,0.3)', borderRadius:8,
+                       color:'#52a441', fontSize:13}}>API key saved.</div>
+        )}
+        <form onSubmit={saveApiKey} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:14}}>
+          <div>
+            <label style={labelStyle}>API Key {apiKeySet && '(currently set; leave blank to keep)'}</label>
+            <input style={inputStyle} type="password"
+                   placeholder={apiKeySet ? '••••••••' : 'paste Headwaters API key'}
+                   value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                   autoComplete="off" spellCheck="false" />
+          </div>
+          <div style={{display:'flex', gap:12}}>
+            <button type="submit" className="tv-btn primary" disabled={apiKeyBusy || !apiKey.trim()}>
+              <ion-icon name="save-outline"></ion-icon>
+              {apiKeyBusy ? 'Saving…' : 'Save API key'}
+            </button>
+            {apiKeySet && (
+              <button type="button" className="tv-btn" onClick={clearApiKey} disabled={apiKeyBusy}
+                      style={{background:'rgba(255,84,83,0.1)', color:'#ff5453'}}>
+                <ion-icon name="trash-outline"></ion-icon> Remove API key
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+
       {conn && (
         <div style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
           <button className="tv-btn" onClick={onForget} disabled={busy}
@@ -244,7 +415,7 @@ function DeviceScreen({ ctrlState }) {
 function SettingsView({ focus }) {
   const [ctrlState, setCtrlState]       = useState(null);
   const [ctrlConnected, setCtrlConnected] = useState(false);
-  const [tab, setTab] = useState('connection');
+  const [tab, setTab] = useState('headwaters');
 
   useEffect(() => {
     let unsubState, unsubStatus;
@@ -275,10 +446,9 @@ function SettingsView({ focus }) {
   }
 
   const tabs = [
-    { id: 'connection', label: 'Connection', icon: 'cloud-outline' },
+    { id: 'headwaters', label: 'Headwaters', icon: 'water-outline' },
     { id: 'device',     label: 'Device',     icon: 'hardware-chip-outline' },
     { id: 'youtube',    label: 'YouTube',    icon: 'logo-youtube' },
-    { id: 'headwaters', label: 'Headwaters', icon: 'water-outline' },
     // Phase 2+: { id: 'sources', label: 'Sources', icon: 'apps-outline' },
     // Phase 2+: { id: 'display', label: 'Display', icon: 'color-palette-outline' },
     // Phase 2+: { id: 'about',   label: 'About',   icon: 'information-circle-outline' },
@@ -305,10 +475,9 @@ function SettingsView({ focus }) {
         ))}
       </div>
       <div style={{flex:1, overflow:'auto'}}>
-        {tab === 'connection' && <ConnectionScreen ctrlState={ctrlState} />}
+        {tab === 'headwaters' && <HeadwatersScreen ctrlState={ctrlState} />}
         {tab === 'device'     && <DeviceScreen     ctrlState={ctrlState} />}
         {tab === 'youtube'    && <YoutubeScreen    ctrlState={ctrlState} />}
-        {tab === 'headwaters' && <HeadwatersScreen ctrlState={ctrlState} />}
       </div>
     </div>
   );
@@ -464,103 +633,6 @@ function YoutubeScreen({ ctrlState }) {
           <ion-icon name="log-out-outline"></ion-icon> Sign Out
         </button>
       )}
-    </div>
-  );
-}
-
-// ─── Headwaters API key ──────────────────────────────────────────────
-
-function HeadwatersScreen({ ctrlState }) {
-  const apiKeySet = !!(ctrlState && ctrlState.headwaters && ctrlState.headwaters.apiKeySet);
-  const [apiKey, setApiKey] = useState('');
-  const [busy, setBusy]     = useState(false);
-  const [error, setError]   = useState(null);
-  const [saved, setSaved]   = useState(false);
-
-  async function save(e) {
-    if (e) e.preventDefault();
-    setError(null); setSaved(false); setBusy(true);
-    try {
-      if (!apiKey.trim()) throw new Error('Enter an API key');
-      await window.playbill.controller.command({
-        action: 'headwaters.setSettings',
-        value:  { apiKey: apiKey.trim() },
-      });
-      setApiKey('');
-      setSaved(true);
-    } catch (e) { setError(String(e.message || e)); }
-    finally { setBusy(false); }
-  }
-
-  async function clear() {
-    if (!confirm('Remove the stored Headwaters API key?')) return;
-    setBusy(true); setError(null); setSaved(false);
-    try {
-      await window.playbill.controller.command({ action: 'headwaters.clear' });
-    } catch (e) { setError(String(e.message || e)); }
-    finally { setBusy(false); }
-  }
-
-  const labelStyle = { display:'block', fontSize:12, letterSpacing:1,
-                       textTransform:'uppercase', color:'rgba(255,255,255,0.6)',
-                       marginBottom:6 };
-  const inputStyle = { width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
-                       border:'1px solid rgba(255,255,255,0.1)', borderRadius:8,
-                       color:'#fff', font:'14px var(--font-sans)' };
-
-  return (
-    <div style={{padding:'40px 60px', maxWidth:900}}>
-      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24}}>
-        <h1 style={{margin:0, font:'700 32px var(--font-sans)', letterSpacing:-1}}>Headwaters</h1>
-        {apiKeySet && (
-          <div style={{display:'inline-flex', alignItems:'center', gap:8, padding:'4px 12px',
-                       borderRadius:9999, background:'rgba(82,164,65,0.1)',
-                       border:'1px solid rgba(82,164,65,0.3)', color:'#52a441',
-                       fontSize:12, letterSpacing:0.5, textTransform:'uppercase'}}>
-            <span style={{width:8, height:8, borderRadius:'50%', background:'#52a441',
-                          boxShadow:'0 0 10px #52a44180'}}></span>
-            Key stored
-          </div>
-        )}
-      </div>
-      <p style={{color:'rgba(255,255,255,0.6)', fontSize:14, marginBottom:32, maxWidth:680}}>
-        API key used to authenticate calls to the Headwaters HTTP APIs. Stored on this
-        Playbill at file mode 0600 and never returned over IPC after saving — paste it
-        again to rotate.
-      </p>
-
-      {error && (
-        <div style={{padding:'12px 14px', marginBottom:18, background:'rgba(255,84,83,0.1)',
-                     border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
-                     color:'#ff5453', fontSize:13}}>{error}</div>
-      )}
-      {saved && (
-        <div style={{padding:'12px 14px', marginBottom:18, background:'rgba(82,164,65,0.1)',
-                     border:'1px solid rgba(82,164,65,0.3)', borderRadius:8,
-                     color:'#52a441', fontSize:13}}>API key saved.</div>
-      )}
-
-      <form onSubmit={save} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:18}}>
-        <div>
-          <label style={labelStyle}>API Key {apiKeySet && '(currently set; leave blank to keep)'}</label>
-          <input style={inputStyle} type="password"
-                 placeholder={apiKeySet ? '••••••••' : 'paste Headwaters API key'}
-                 value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-                 autoComplete="off" spellCheck="false" />
-        </div>
-        <div style={{display:'flex', gap:12}}>
-          <button type="submit" className="tv-btn primary" disabled={busy || !apiKey.trim()}>
-            <ion-icon name="save-outline"></ion-icon>
-            {busy ? 'Saving…' : 'Save API key'}
-          </button>
-          {apiKeySet && (
-            <button type="button" className="tv-btn" onClick={clear} disabled={busy}
-                    style={{background:'rgba(255,84,83,0.1)', color:'#ff5453'}}>
-              <ion-icon name="trash-outline"></ion-icon> Remove
-            </button>
-          )}
-        </div>
-      </form>
     </div>
   );
 }

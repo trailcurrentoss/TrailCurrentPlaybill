@@ -482,7 +482,10 @@ function registerSystemHandlers({ bus, state, settings, connection, mqtt }) {
     return { ok: true };
   });
 
-  // connection.clear — wipe credentials (Settings → Connection "Forget" button).
+  // connection.clear — wipe credentials (Settings → Headwaters "Forget" button).
+  // We DON'T touch the OS trust store here — that requires sudo, which a
+  // user-session daemon shouldn't do silently. The UI surfaces a copyable
+  // command the user can run in a terminal to remove the cert system-wide.
   bus.register('connection.clear', async () => {
     await connection.clear();
     try { fs.unlinkSync(CA_CERT_FILE); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -491,7 +494,13 @@ function registerSystemHandlers({ bus, state, settings, connection, mqtt }) {
     return { ok: true };
   });
 
-  // connection.setCa — write the pasted/uploaded CA cert to disk at 0600
+  // connection.setCa — persist the pasted CA cert to the user-config dir
+  // (mode 0600). The Settings UI then shows the user a copyable command
+  // they can run in a terminal to install this cert into the OS trust
+  // store (/usr/local/share/ca-certificates/trailcurrent.crt + update-ca-
+  // certificates). Doing the install via sudo from the daemon was the
+  // first design, then rejected — making cert installation explicit and
+  // user-driven is auditable and avoids a privileged action surface.
   bus.register('connection.setCa', async (cmd) => {
     if (typeof cmd.value !== 'string' || !cmd.value.includes('-----BEGIN CERTIFICATE-----')) {
       throw new Error('connection.setCa: value must be a PEM-encoded certificate');
@@ -501,7 +510,7 @@ function registerSystemHandlers({ bus, state, settings, connection, mqtt }) {
     if (cur.brokerUrl && cur.username && cur.password) {
       await connection.replace({ ...cur, caCertProvided: true });
     }
-    return { ok: true };
+    return { ok: true, caPath: CA_CERT_FILE };
   });
 
   // system.commands — introspection: list every registered action
