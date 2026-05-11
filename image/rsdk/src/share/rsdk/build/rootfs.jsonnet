@@ -137,12 +137,46 @@ function(
             // that media players (VLC, GNOME Videos, Electron's WebContents)
             // actually use to hand off decode to the GPU. -libav fills in the
             // long-tail codec coverage via ffmpeg.
+            //
+            // -ugly is an open-source plugin set (GPL, no EULA) that adds
+            // patent-encumbered-but-FOSS decoders: a52dec (AC-3, the standard
+            // DVD audio track), dvdreadsrc/dvdnavsrc (gst pipelines that can
+            // play DVDs directly), x264enc, and MAD MP3 decode. Required for
+            // ripped-DVD playback because virtually every DVD ships AC-3
+            // audio — without a52dec the video plays silently.
+            //
+            // -tools provides gst-inspect-1.0 and gst-launch-1.0, which are
+            // how we diagnose pipeline / codec / hwaccel issues from a
+            // terminal. Tiny package, worth having on every device.
             "gstreamer1.0-plugins-good",
             "gstreamer1.0-plugins-bad",
+            "gstreamer1.0-plugins-ugly",
             "gstreamer1.0-libav",
+            "gstreamer1.0-tools",
             "v4l-utils",                        // v4l2-ctl --list-devices
             "libva2",                           // VA-API surface (some apps probe)
             "vainfo",
+
+            // ── Media-library codecs and CLI utilities ──────────────────
+            // Used by the DVD-rip flow (Handbrake bundles its own x264/x265
+            // statically, but the surrounding library workflow needs these)
+            // and by general media-library probing/conversion outside HB:
+            //
+            //   ffmpeg          — `ffmpeg` / `ffprobe` CLI. Indispensable
+            //                     for batch remux/convert/inspect operations
+            //                     in the Playbill library code-paths
+            //   lame            — MP3 encoder (LAME), used for audio-only
+            //                     CD/music-disc rips
+            //   flac            — FLAC encoder + tools, lossless-audio rips
+            //   libdvdread8     — DVD title/IFO/VOB reader (HandBrake links
+            //   libdvdnav4        these transitively; declared here for
+            //                     self-documenting intent and to keep them
+            //                     installed even if HB swaps its deps)
+            "ffmpeg",
+            "lame",
+            "flac",
+            "libdvdread8",
+            "libdvdnav4",
 
             // ── OTA TV tuner + SDR radio userspace ──────────────────────
             // The Q6A drives a Hauppauge WinTV-dualHD (USB ATSC tuner;
@@ -165,6 +199,32 @@ function(
             "dtv-scan-tables",
             "rtl-sdr",
             "mpv",
+
+            // ── DVD ripping into the Playbill library ───────────────────
+            // A USB optical drive plugged into the Q6A turns Playbill into
+            // a DVD ripper for the local media library. Userspace pieces:
+            //
+            //   handbrake        — GTK GUI (drag-disc → encode → MKV/MP4)
+            //   handbrake-cli    — HandBrakeCLI binary; used by Playbill's
+            //                      scripted/batch rip flow
+            //   lsdvd            — surfaces the disc title list (used by
+            //                      the rip-UI to populate the title picker)
+            //   libdvd-pkg       — installer-package that pulls libdvdcss2
+            //                      sources from videolan.org and builds the
+            //                      decryption library locally. Without it
+            //                      HandBrake can enumerate the title list
+            //                      but cannot decrypt encrypted (CSS) discs,
+            //                      which is essentially every commercial
+            //                      DVD. Hook 3b preseeds the debconf keys
+            //                      and runs `dpkg-reconfigure libdvd-pkg`
+            //                      so libdvdcss2 is built at image-build
+            //                      time — flashed boards rip encrypted
+            //                      discs immediately with no first-boot
+            //                      build step required.
+            "handbrake",
+            "handbrake-cli",
+            "lsdvd",
+            "libdvd-pkg",
 
             // ── OpenCL on Adreno (for llama.cpp GGML_OPENCL etc.) ───────
             // The ICD itself ships in radxa-firmware-qcs6490 (below). The
@@ -260,6 +320,13 @@ function(
             "libxtst6",
             "libatspi2.0-0",
             "libasound2t64",
+            // libnss3-tools ships `certutil`, which the Settings → Headwaters
+            // "Install CA" command uses to add the TrailCurrent CA to each
+            // browser's per-user NSS db (Chromium and Firefox both maintain
+            // their own — neither reads /etc/ssl/certs/ on Linux). Without
+            // this, the system-store-only install works for curl/wget but
+            // browsers still warn on https://headwaters.local.
+            "libnss3-tools",
 
             // ── Build-time tooling for customize-hooks ──────────────────
             // libglib2.0-bin     → /usr/bin/gresource (used by hook 8d
@@ -447,14 +514,24 @@ function(
                         mesa-utils \
                         gstreamer1.0-plugins-good \
                         gstreamer1.0-plugins-bad \
+                        gstreamer1.0-plugins-ugly \
                         gstreamer1.0-libav \
+                        gstreamer1.0-tools \
                         v4l-utils \
                         libva2 \
                         vainfo \
+                        ffmpeg \
+                        lame \
+                        flac \
+                        libdvdread8 \
+                        libdvdnav4 \
                         dvb-tools \
                         dtv-scan-tables \
                         rtl-sdr \
                         mpv \
+                        handbrake \
+                        handbrake-cli \
+                        lsdvd \
                         ocl-icd-libopencl1 \
                         clinfo \
                         qcom-fastrpc1 \
@@ -512,6 +589,9 @@ function(
                            qcom-fastrpc1 mesa-vulkan-drivers libnss3 libxss1 \
                            libxtst6 libatspi2.0-0t64 libasound2t64 \
                            rtl-sdr librtlsdr2 dvb-tools dtv-scan-tables mpv \
+                           handbrake handbrake-cli lsdvd \
+                           gstreamer1.0-plugins-ugly gstreamer1.0-tools \
+                           ffmpeg lame flac libdvdread8 libdvdnav4 \
                            nodejs yt-dlp avahi-daemon libcap2-bin; do
                     if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
                         MISSING="$MISSING $pkg"
@@ -523,6 +603,87 @@ function(
                     exit 1
                 fi
                 echo "  ✓ desktop + app userspace installed; key packages verified"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 3b: Install libdvd-pkg and build libdvdcss2 at image-build
+            //
+            // libdvd-pkg is an installer-package: its postinst downloads the
+            // libdvdcss source tarball from videolan.org and builds a local
+            // libdvdcss2 .deb, which it then installs. Without libdvdcss2,
+            // HandBrake (and any other libdvdread-based ripper) can enumerate
+            // a disc's table of contents but cannot decrypt CSS-protected
+            // titles — i.e. effectively every commercial DVD.
+            //
+            // By default the postinst is interactive (the debian-multimedia
+            // policy makes the user opt in to the build). DEBIAN_FRONTEND=
+            // noninteractive alone is NOT enough; the package gates on three
+            // debconf keys that must be preseeded BEFORE apt installs the
+            // package, otherwise the postinst defaults them to "no build"
+            // and exits without building libdvdcss2:
+            //
+            //   libdvd-pkg/build                       boolean true
+            //     → agree to build libdvdcss2 from source
+            //   libdvd-pkg/post-invoke_hook-install    boolean true
+            //     → rebuild libdvdcss2 on libdvd-pkg upgrade
+            //   libdvd-pkg/post-invoke_hook-remove     boolean true
+            //     → clean up the built .deb on libdvd-pkg removal
+            //
+            // After preseeding + installing, run `dpkg-reconfigure libdvd-pkg`
+            // to trigger the build NOW (in the chroot, under qemu-arm64)
+            // rather than leaving it for the user's first boot. Build needs
+            // network access to download.videolan.org and a working C
+            // toolchain, both of which are present in the chroot at this
+            // point in the build (apt-get install above pulled in build-
+            // essential transitively via libdvd-pkg's Depends).
+            //
+            // Verification: dpkg-reconfigure exits 0 even if the actual
+            // libdvdcss2 build fails (the postinst hides errors), so we
+            // also check that libdvdcss2 is in `dpkg -l` afterwards. If
+            // not, fail loudly — a flashed board that "rips" but produces
+            // garbage scrambled MKVs is the worst possible failure mode.
+            //
+            // Order: AFTER hook 3a (apt-get install pulls in the build
+            // toolchain) and BEFORE hook 4 (which pins the kernel/Mesa
+            // and could theoretically interfere with apt resolution).
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 3b] installing libdvd-pkg and building libdvdcss2 from videolan.org"
+
+                # Preseed debconf BEFORE the install so the postinst can
+                # build libdvdcss2 unattended. Order matters: setting these
+                # AFTER the install is too late — the postinst has already
+                # run with the default ("don't build") answer.
+                # (One echo per key rather than a heredoc so the jsonnet
+                # ||| text-block doesn't choke on column-0 lines.)
+                echo "libdvd-pkg libdvd-pkg/build boolean true" \
+                    | chroot "$1" debconf-set-selections
+                echo "libdvd-pkg libdvd-pkg/post-invoke_hook-install boolean true" \
+                    | chroot "$1" debconf-set-selections
+                echo "libdvd-pkg libdvd-pkg/post-invoke_hook-remove boolean true" \
+                    | chroot "$1" debconf-set-selections
+
+                chroot "$1" env DEBIAN_FRONTEND=noninteractive \
+                    apt-get install -y libdvd-pkg
+
+                # Force the build now (the install-time hook is idempotent;
+                # this guarantees libdvdcss2 ends up in the rootfs even if
+                # an upstream packaging change reorders the postinst steps).
+                chroot "$1" env DEBIAN_FRONTEND=noninteractive \
+                    dpkg-reconfigure libdvd-pkg
+
+                # libdvd-pkg's postinst hides build failures behind exit 0,
+                # so verify libdvdcss2 actually landed. A board that can
+                # read DVD TOCs but not decrypt them produces silently
+                # scrambled rips — fail loud at build time instead.
+                if ! chroot "$1" dpkg -s libdvdcss2 >/dev/null 2>&1; then
+                    echo "  ERROR: libdvd-pkg installed but libdvdcss2 was not built." >&2
+                    echo "  Check chroot network access to download.videolan.org and the build log above." >&2
+                    exit 1
+                fi
+                CSS_VER=$(chroot "$1" dpkg-query -W -f='${Version}' libdvdcss2 2>/dev/null || echo "?")
+                echo "  ✓ libdvdcss2 ($CSS_VER) installed — encrypted DVDs are rippable"
             |||,
 
             // ════════════════════════════════════════════════════════════

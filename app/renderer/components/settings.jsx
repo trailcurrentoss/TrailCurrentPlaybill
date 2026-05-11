@@ -105,15 +105,40 @@ function ConnectionForm({ initial, onSave, busy }) {
 }
 
 // Commands the user runs in a terminal to install / remove the
-// TrailCurrent CA in the system trust store. Kept here as constants
-// (not assembled from controller state) so the UI is the canonical place
-// users copy them from, and so they survive a controller restart.
-const TRUST_INSTALL_CMD =
-  'sudo install -m 0644 ~/.config/trailcurrent-playbill/ca.pem ' +
-  '/usr/local/share/ca-certificates/trailcurrent.crt && sudo update-ca-certificates';
-const TRUST_REMOVE_CMD =
-  'sudo rm -f /usr/local/share/ca-certificates/trailcurrent.crt && ' +
-  'sudo update-ca-certificates --fresh';
+// TrailCurrent CA. Linux trust stores don't share state, so we have to
+// touch every one any local app might consult:
+//
+//   /etc/ssl/certs/ca-certificates.crt              curl, wget, system tools
+//   ~/.pki/nssdb/                                   deb-packaged Chromium/Brave
+//   ~/snap/chromium/current/.pki/nssdb/             snap Chromium (confined)
+//   ~/snap/firefox/common/.mozilla/firefox/*/       snap Firefox (confined)
+//   ~/.mozilla/firefox{,-esr}/*.default*/           deb-packaged Firefox/ESR
+//
+// libnss3-tools (provides `certutil`) ships in the image. Snap browsers
+// keep their NSS dbs inside the snap's confined ~/snap/<pkg>/ tree —
+// host ~/.pki/nssdb is invisible to them, which is why a system-only
+// install made curl/Firefox-ESR happy but left snap Chromium warning.
+// For the snap Chromium path we mkdir + initialize the db if absent so
+// the import works even before the user has launched the browser.
+const TRUST_INSTALL_CMD = [
+  'sudo install -m 0644 ~/.config/trailcurrent-playbill/ca.pem /usr/local/share/ca-certificates/trailcurrent.crt && \\',
+  'sudo update-ca-certificates && \\',
+  'mkdir -p ~/snap/chromium/current/.pki/nssdb && \\',
+  '[ -f ~/snap/chromium/current/.pki/nssdb/cert9.db ] || certutil -d sql:$HOME/snap/chromium/current/.pki/nssdb -N --empty-password && \\',
+  'for db in ~/.pki/nssdb ~/snap/chromium/current/.pki/nssdb ~/snap/firefox/common/.mozilla/firefox/*.default*/ ~/.mozilla/firefox-esr/*.default*/ ~/.mozilla/firefox/*.default*/; do \\',
+  '  [ -d "$db" ] || continue; \\',
+  '  certutil -d sql:"$db" -D -n "TrailCurrent CA" 2>/dev/null; \\',
+  '  certutil -d sql:"$db" -A -t "C,," -n "TrailCurrent CA" -i /usr/local/share/ca-certificates/trailcurrent.crt; \\',
+  'done',
+].join('\n');
+const TRUST_REMOVE_CMD = [
+  'sudo rm -f /usr/local/share/ca-certificates/trailcurrent.crt && \\',
+  'sudo update-ca-certificates --fresh && \\',
+  'for db in ~/.pki/nssdb ~/snap/chromium/current/.pki/nssdb ~/snap/firefox/common/.mozilla/firefox/*.default*/ ~/.mozilla/firefox-esr/*.default*/ ~/.mozilla/firefox/*.default*/; do \\',
+  '  [ -d "$db" ] || continue; \\',
+  '  certutil -d sql:"$db" -D -n "TrailCurrent CA" 2>/dev/null || true; \\',
+  'done',
+].join('\n');
 
 // Copyable terminal-command block. Used to surface privileged actions
 // (sudo update-ca-certificates) that the daemon won't perform on its own
@@ -285,15 +310,15 @@ function HeadwatersScreen({ ctrlState }) {
           : <ConnectionForm initial={conn} onSave={onSave} busy={busy} />}
         {conn?.caCertProvided && (
           <CommandBlock
-            title="Install CA in system trust store"
-            hint="Run this in a terminal so curl, Chromium, and other tools on this box trust trailcurrent.* hostnames automatically. Replaces any prior TrailCurrent cert."
+            title="Install CA system-wide"
+            hint="Run this in a terminal so curl, Chromium, and Firefox all trust trailcurrent.* hostnames. Updates the system trust store AND each browser's per-profile NSS database (Linux browsers don't read /etc/ssl/certs). Fully quit any open browsers afterwards so they re-read the cert store on next launch. Replaces any prior TrailCurrent cert."
             command={TRUST_INSTALL_CMD}
           />
         )}
         {showRemoveCmd && (
           <CommandBlock
-            title="Remove TrailCurrent CA from system trust store"
-            hint="Run this to delete the cert installed by the previous step. The credentials are already cleared."
+            title="Remove TrailCurrent CA system-wide"
+            hint="Run this to delete the cert from both the system store and every browser's NSS database. The credentials are already cleared."
             command={TRUST_REMOVE_CMD}
             accent="#ff5453"
           />

@@ -2,6 +2,11 @@
   "policies": {
     "//comment": "TrailCurrent Playbill — system-wide Firefox-ESR defaults. Installed at /etc/firefox-esr/policies.json by hook 8b. Fixes the dark-theme + Wayland integration where Firefox's URL-bar autocomplete dropdown renders with a transparent background and unreadable list items (Mozilla Bug 1535230 / 1527048). Per Mozilla bugtracker workarounds: force chrome to honor GTK dark theme, force preferred color scheme to dark so internal HTML pages match.",
 
+    "//certs-comment": "ImportEnterpriseRoots makes Firefox honor the OS trust store (/etc/ssl/certs/ca-certificates.crt). Without this, Firefox maintains its own per-profile NSS db and refuses the TrailCurrent CA even after `update-ca-certificates`. With it, the Settings → Headwaters → 'Install CA in system trust store' command makes Firefox trust trailcurrent.* hostnames automatically — same behavior the user already gets from curl/Chromium.",
+    "Certificates": {
+      "ImportEnterpriseRoots": true
+    },
+
     "Preferences": {
       "widget.chrome.allow-gtk-dark-theme": {
         "Value": true,
