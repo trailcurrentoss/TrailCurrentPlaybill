@@ -134,39 +134,81 @@ function TVApp() {
     return () => window.removeEventListener('playbill:navigate', onNavigate);
   }, []);
 
-  // nav.dpad events from the controller (CAN/MQTT/PWA remote) → synthetic
-  // DOM KeyboardEvents on window. Every screen in the shell already listens
-  // for keydown to drive focus, so funneling through the keyboard path
-  // means there is exactly one code path for navigation regardless of
-  // whether the input comes from a USB keyboard, a local IR remote, or a
-  // remote-style CAN device on the rig bus. Mapping:
-  //   up/down/left/right → Arrow* (handled by app.jsx + per-screen handlers)
-  //   select             → Enter
-  //   back               → Escape (returns to home from any screen)
-  //   home               → 'h'    (existing global Home handler)
-  //   menu               → ContextMenu (new case below opens the side nav)
+  // ─── Navigation routing — two lanes ────────────────────────────────
+  //
+  // GLOBAL commands (home, back, menu, …) must always work regardless of
+  // which screen is mounted or what element has DOM focus. They are
+  // invoked directly via the helper fns below — they NEVER ride the
+  // DOM KeyboardEvent path, so no per-screen listener can stop them. To
+  // add a new global command (e.g. 'power'), wire it into the GLOBAL map
+  // in the dpad subscriber below; every screen, current and future,
+  // inherits the correct behavior with no extra work.
+  //
+  // CONTENT commands (up/down/left/right/select) DO ride the KeyboardEvent
+  // path so per-screen focus engines (radio, live, the home grid) can
+  // interpret them within their own row/col state. Per-screen handlers
+  // are free to e.stopPropagation() these without breaking global nav.
+  //
+  // The keyboard onKey handler further down honors the same split — 'h'
+  // and Escape call the helpers below, so a USB keyboard and a remote
+  // dpad end up running the exact same code.
+
+  // screenRef so the dpad subscriber (registered once on mount) always
+  // sees the current screen when computing the back target.
+  const screenRef = useRef(screen);
+  useEffect(() => { screenRef.current = screen; }, [screen]);
+
+  // Helper: Home from anywhere — resets the shell to its just-opened state.
+  const goHome = () => {
+    stopPlaybackIfRunning();
+    setScreen('home');
+    setFocus(initialFocusFor('home'));
+    setSideNav({ focused: false, hovered: false });
+  };
+  // Helper: Back — exits the current screen to its parent. Settings/YouTube
+  // sit under Apps; everything else returns to the home grid.
+  const goBack = () => {
+    stopPlaybackIfRunning();
+    const cur = screenRef.current;
+    const parent = (cur === 'settings' || cur === 'youtube') ? 'apps' : 'home';
+    setScreen(parent);
+    setFocus(initialFocusFor(parent));
+    setSideNav({ focused: false, hovered: false });
+  };
+  // Helper: Menu — open the side nav focused at the current screen's row.
+  const openSideNavMenu = () => {
+    setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screenRef.current) });
+  };
+
   useEffect(() => {
     if (!window.playbill || !window.playbill.controller ||
         typeof window.playbill.controller.onNavDpad !== 'function') return;
+
+    const GLOBAL = {
+      home: goHome,
+      back: goBack,
+      menu: openSideNavMenu,
+    };
     const KEY_MAP = {
       up:     'ArrowUp',
       down:   'ArrowDown',
       left:   'ArrowLeft',
       right:  'ArrowRight',
       select: 'Enter',
-      back:   'Escape',
-      home:   'h',
-      menu:   'ContextMenu',
     };
+
     const unsub = window.playbill.controller.onNavDpad(({ key } = {}) => {
+      const handler = GLOBAL[key];
+      if (handler) { handler(); return; }
       const domKey = KEY_MAP[key];
       if (!domKey) return;
-      // Mirror a real keyboard press: keydown → keyup. Bubble + cancelable
-      // so per-screen window listeners (radio.jsx etc.) see it identically
-      // to a USB keyboard event.
+      // Dispatch on the focused DOM node so React's delegated onKeyDown
+      // handlers (YouTube's yt-card etc.) fire. Window-level listeners
+      // (radio.jsx, app.jsx onKey below) still see it via the bubble path.
+      const target = document.activeElement || document.body;
       const evtInit = { key: domKey, bubbles: true, cancelable: true };
-      window.dispatchEvent(new KeyboardEvent('keydown', evtInit));
-      window.dispatchEvent(new KeyboardEvent('keyup',   evtInit));
+      target.dispatchEvent(new KeyboardEvent('keydown', evtInit));
+      target.dispatchEvent(new KeyboardEvent('keyup',   evtInit));
     });
     return () => { try { unsub && unsub(); } catch (_) { /* noop */ } };
   }, []);
@@ -194,6 +236,11 @@ function TVApp() {
   // before showing the home grid. Once configured, the user can navigate
   // freely and may visit Settings via the side nav.
   const [ctrlState, setCtrlState] = useState(null);
+  // Latest nowPlaying mirrored into a ref so the keydown handler can call
+  // transport.stop without re-registering on every state delta. We don't
+  // want the keydown handler in ctrlState's dependency array — it patches
+  // many times per second while a video plays.
+  const nowPlayingRef = useRef(null);
   useEffect(() => {
     if (!window.playbill || !window.playbill.controller) return;
     let unsubState, unsubStatus;
@@ -201,18 +248,35 @@ function TVApp() {
       try {
         const init = await window.playbill.controller.getState();
         setCtrlState(init.state);
+        nowPlayingRef.current = init.state && init.state.nowPlaying || null;
         if (init.state && init.state.connection &&
             init.state.connection.status === 'unconfigured') {
           setScreen('settings');
         }
       } catch (_) { /* controller may not be up yet — Settings will show offline state */ }
-      unsubState  = window.playbill.controller.onState((s)  => setCtrlState(s));
+      unsubState  = window.playbill.controller.onState((s)  => {
+        setCtrlState(s);
+        nowPlayingRef.current = s ? (s.nowPlaying || null) : null;
+      });
       unsubStatus = window.playbill.controller.onStatus(({ connected }) => {
-        if (!connected) setCtrlState(null);
+        if (!connected) { setCtrlState(null); nowPlayingRef.current = null; }
       });
     })();
     return () => { unsubState && unsubState(); unsubStatus && unsubStatus(); };
   }, []);
+
+  // Helper: stop any in-flight playback before navigating Home/Back. Without
+  // this, pressing Home or Back while a YouTube video is playing leaves
+  // mpv running in the background (the Electron UI changes screen, but
+  // audio/video keeps going). Fire-and-forget — the controller's
+  // transport.stop is a no-op when nothing is playing, so an extra call on
+  // every Back/Home press is cheap.
+  function stopPlaybackIfRunning() {
+    if (!nowPlayingRef.current) return;
+    if (!window.playbill || !window.playbill.controller) return;
+    window.playbill.controller.command({ action: 'transport.stop' })
+      .catch((e) => console.warn('[app] transport.stop on nav-exit failed:', e && e.message));
+  }
   const [sideNav, setSideNav] = useState({ focused: false, hovered: false });
   const [clock, setClock] = useState('');
 
@@ -274,19 +338,14 @@ function TVApp() {
       // the event is synthetic, translate D-pad arrows into focus walking
       // and Enter into a click/submit on the active element.
       if (screen === 'settings' || screen === 'youtube') {
-        const inField = e.target && /^(input|textarea|select|button)$/i.test(e.target.tagName);
-        if ((e.key === 'h' || e.key === 'H') && !inField) {
-          setScreen('home');
-          setSideNav({focused:false, hovered:false});
-        }
-        if (e.key === 'Escape' && !inField) {
-          setScreen('apps');
-          setSideNav({focused:false, hovered:false});
-        }
-        if (e.key === 'ContextMenu') {
-          setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screen) });
-          e.preventDefault();
-        }
+        // Only TEXT-accepting elements should swallow 'h' / Escape — those
+        // characters are part of typed input there. Buttons don't accept
+        // text, so a real-keyboard Home/Back while DOM focus is on a button
+        // must still navigate.
+        const inField = e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
+        if ((e.key === 'h' || e.key === 'H') && !inField) { goHome(); e.preventDefault(); }
+        if (e.key === 'Escape' && !inField)               { goBack(); e.preventDefault(); }
+        if (e.key === 'ContextMenu')                      { openSideNavMenu(); e.preventDefault(); }
         if (!e.isTrusted) {
           const active = document.activeElement;
           if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
@@ -309,14 +368,12 @@ function TVApp() {
         return;
       }
 
-      // Home key takes you to home screen from anywhere
-      if (e.key === 'h' || e.key === 'H') { setScreen('home'); setFocus({row:'hero', col:0, rowY:0}); setSideNav({focused:false, hovered:false}); return; }
-      if (e.key === 'Escape' || e.key === 'Backspace') { setScreen('home'); setFocus({row:'hero', col:0, rowY:0}); setSideNav({focused:false, hovered:false}); return; }
-      // Remote 'menu' button → open the side nav focused. The side nav IS
-      // the global menu in this UI; mapping menu to it gives a remote user
-      // one-press access to every screen.
+      // Global navigation shortcuts — share goHome/goBack with the remote
+      // dpad path so keyboard and remote behave identically.
+      if (e.key === 'h' || e.key === 'H') { goHome(); return; }
+      if (e.key === 'Escape' || e.key === 'Backspace') { goBack(); return; }
       if (e.key === 'ContextMenu') {
-        setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screen) });
+        openSideNavMenu();
         e.preventDefault();
         return;
       }

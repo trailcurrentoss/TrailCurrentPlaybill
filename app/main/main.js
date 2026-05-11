@@ -101,10 +101,26 @@ function broadcastControllerEvent(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('playbill.controller.event', { channel, payload });
 }
+// Main-process side-effects for specific controller events. Runs before
+// (and in addition to) the renderer broadcast so things that can ONLY
+// happen here (raising our own BrowserWindow under Wayland) still work
+// when the renderer is unfocused, minimized, or behind another app.
+function handleControllerEvent(channel, payload) {
+  if (channel === 'system.focus' && mainWindow && !mainWindow.isDestroyed()) {
+    // Remote/CAN Power → raise our own window. Wayland blocks third-party
+    // raise, but Electron is allowed to raise its OWN window.
+    try {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    } catch (e) { console.warn('[main] system.focus raise failed:', e && e.message); }
+  }
+  broadcastControllerEvent(channel, payload);
+}
 controller.on('state',         broadcastControllerState);
 controller.on('connected',     () => broadcastControllerStatus(true));
 controller.on('disconnected',  () => broadcastControllerStatus(false));
-controller.on('event',         broadcastControllerEvent);
+controller.on('event',         handleControllerEvent);
 controller.start();
 
 /* ---------------------------------------------------------------------------

@@ -40,6 +40,9 @@ module.exports = {
   // CA cert pasted/uploaded by the user during first-run setup.
   CA_CERT_FILE: path.join(CONFIG_DIR, 'ca.pem'),
 
+  // Headwaters API key — kept out of settings.json because it's a secret.
+  HEADWATERS_FILE: path.join(CONFIG_DIR, 'headwaters.json'),
+
   // Everything else (theme, behavior toggles, defaults, last-used selections).
   SETTINGS_FILE: path.join(CONFIG_DIR, 'settings.json'),
 

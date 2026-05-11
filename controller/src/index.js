@@ -31,8 +31,9 @@ const systemHandlers    = require('./handlers/system');
 const livetvHandlers    = require('./handlers/livetv');
 const sourceHandlers    = require('./handlers/source');
 const transportHandlers = require('./handlers/transport');
-const youtubeHandlers   = require('./handlers/youtube');
-const navHandlers       = require('./handlers/nav');
+const youtubeHandlers    = require('./handlers/youtube');
+const headwatersHandlers = require('./handlers/headwaters');
+const navHandlers        = require('./handlers/nav');
 const radioService      = require('./services/radio');
 const volumeService     = require('./services/volume');
 const guiService        = require('./services/gui');
@@ -135,6 +136,7 @@ async function main() {
     audio: null,        // populated below by volumeService.getState() probe
     gui:   { running: false, openedAt: null, closedAt: null },
     youtube: null,      // populated by youtubeHandlers.register's initial refreshState
+    headwaters: null,   // populated by headwatersHandlers.register's initial load
     ui: null,
   });
 
@@ -167,10 +169,13 @@ async function main() {
   volumeHandlers.register({ bus, state });
   livetvHandlers.register({ bus, state });
   deviceHandlers.register({ bus, state, settings });
-  systemHandlers.register({ bus });
   transportHandlers.register({ bus, state });
   sourceHandlers.register({ bus, state, sources: [youtubeSource] });
   youtubeHandlers.register({ bus, state });
+  headwatersHandlers.register({ bus, state });
+  // systemHandlers wants `ipc` so system.focus can publish a focus-request
+  // event to the Electron main process — registered after ipc is created
+  // (below) alongside navHandlers.
 
   // Probe whether the GUI is already running (e.g., user launched from GNOME
   // dock before the controller started). Without this, state.gui.running
@@ -192,11 +197,12 @@ async function main() {
     state.patch({ gui: { running: false, openedAt: null, closedAt: Date.now() } });
   });
 
-  // nav.dpad handler needs the IPC server reference so it can fan press
+  // nav.dpad + system.focus need the IPC server reference so they can fan
   // events out to the connected Electron GUI. Registered after ipc is
   // created but before start() so any command landing before the first
   // GUI connects still hits the bus (and no-ops on the fan-out).
   navHandlers.register({ bus, state, ipc });
+  systemHandlers.register({ bus, ipc });
 
   const sockPath = await ipc.start();
 

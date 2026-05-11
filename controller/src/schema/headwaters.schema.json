@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trailcurrent-playbill-headwaters",
+  "title": "TrailCurrent Playbill — Headwaters API credentials",
+  "description": "Stored separately from settings.json because it contains a secret. The Settings → Headwaters screen in the GUI is the only thing that writes to it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiKey"],
+  "properties": {
+    "apiKey": {
+      "type": "string",
+      "minLength": 1,
+      "description": "API key used to authenticate calls to the Headwaters HTTP APIs. Persisted at file mode 0600. Never published over MQTT or written to logs."
+    }
+  }
+}

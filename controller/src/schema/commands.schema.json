@@ -68,7 +68,11 @@
     { "$ref": "#/$defs/YoutubeSignInPoll" },
     { "$ref": "#/$defs/YoutubeSignInCancel" },
     { "$ref": "#/$defs/YoutubeSignOut" },
-    { "$ref": "#/$defs/YoutubeGetAccount" }
+    { "$ref": "#/$defs/YoutubeGetAccount" },
+
+    { "$ref": "#/$defs/HeadwatersGetSettings" },
+    { "$ref": "#/$defs/HeadwatersSetSettings" },
+    { "$ref": "#/$defs/HeadwatersClear" }
   ],
 
   "$defs": {
@@ -470,6 +474,32 @@
       "x-class": "B",
       "type": "object", "additionalProperties": false, "required": ["action"],
       "properties": { "action": { "const": "youtube.getAccount" } }
+    },
+
+    "HeadwatersGetSettings": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "headwaters.getSettings" } }
+    },
+    "HeadwatersSetSettings": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "headwaters.setSettings" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["apiKey"],
+          "properties": {
+            "apiKey": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "HeadwatersClear": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "headwaters.clear" } }
     },
 
     "SourceLaunch": {

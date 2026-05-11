@@ -278,6 +278,7 @@ function SettingsView({ focus }) {
     { id: 'connection', label: 'Connection', icon: 'cloud-outline' },
     { id: 'device',     label: 'Device',     icon: 'hardware-chip-outline' },
     { id: 'youtube',    label: 'YouTube',    icon: 'logo-youtube' },
+    { id: 'headwaters', label: 'Headwaters', icon: 'water-outline' },
     // Phase 2+: { id: 'sources', label: 'Sources', icon: 'apps-outline' },
     // Phase 2+: { id: 'display', label: 'Display', icon: 'color-palette-outline' },
     // Phase 2+: { id: 'about',   label: 'About',   icon: 'information-circle-outline' },
@@ -307,6 +308,7 @@ function SettingsView({ focus }) {
         {tab === 'connection' && <ConnectionScreen ctrlState={ctrlState} />}
         {tab === 'device'     && <DeviceScreen     ctrlState={ctrlState} />}
         {tab === 'youtube'    && <YoutubeScreen    ctrlState={ctrlState} />}
+        {tab === 'headwaters' && <HeadwatersScreen ctrlState={ctrlState} />}
       </div>
     </div>
   );
@@ -462,6 +464,103 @@ function YoutubeScreen({ ctrlState }) {
           <ion-icon name="log-out-outline"></ion-icon> Sign Out
         </button>
       )}
+    </div>
+  );
+}
+
+// ─── Headwaters API key ──────────────────────────────────────────────
+
+function HeadwatersScreen({ ctrlState }) {
+  const apiKeySet = !!(ctrlState && ctrlState.headwaters && ctrlState.headwaters.apiKeySet);
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy]     = useState(false);
+  const [error, setError]   = useState(null);
+  const [saved, setSaved]   = useState(false);
+
+  async function save(e) {
+    if (e) e.preventDefault();
+    setError(null); setSaved(false); setBusy(true);
+    try {
+      if (!apiKey.trim()) throw new Error('Enter an API key');
+      await window.playbill.controller.command({
+        action: 'headwaters.setSettings',
+        value:  { apiKey: apiKey.trim() },
+      });
+      setApiKey('');
+      setSaved(true);
+    } catch (e) { setError(String(e.message || e)); }
+    finally { setBusy(false); }
+  }
+
+  async function clear() {
+    if (!confirm('Remove the stored Headwaters API key?')) return;
+    setBusy(true); setError(null); setSaved(false);
+    try {
+      await window.playbill.controller.command({ action: 'headwaters.clear' });
+    } catch (e) { setError(String(e.message || e)); }
+    finally { setBusy(false); }
+  }
+
+  const labelStyle = { display:'block', fontSize:12, letterSpacing:1,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.6)',
+                       marginBottom:6 };
+  const inputStyle = { width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
+                       border:'1px solid rgba(255,255,255,0.1)', borderRadius:8,
+                       color:'#fff', font:'14px var(--font-sans)' };
+
+  return (
+    <div style={{padding:'40px 60px', maxWidth:900}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24}}>
+        <h1 style={{margin:0, font:'700 32px var(--font-sans)', letterSpacing:-1}}>Headwaters</h1>
+        {apiKeySet && (
+          <div style={{display:'inline-flex', alignItems:'center', gap:8, padding:'4px 12px',
+                       borderRadius:9999, background:'rgba(82,164,65,0.1)',
+                       border:'1px solid rgba(82,164,65,0.3)', color:'#52a441',
+                       fontSize:12, letterSpacing:0.5, textTransform:'uppercase'}}>
+            <span style={{width:8, height:8, borderRadius:'50%', background:'#52a441',
+                          boxShadow:'0 0 10px #52a44180'}}></span>
+            Key stored
+          </div>
+        )}
+      </div>
+      <p style={{color:'rgba(255,255,255,0.6)', fontSize:14, marginBottom:32, maxWidth:680}}>
+        API key used to authenticate calls to the Headwaters HTTP APIs. Stored on this
+        Playbill at file mode 0600 and never returned over IPC after saving — paste it
+        again to rotate.
+      </p>
+
+      {error && (
+        <div style={{padding:'12px 14px', marginBottom:18, background:'rgba(255,84,83,0.1)',
+                     border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
+                     color:'#ff5453', fontSize:13}}>{error}</div>
+      )}
+      {saved && (
+        <div style={{padding:'12px 14px', marginBottom:18, background:'rgba(82,164,65,0.1)',
+                     border:'1px solid rgba(82,164,65,0.3)', borderRadius:8,
+                     color:'#52a441', fontSize:13}}>API key saved.</div>
+      )}
+
+      <form onSubmit={save} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:18}}>
+        <div>
+          <label style={labelStyle}>API Key {apiKeySet && '(currently set; leave blank to keep)'}</label>
+          <input style={inputStyle} type="password"
+                 placeholder={apiKeySet ? '••••••••' : 'paste Headwaters API key'}
+                 value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                 autoComplete="off" spellCheck="false" />
+        </div>
+        <div style={{display:'flex', gap:12}}>
+          <button type="submit" className="tv-btn primary" disabled={busy || !apiKey.trim()}>
+            <ion-icon name="save-outline"></ion-icon>
+            {busy ? 'Saving…' : 'Save API key'}
+          </button>
+          {apiKeySet && (
+            <button type="button" className="tv-btn" onClick={clear} disabled={busy}
+                    style={{background:'rgba(255,84,83,0.1)', color:'#ff5453'}}>
+              <ion-icon name="trash-outline"></ion-icon> Remove
+            </button>
+          )}
+        </div>
+      </form>
     </div>
   );
 }
