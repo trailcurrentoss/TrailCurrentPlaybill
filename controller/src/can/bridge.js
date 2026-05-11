@@ -49,12 +49,73 @@ const INBOUND_ADAPTERS = {
     };
   },
 
-  // Future:
-  //   PlaybillNavCmd(fields)            → { action: 'nav.dpad', key: ... }
-  //   PlaybillTransportCmd(fields)      → { action: 'transport.<verb>', ... }
-  //   PlaybillSystemCmd(fields)         → { action: 'system.<verb>' }
-  //   PlaybillLaunchSourceCmd(fields)   → { action: 'source.launch', ... }
-  //   PlaybillVolumeCmd(fields)         → { action: 'transport.volume<...>', ... }
+  // D-pad / soft-button presses from a remote-style CAN device. The bus
+  // handler (handlers/nav.js) fans this out as an IPC event that the GUI's
+  // renderer turns into a synthetic KeyboardEvent. When the GUI is offline,
+  // the handler also fires system.launchGui so the first press wakes the box.
+  PlaybillNavCmd(fields) {
+    const key = navKeyIntToString(fields.navKey);
+    if (!key) return null;
+    return { action: 'nav.dpad', key };
+  },
+
+  // Lifecycle ops from any CAN device — most importantly LaunchGui so a
+  // remote can power the Playbill GUI on without the user touching the
+  // keyboard. The matching bus actions live in handlers/system.js.
+  PlaybillSystemCmd(fields) {
+    const action = sysActionIntToAction(fields.sysAction);
+    if (!action) return null;
+    return { action };
+  },
+
+  // Transport verbs. SeekRel/SeekAbs carry a uint32 value (ms); the simple
+  // verbs ignore it. Play with no URL is a resume-current — pre-resolved
+  // playback URLs don't fit in a CAN frame so we leave url/sourceId unset.
+  PlaybillTransportCmd(fields) {
+    const enumName = enumNameFromValue(codec.enums.TransportAction, fields.action);
+    if (!enumName) return null;
+    switch (enumName) {
+      case 'Play':     return { action: 'transport.play' };
+      case 'Pause':    return { action: 'transport.pause' };
+      case 'Stop':     return { action: 'transport.stop' };
+      case 'Toggle':   return { action: 'transport.toggle' };
+      case 'Next':     return { action: 'transport.next' };
+      case 'Previous': return { action: 'transport.previous' };
+      case 'SeekRel': {
+        // codec value is uint32; interpret as signed for relative seeks so a
+        // remote can scrub backward without needing a separate verb.
+        const v = fields.value | 0; // force signed-32 reinterpretation
+        return { action: 'transport.seekRel', deltaMs: v };
+      }
+      case 'SeekAbs':  return { action: 'transport.seekAbs', positionMs: fields.value >>> 0 };
+      default: return null;
+    }
+  },
+
+  // Volume / mute. Up/Down ignore the value byte (uses schema default step);
+  // Set uses the byte as a 0-100 percent. Mute verbs ignore the value.
+  PlaybillVolumeCmd(fields) {
+    const enumName = enumNameFromValue(codec.enums.VolAction, fields.volAction);
+    if (!enumName) return null;
+    switch (enumName) {
+      case 'Up':         return { action: 'transport.volumeUp' };
+      case 'Down':       return { action: 'transport.volumeDown' };
+      case 'Set':        return { action: 'transport.volumeSet', percent: Math.max(0, Math.min(100, fields.value | 0)) };
+      case 'MuteOn':     return { action: 'transport.muteOn' };
+      case 'MuteOff':    return { action: 'transport.muteOff' };
+      case 'MuteToggle': return { action: 'transport.muteToggle' };
+      default: return null;
+    }
+  },
+
+  // Deep-link a remote app tile. source.launch in handlers/source.js
+  // auto-fires system.launchGui when the GUI is offline.
+  PlaybillLaunchSourceCmd(fields) {
+    const sourceId = sourceIdFromEnum(fields.sourceEnum);
+    if (!sourceId) return null;
+    const subScreen = subScreenFromEnum(fields.subScreenEnum) || 'default';
+    return { action: 'source.launch', sourceId, subScreen };
+  },
 };
 
 // ── Outbound: state slice → DBC fields ────────────────────────────────────
@@ -274,6 +335,50 @@ function bandIntToString(n) {
     if (code === n) return name.toLowerCase();
   }
   return null;
+}
+
+function enumNameFromValue(enumObj, n) {
+  if (!enumObj || !Number.isFinite(n)) return null;
+  for (const [name, code] of Object.entries(enumObj)) {
+    if (code === n) return name;
+  }
+  return null;
+}
+
+function navKeyIntToString(n) {
+  const name = enumNameFromValue(codec.enums.NavKey, n);
+  return name ? name.toLowerCase() : null;
+}
+
+const SYS_ACTION_TO_BUS = Object.freeze({
+  LaunchGui: 'system.launchGui',
+  QuitGui:   'system.quitGui',
+  Focus:     'system.focus',
+  Wake:      'system.wake',
+  Sleep:     'system.sleep',
+});
+function sysActionIntToAction(n) {
+  const name = enumNameFromValue(codec.enums.SysAction, n);
+  return name ? SYS_ACTION_TO_BUS[name] : null;
+}
+
+const SOURCE_ENUM_TO_ID = Object.freeze({
+  YouTube:      'youtube',
+  LiveTV:       'livetv',
+  Radio:        'radio',
+  LocalLibrary: 'local',
+  Plex:         'plex',
+  Spotify:      'spotify',
+  Netflix:      'netflix',
+});
+function sourceIdFromEnum(n) {
+  const name = enumNameFromValue(codec.enums.Source, n);
+  return name ? SOURCE_ENUM_TO_ID[name] : null;
+}
+
+function subScreenFromEnum(n) {
+  const name = enumNameFromValue(codec.enums.SubScreen, n);
+  return name ? name.toLowerCase() : null;
 }
 function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 function clampSigned8(n) {

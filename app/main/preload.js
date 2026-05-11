@@ -28,6 +28,11 @@ ipcRenderer.on('playbill:theme', (_evt, payload) => {
 // `playbill.controller.command({action, ...})` to talk to the daemon.
 const controllerStateListeners = new Set();
 const controllerStatusListeners = new Set();
+// channel-name → Set<fn>. Controller events are one-shot signals (e.g.
+// nav.dpad keypresses arriving from CAN/MQTT). The renderer subscribes per
+// channel rather than receiving every event because the chrome only cares
+// about a handful of channels.
+const controllerEventListeners = new Map();
 ipcRenderer.on('playbill.controller.state',  (_e, state) => {
   for (const fn of controllerStateListeners) {
     try { fn(state); } catch (e) { console.error('controller state listener:', e); }
@@ -36,6 +41,13 @@ ipcRenderer.on('playbill.controller.state',  (_e, state) => {
 ipcRenderer.on('playbill.controller.status', (_e, status) => {
   for (const fn of controllerStatusListeners) {
     try { fn(status); } catch (e) { console.error('controller status listener:', e); }
+  }
+});
+ipcRenderer.on('playbill.controller.event', (_e, { channel, payload }) => {
+  const set = controllerEventListeners.get(channel);
+  if (!set) return;
+  for (const fn of set) {
+    try { fn(payload); } catch (e) { console.error(`controller event ${channel}:`, e); }
   }
 });
 
@@ -57,6 +69,41 @@ contextBridge.exposeInMainWorld('playbill', {
     command:  (cmd) => ipcRenderer.invoke('playbill.controller.command', cmd),
     onState:  (fn) => { controllerStateListeners.add(fn);  return () => controllerStateListeners.delete(fn); },
     onStatus: (fn) => { controllerStatusListeners.add(fn); return () => controllerStatusListeners.delete(fn); },
+    // Subscribe to a controller-published event channel. Today the only
+    // channel in use is 'nav.dpad' — keypresses from a remote-style CAN
+    // device or the PWA, delivered as { key, ts, from }. Returns an
+    // unsubscribe function.
+    onEvent: (channel, fn) => {
+      let set = controllerEventListeners.get(channel);
+      if (!set) { set = new Set(); controllerEventListeners.set(channel, set); }
+      set.add(fn);
+      return () => {
+        const s = controllerEventListeners.get(channel);
+        if (s) { s.delete(fn); if (s.size === 0) controllerEventListeners.delete(channel); }
+      };
+    },
+    // Convenience wrapper — same shape every screen wants for D-pad input.
+    onNavDpad: (fn) => {
+      let set = controllerEventListeners.get('nav.dpad');
+      if (!set) { set = new Set(); controllerEventListeners.set('nav.dpad', set); }
+      set.add(fn);
+      return () => {
+        const s = controllerEventListeners.get('nav.dpad');
+        if (s) { s.delete(fn); if (s.size === 0) controllerEventListeners.delete('nav.dpad'); }
+      };
+    },
+    // Same shape for streamed text — payload is { text, ts, from }. The
+    // renderer routes this into document.activeElement (when it's an input)
+    // or synthesizes per-character keydowns for state-machine screens.
+    onNavText: (fn) => {
+      let set = controllerEventListeners.get('nav.text');
+      if (!set) { set = new Set(); controllerEventListeners.set('nav.text', set); }
+      set.add(fn);
+      return () => {
+        const s = controllerEventListeners.get('nav.text');
+        if (s) { s.delete(fn); if (s.size === 0) controllerEventListeners.delete('nav.text'); }
+      };
+    },
   },
 
   // Hardware control surfaces. Each namespace is a thin pass-through to a

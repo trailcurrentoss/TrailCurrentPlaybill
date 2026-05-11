@@ -1,5 +1,116 @@
 /* TV App — focus state, keyboard nav, view switching */
 
+// Apply remote-streamed text to the focused element. Used by the nav.text
+// IPC event listener inside TVApp. Kept at module scope so the function
+// reference is stable across renders.
+//
+// React's controlled <input>/<textarea> elements track value internally;
+// setting el.value directly does NOT trigger React's onChange. The fix is
+// to invoke the value setter on the prototype's descriptor — React's
+// SyntheticEvent system listens for the bubbling native 'input' event and
+// reconciles state from there.
+function applyRemoteText(text) {
+  const el = document.activeElement;
+  const isInput = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && !el.disabled && !el.readOnly;
+
+  if (isInput) {
+    // Walk the string and apply runs of printable text + handle specials.
+    let i = 0;
+    while (i < text.length) {
+      const ch = text[i];
+      if (ch === '\b') {
+        backspaceInput(el);
+        i++;
+      } else if (ch === '\n') {
+        // Newline in a textarea inserts literally; in a single-line input
+        // it means "submit". Both match how a real keyboard behaves.
+        if (el.tagName === 'TEXTAREA') {
+          insertAtCaret(el, '\n');
+        } else {
+          if (el.form && typeof el.form.requestSubmit === 'function') {
+            el.form.requestSubmit();
+          } else {
+            const evtInit = { key: 'Enter', bubbles: true, cancelable: true };
+            el.dispatchEvent(new KeyboardEvent('keydown', evtInit));
+            el.dispatchEvent(new KeyboardEvent('keyup',   evtInit));
+          }
+        }
+        i++;
+      } else if (ch === '\t') {
+        moveFocus(el, 1);
+        i++;
+      } else {
+        let j = i;
+        while (j < text.length && text[j] !== '\b' && text[j] !== '\n' && text[j] !== '\t') j++;
+        insertAtCaret(el, text.slice(i, j));
+        i = j;
+      }
+    }
+    return;
+  }
+
+  // No real input focused — synthesize keydowns per character so screens
+  // like radio's ZIP entry (which listens to window.keydown and accumulates
+  // digits into state) react identically to a USB keyboard.
+  for (const ch of text) {
+    let key = ch;
+    if (ch === '\b') key = 'Backspace';
+    else if (ch === '\n') key = 'Enter';
+    else if (ch === '\t') key = 'Tab';
+    const evtInit = { key, bubbles: true, cancelable: true };
+    window.dispatchEvent(new KeyboardEvent('keydown', evtInit));
+    window.dispatchEvent(new KeyboardEvent('keyup',   evtInit));
+  }
+}
+
+function reactValueSetter(el) {
+  const proto = el.tagName === 'TEXTAREA'
+    ? window.HTMLTextAreaElement.prototype
+    : window.HTMLInputElement.prototype;
+  const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+  return desc && desc.set;
+}
+
+function insertAtCaret(el, chunk) {
+  const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+  const end   = el.selectionEnd   != null ? el.selectionEnd   : start;
+  const newVal = el.value.slice(0, start) + chunk + el.value.slice(end);
+  const setter = reactValueSetter(el);
+  if (setter) setter.call(el, newVal); else el.value = newVal;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  const caret = start + chunk.length;
+  try { el.selectionStart = el.selectionEnd = caret; } catch (_) { /* number inputs */ }
+}
+
+function backspaceInput(el) {
+  const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+  const end   = el.selectionEnd   != null ? el.selectionEnd   : start;
+  if (start === 0 && end === 0) return;
+  const cutFrom = end > start ? start : start - 1;
+  const newVal = el.value.slice(0, cutFrom) + el.value.slice(end);
+  const setter = reactValueSetter(el);
+  if (setter) setter.call(el, newVal); else el.value = newVal;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  try { el.selectionStart = el.selectionEnd = cutFrom; } catch (_) { /* noop */ }
+}
+
+function moveFocus(el, dir) {
+  const focusable = Array.from(document.querySelectorAll(
+    'input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ));
+  if (focusable.length === 0) return;
+  const idx = focusable.indexOf(el);
+  // When nothing focusable is currently active (e.g. focus is on <body>
+  // because the screen just mounted), land on the first/last focusable
+  // depending on direction. Without this, the very first D-pad press
+  // from a remote on a form-heavy screen would no-op.
+  const next = idx < 0
+    ? (dir > 0 ? focusable[0] : focusable[focusable.length - 1])
+    : focusable[(idx + dir + focusable.length) % focusable.length];
+  if (next && typeof next.focus === 'function') next.focus();
+}
+
+
 function TVApp() {
   const [screen, setScreen] = useState('home');
   // Initial focus lands on the first installed app rather than the hero.
@@ -21,6 +132,61 @@ function TVApp() {
     }
     window.addEventListener('playbill:navigate', onNavigate);
     return () => window.removeEventListener('playbill:navigate', onNavigate);
+  }, []);
+
+  // nav.dpad events from the controller (CAN/MQTT/PWA remote) → synthetic
+  // DOM KeyboardEvents on window. Every screen in the shell already listens
+  // for keydown to drive focus, so funneling through the keyboard path
+  // means there is exactly one code path for navigation regardless of
+  // whether the input comes from a USB keyboard, a local IR remote, or a
+  // remote-style CAN device on the rig bus. Mapping:
+  //   up/down/left/right → Arrow* (handled by app.jsx + per-screen handlers)
+  //   select             → Enter
+  //   back               → Escape (returns to home from any screen)
+  //   home               → 'h'    (existing global Home handler)
+  //   menu               → ContextMenu (new case below opens the side nav)
+  useEffect(() => {
+    if (!window.playbill || !window.playbill.controller ||
+        typeof window.playbill.controller.onNavDpad !== 'function') return;
+    const KEY_MAP = {
+      up:     'ArrowUp',
+      down:   'ArrowDown',
+      left:   'ArrowLeft',
+      right:  'ArrowRight',
+      select: 'Enter',
+      back:   'Escape',
+      home:   'h',
+      menu:   'ContextMenu',
+    };
+    const unsub = window.playbill.controller.onNavDpad(({ key } = {}) => {
+      const domKey = KEY_MAP[key];
+      if (!domKey) return;
+      // Mirror a real keyboard press: keydown → keyup. Bubble + cancelable
+      // so per-screen window listeners (radio.jsx etc.) see it identically
+      // to a USB keyboard event.
+      const evtInit = { key: domKey, bubbles: true, cancelable: true };
+      window.dispatchEvent(new KeyboardEvent('keydown', evtInit));
+      window.dispatchEvent(new KeyboardEvent('keyup',   evtInit));
+    });
+    return () => { try { unsub && unsub(); } catch (_) { /* noop */ } };
+  }, []);
+
+  // nav.text — bulk text from a remote soft keyboard (PWA). Two delivery
+  // modes depending on what's focused:
+  //   • Real <input>/<textarea>  → set the value through the prototype's
+  //     value setter and dispatch a bubbling 'input' event so React's
+  //     controlled inputs pick it up. Bulk apply, one re-render.
+  //   • Anything else (radio ZIP, etc.) → synthesize a keydown per char so
+  //     state-machine screens react identically to a USB keyboard.
+  // Special characters: '\b' Backspace, '\n' Enter/submit, '\t' Tab.
+  useEffect(() => {
+    if (!window.playbill || !window.playbill.controller ||
+        typeof window.playbill.controller.onNavText !== 'function') return;
+    const unsub = window.playbill.controller.onNavText(({ text } = {}) => {
+      if (typeof text !== 'string' || text.length === 0) return;
+      applyRemoteText(text);
+    });
+    return () => { try { unsub && unsub(); } catch (_) { /* noop */ } };
   }, []);
 
   // First-run gate: subscribe to controller state. While the controller
@@ -99,9 +265,14 @@ function TVApp() {
   // Keyboard handler
   useEffect(() => {
     const onKey = (e) => {
-      // Form-heavy screens — let the browser's native focus handle Tab /
-      // arrows / typing. We only intercept H (and only when no input is
-      // focused, so the user can type "h" in the search box).
+      // Form-heavy screens — for a real keyboard, the browser's native
+      // focus handles Tab / arrows / typing. We only intercept H (and only
+      // when no input is focused, so the user can type "h" in the search
+      // box). For the remote, synthetic KeyboardEvents have isTrusted=false
+      // and the browser will NOT walk Tab focus or activate buttons on
+      // Enter from them — and the remote has no Tab key anyway. So when
+      // the event is synthetic, translate D-pad arrows into focus walking
+      // and Enter into a click/submit on the active element.
       if (screen === 'settings' || screen === 'youtube') {
         const inField = e.target && /^(input|textarea|select|button)$/i.test(e.target.tagName);
         if ((e.key === 'h' || e.key === 'H') && !inField) {
@@ -112,12 +283,43 @@ function TVApp() {
           setScreen('apps');
           setSideNav({focused:false, hovered:false});
         }
+        if (e.key === 'ContextMenu') {
+          setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screen) });
+          e.preventDefault();
+        }
+        if (!e.isTrusted) {
+          const active = document.activeElement;
+          if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+            moveFocus(active, 1);
+            e.preventDefault();
+          } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+            moveFocus(active, -1);
+            e.preventDefault();
+          } else if (e.key === 'Enter') {
+            if (active && active.tagName === 'BUTTON') {
+              active.click();
+              e.preventDefault();
+            } else if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
+                       && active.form && typeof active.form.requestSubmit === 'function') {
+              active.form.requestSubmit();
+              e.preventDefault();
+            }
+          }
+        }
         return;
       }
 
       // Home key takes you to home screen from anywhere
       if (e.key === 'h' || e.key === 'H') { setScreen('home'); setFocus({row:'hero', col:0, rowY:0}); setSideNav({focused:false, hovered:false}); return; }
       if (e.key === 'Escape' || e.key === 'Backspace') { setScreen('home'); setFocus({row:'hero', col:0, rowY:0}); setSideNav({focused:false, hovered:false}); return; }
+      // Remote 'menu' button → open the side nav focused. The side nav IS
+      // the global menu in this UI; mapping menu to it gives a remote user
+      // one-press access to every screen.
+      if (e.key === 'ContextMenu') {
+        setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screen) });
+        e.preventDefault();
+        return;
+      }
 
       // Side nav navigation
       if (sideNav.focused) {

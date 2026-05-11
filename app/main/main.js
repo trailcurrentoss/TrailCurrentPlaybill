@@ -97,9 +97,14 @@ function broadcastControllerStatus(connected) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('playbill.controller.status', { connected });
 }
+function broadcastControllerEvent(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('playbill.controller.event', { channel, payload });
+}
 controller.on('state',         broadcastControllerState);
 controller.on('connected',     () => broadcastControllerStatus(true));
 controller.on('disconnected',  () => broadcastControllerStatus(false));
+controller.on('event',         broadcastControllerEvent);
 controller.start();
 
 /* ---------------------------------------------------------------------------

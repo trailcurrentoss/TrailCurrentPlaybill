@@ -32,6 +32,7 @@ const livetvHandlers    = require('./handlers/livetv');
 const sourceHandlers    = require('./handlers/source');
 const transportHandlers = require('./handlers/transport');
 const youtubeHandlers   = require('./handlers/youtube');
+const navHandlers       = require('./handlers/nav');
 const radioService      = require('./services/radio');
 const volumeService     = require('./services/volume');
 const guiService        = require('./services/gui');
@@ -190,6 +191,13 @@ async function main() {
   ipc.on('last-client-gone', () => {
     state.patch({ gui: { running: false, openedAt: null, closedAt: Date.now() } });
   });
+
+  // nav.dpad handler needs the IPC server reference so it can fan press
+  // events out to the connected Electron GUI. Registered after ipc is
+  // created but before start() so any command landing before the first
+  // GUI connects still hits the bus (and no-ops on the fan-out).
+  navHandlers.register({ bus, state, ipc });
+
   const sockPath = await ipc.start();
 
   // Bring the MQTT bridge up. If unconfigured this is a no-op; once the

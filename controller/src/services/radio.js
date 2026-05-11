@@ -274,6 +274,12 @@ function scan({ band = 'fm' } = {}) {
         // What we actually care about is whether we collected CSV data.
         if (csv.trim().length === 0) {
           const tail = err.slice(-400) || `(exit ${code}, signal ${signal})`;
+          // rtl_power prints "No supported devices found." to stderr and exits
+          // when no RTL-SDR dongle is plugged in. Surface that as a friendly
+          // message instead of the raw stderr tail.
+          if (/No supported devices found/i.test(err)) {
+            return reject(new Error(`Check ${band.toUpperCase()} tuner connection — USB radio dongle not detected`));
+          }
           if (/usb_claim_interface|Failed to open rtlsdr/i.test(err)) {
             return reject(new Error(`scan: dongle busy — try again in a moment (${tail})`));
           }

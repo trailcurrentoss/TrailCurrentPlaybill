@@ -159,6 +159,13 @@ class ControllerClient extends EventEmitter {
       else p.reject(new Error(msg.error || 'controller returned error'));
       return;
     }
+    if (msg.kind === 'event') {
+      // One-shot controller event (e.g. nav.dpad keypress fanned out from
+      // CAN / MQTT / PWA). The Electron main process re-broadcasts these
+      // to the renderer so the focus-routing code can act on them.
+      this.emit('event', msg.channel, msg.payload);
+      return;
+    }
     if (msg.kind === 'error') {
       console.error('[ipc-client] server error:', msg.error);
     }

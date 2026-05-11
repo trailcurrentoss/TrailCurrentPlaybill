@@ -23,6 +23,7 @@
     { "$ref": "#/$defs/ConnectionSetCa" },
 
     { "$ref": "#/$defs/NavDpad" },
+    { "$ref": "#/$defs/NavText" },
 
     { "$ref": "#/$defs/TransportPlay" },
     { "$ref": "#/$defs/TransportPause" },
@@ -180,6 +181,16 @@
       "properties": {
         "action": { "const": "nav.dpad" },
         "key": { "enum": ["up", "down", "left", "right", "select", "back", "home", "menu"] }
+      }
+    },
+
+    "NavText": {
+      "x-class": "B",
+      "description": "Stream text into the focused field on the Playbill GUI. The renderer applies the string to document.activeElement when it's an <input>/<textarea>; otherwise it synthesizes per-character keydown events so state-machine screens (e.g. the radio ZIP entry) receive it identically to a USB keyboard. Special characters: '\\b' = Backspace, '\\n' = Enter / submit, '\\t' = Tab. MQTT-only — won't fit in an 8-byte CAN frame.",
+      "type": "object", "additionalProperties": false, "required": ["action", "text"],
+      "properties": {
+        "action": { "const": "nav.text" },
+        "text":   { "type": "string", "maxLength": 1024 }
       }
     },
 

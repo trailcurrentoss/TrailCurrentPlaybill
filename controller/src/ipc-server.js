@@ -145,6 +145,16 @@ class IpcServer extends EventEmitter {
     }
   }
 
+  /** Publish a one-shot event to every connected GUI client. Used for
+   *  transient signals that aren't part of the state store — most notably
+   *  nav.dpad keypresses arriving from the PWA / CAN, which the Electron
+   *  renderer turns into synthetic keystrokes against the focused element. */
+  publishEvent(channel, payload) {
+    if (typeof channel !== 'string' || !channel) return;
+    const wire = { kind: 'event', channel, payload };
+    for (const c of this._clients) this._send(c, wire);
+  }
+
   _send(client, obj) {
     try {
       client.socket.write(JSON.stringify(obj) + '\n');
