@@ -738,9 +738,18 @@ body {
   padding: 12px; border-radius: 10px;
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.06);
-  transition: background 0.15s ease, border-color 0.15s ease;
+  outline: none;                      /* draw our own focus ring */
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 .yt-card:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); }
+.yt-card:focus-visible,
+.yt-card:focus {
+  border-color: var(--tc-primary);
+  background: rgba(82,164,65,0.08);
+  box-shadow: 0 0 0 3px rgba(82,164,65,0.25), 0 8px 24px rgba(0,0,0,0.3);
+  transform: scale(1.005);
+}
 .yt-card.busy { opacity: 0.6; }
 
 .yt-thumb {

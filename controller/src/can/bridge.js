@@ -3,7 +3,7 @@
  *   can/inbound  → decode (dbc-codec.js) → adapt to bus command → dispatch
  *   state.*      → adapt to DBC fields → encode → publish on can/outbound
  *
- * Per `docs/app/architecture-v2.md §4`, Headwaters stays wire-only — it
+ * Per `docs/app/architecture.md §4`, Headwaters stays wire-only — it
  * shuttles raw frames between the can0 socket and the can/inbound /
  * can/outbound MQTT topics, and Playbill owns the DBC. This file is that
  * ownership.

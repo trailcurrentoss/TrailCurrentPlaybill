@@ -22,7 +22,9 @@
 
 'use strict';
 
-const radio = require('../services/radio');
+const radio  = require('../services/radio');
+const player = require('../services/player');
+const livetv = require('../services/livetv');
 
 function register({ bus, state }) {
   // Helper to write into state.radio in one place. `running:false` collapses
@@ -39,6 +41,16 @@ function register({ bus, state }) {
     const { band, frequencyHz, gain, modulation } = v;
     if (!band)        throw new Error('radio.tune: band required');
     if (!frequencyHz) throw new Error('radio.tune: frequencyHz required');
+
+    // Architecture rule (architecture.md §6): only one source plays at a
+    // time. Stop mpv (YouTube/livetv playback) and any DVB tuner before
+    // bringing up rtl_fm — otherwise audio mixes through the analog jack.
+    // Idempotent: each stop() no-ops if that producer wasn't running.
+    try { await player.stop(); state.patch({ nowPlaying: null }); }
+    catch (e) { console.warn('[radio.tune] player.stop failed:', e.message); }
+    try { await livetv.stopAll(); state.patch({ livetv: null }); }
+    catch (e) { console.warn('[radio.tune] livetv.stopAll failed:', e.message); }
+
     const result = await radio.tune({ band, frequencyHz, gain, modulation });
     setRadioState({
       running:     true,
@@ -49,12 +61,14 @@ function register({ bus, state }) {
       scanning:    false,
       lastTuneAt:  Date.now(),
     });
+    state.patch({ source: 'radio' });
     return result;
   });
 
   bus.register('radio.stop', async () => {
     await radio.stop();
     setRadioState({ running: false, scanning: false });
+    if (state.get().source === 'radio') state.patch({ source: null });
     return { ok: true };
   });
 

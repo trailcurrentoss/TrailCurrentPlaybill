@@ -1,7 +1,7 @@
 /* MQTT bridge — connects to the rig broker, fans inbound commands into
    the command bus, fans outbound state changes onto retained topics.
 
-   Topic layout (matches docs/app/architecture-v2.md §4):
+   Topic layout (matches docs/app/architecture.md §4):
 
      local/playbill/<deviceId>/<feature>/command   ← we subscribe + dispatch
      local/playbill/<deviceId>/<feature>/status    → we publish (retained)
@@ -34,6 +34,44 @@ const TOPIC_ROOT = 'local';
 const SUBSYSTEM  = 'playbill';
 const BROADCAST  = 'all';
 
+const DEFAULT_MQTT_PORT = 8883;
+
+/**
+ * Canonicalize whatever the user / PWA hands us as a broker address into
+ * the strict form `mqtts://host:port` (no path/query/fragment, never
+ * insecure). The Settings UI accepts a bare hostname; PWAs may send a
+ * full URL. Both flow through here before persistence so connection.json
+ * always contains the canonical form.
+ *
+ *   ''                              → throws
+ *   'broker.local'                  → 'mqtts://broker.local:8883'
+ *   'broker.local:9001'             → 'mqtts://broker.local:9001'
+ *   'mqtt://broker.local'           → 'mqtts://broker.local:8883'    (upgraded)
+ *   'mqtts://broker.local'          → 'mqtts://broker.local:8883'
+ *   'mqtts://broker.local:8883/foo' → 'mqtts://broker.local:8883'    (path stripped)
+ *   'http://...'                    → throws (wrong scheme)
+ */
+function normalizeBrokerUrl(input) {
+  if (typeof input !== 'string') throw new Error('brokerUrl must be a string');
+  let s = input.trim();
+  if (!s) throw new Error('brokerUrl required');
+  // No scheme → treat as bare hostname[:port].
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = 'mqtts://' + s;
+
+  let url;
+  try { url = new URL(s); }
+  catch (e) { throw new Error('brokerUrl invalid: ' + e.message); }
+
+  if (url.protocol === 'mqtt:') url.protocol = 'mqtts:';   // upgrade insecure
+  if (url.protocol !== 'mqtts:') {
+    throw new Error('brokerUrl scheme must be mqtts:// (got ' + url.protocol + '//)');
+  }
+  if (!url.hostname) throw new Error('brokerUrl missing hostname');
+  if (!url.port) url.port = String(DEFAULT_MQTT_PORT);
+
+  return 'mqtts://' + url.host;     // host == hostname[:port]; no path/query/fragment
+}
+
 function topicCommandSub(deviceId)  { return `${TOPIC_ROOT}/${SUBSYSTEM}/${deviceId}/+/command`; }
 function topicCommandBroadcast()    { return `${TOPIC_ROOT}/${SUBSYSTEM}/${BROADCAST}/+/command`; }
 function topicStatus(deviceId, feat){ return `${TOPIC_ROOT}/${SUBSYSTEM}/${deviceId}/${feat}/status`; }
@@ -54,6 +92,20 @@ class MqttBridge {
     this._client = null;
     this._currentDeviceId = null;     // remember so we can disconnect with the same LWT topic
     this._canInboundHandler = null;   // null or fn(envelope) — set via subscribeCanInbound
+    this._connectListeners = [];      // fn[] — fired on every broker connect (initial + reconnect)
+  }
+
+  /** Register a callback that fires every time the MQTT client successfully
+   *  connects to the broker (initial connect AND every reconnect). Fires
+   *  immediately if already connected when called. The state-store fan-out
+   *  uses this to republish a snapshot so a slow probe at startup or a
+   *  state change during a disconnect still ends up on the broker. */
+  onConnect(fn) {
+    if (typeof fn !== 'function') return;
+    this._connectListeners.push(fn);
+    if (this._client && this._client.connected) {
+      try { fn(); } catch (e) { console.error('[mqtt] onConnect listener threw:', e.message); }
+    }
   }
 
   /** Register a handler for can/inbound frames. Idempotent. Survives
@@ -140,7 +192,25 @@ class MqttBridge {
       }
       if (conn.tlsCertHostname) {
         const expected = conn.tlsCertHostname;
-        options.checkServerIdentity = (_host, cert) => tls.checkServerIdentity(expected, cert);
+        // Wrap the checkServerIdentity override so a SAN mismatch surfaces
+        // a useful message — mqtt.js otherwise rebrands the failure as a
+        // generic `self-signed certificate in certificate chain` which
+        // masks the real cause (e.g. PWA delivered a tlsCertHostname that
+        // doesn't match any cert SAN, common when the field is set to a
+        // Docker-internal alias rather than the LAN hostname).
+        options.checkServerIdentity = (_host, cert) => {
+          const err = tls.checkServerIdentity(expected, cert);
+          if (err) {
+            const sans = (cert.subjectaltname || '').split(/,\s*/);
+            console.error(
+              `[mqtt] TLS hostname check failed: tlsCertHostname="${expected}" ` +
+              `not in cert altnames [${sans.join('; ')}]. ` +
+              `Either drop tlsCertHostname (the brokerUrl host probably ` +
+              `already matches the cert SAN) or set it to one of the listed altnames.`,
+            );
+          }
+          return err;
+        };
       }
     }
 
@@ -172,6 +242,12 @@ class MqttBridge {
         }),
         { qos: 1, retain: true },
       );
+      // Fire connect-listeners (state-store fan-out republishes a snapshot
+      // here so any state mutated while we were disconnected — including
+      // the initial volume probe that races startup — lands on the broker).
+      for (const fn of this._connectListeners) {
+        try { fn(); } catch (e) { console.error('[mqtt] onConnect listener threw:', e.message); }
+      }
     });
 
     client.on('error', (err) => {
@@ -244,7 +320,19 @@ class MqttBridge {
         );
       } catch (_) { /* best-effort */ }
     }
-    await new Promise((resolve) => c.end(false, {}, resolve));
+    // Race the graceful drain against a hard cap. If the broker is
+    // unreachable (DNS failure, network drop, wrong host like the
+    // PWA-supplied 'bd81e3eeb809.local' Docker-internal name), c.end(false)
+    // waits forever for an ack that never arrives. systemd then SIGKILLs us
+    // after TimeoutStopSec, making restarts take a full 90 s. 2 s is plenty
+    // for a healthy disconnect; anything past that means the network's gone
+    // and we're better off forcing.
+    await Promise.race([
+      new Promise((resolve) => c.end(false, {}, resolve)),
+      new Promise((resolve) => setTimeout(() => {
+        try { c.end(true, {}, () => resolve()); } catch (_) { resolve(); }
+      }, 2000)),
+    ]);
   }
 
   _setConnState(status, lastError) {
@@ -267,3 +355,5 @@ module.exports.topics = {
   status: topicStatus,
   presence: topicPresence,
 };
+module.exports.normalizeBrokerUrl = normalizeBrokerUrl;
+module.exports.DEFAULT_MQTT_PORT  = DEFAULT_MQTT_PORT;

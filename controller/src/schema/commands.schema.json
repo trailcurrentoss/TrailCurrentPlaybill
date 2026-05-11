@@ -185,13 +185,14 @@
 
     "TransportPlay": {
       "x-class": "A", "x-dbc": "PlaybillTransportCmd", "x-dbc-action": "Play",
-      "description": "Two shapes: {sourceId,itemId} for resolve-then-play, OR {url,headers?,mediaType?,metadata?} for a pre-resolved Playable.",
+      "description": "Two shapes: {sourceId,itemId} for resolve-then-play, OR {url,audioUrl?,headers?,mediaType?,metadata?} for a pre-resolved Playable. audioUrl is the separate audio stream when the source returned video + audio separately (YouTube high-quality path).",
       "type": "object", "additionalProperties": false, "required": ["action"],
       "properties": {
         "action":    { "const": "transport.play" },
         "sourceId":  { "type": "string" },
         "itemId":    { "type": "string" },
         "url":       { "type": "string", "minLength": 1 },
+        "audioUrl":  { "type": ["string", "null"], "minLength": 1 },
         "headers":   { "type": "object" },
         "mediaType": { "enum": ["video", "audio"] },
         "metadata":  { "type": "object" }

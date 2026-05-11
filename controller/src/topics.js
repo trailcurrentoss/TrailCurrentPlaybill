@@ -1,6 +1,6 @@
 /* MQTT topic constants — single source of truth.
 
-   Topic shape (matches docs/app/architecture-v2.md §4):
+   Topic shape (matches docs/app/architecture.md §4):
 
      local/playbill/<deviceId>/<feature>/{command,status}
      local/playbill/all/<feature>/command            broadcast

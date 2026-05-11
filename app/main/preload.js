@@ -86,13 +86,9 @@ contextBridge.exposeInMainWorld('playbill', {
     setPresets:   (arr) => ipcRenderer.invoke('playbill.radio.setPresets', arr),
     probeTools:   ()    => ipcRenderer.invoke('playbill.radio.probeTools'),
   },
-  player: {
-    play:       (a) => ipcRenderer.invoke('playbill.player.play', a),
-    stop:       ()  => ipcRenderer.invoke('playbill.player.stop'),
-    setVolume:  (v) => ipcRenderer.invoke('playbill.player.setVolume', v),
-    setMute:    (m) => ipcRenderer.invoke('playbill.player.setMute', m),
-    probeTools: ()  => ipcRenderer.invoke('playbill.player.probeTools'),
-  },
+  // (playbill.player.* exposure retired in Phase 7. Playback is owned by
+  // the controller daemon. Renderer code uses
+  // window.playbill.controller.command({action:'transport.play', url, ...}))
 });
 
 // Bootstrap: ask main for the current theme and patch it onto window.playbill

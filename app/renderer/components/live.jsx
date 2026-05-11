@@ -16,6 +16,7 @@ function LiveView({ focus }) {
   const [scanning, setScanning]       = useState(false);
   const [tuning, setTuning]           = useState(null);   // channel name being brought up
   const [error, setError]             = useState(null);
+  const [livetv, setLivetv]           = useState(null);   // controller-owned current state.livetv
 
   // Initial probe: tools available? Adapters present? Channels cached?
   useEffect(() => {
@@ -36,6 +37,24 @@ function LiveView({ focus }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Subscribe to controller state.livetv so PWA / CAN-driven channel
+  // changes (or any other Playbill instance on the rig that shares a
+  // tuner via Headwaters routing later) reflect in this UI immediately.
+  // Same shape as radio.jsx; rule from architecture.md §3 — Playbill is
+  // the canonical owner of state, the GUI is one of several renderers.
+  useEffect(() => {
+    if (!window.playbill || !window.playbill.controller) return;
+    let unsub;
+    (async () => {
+      try {
+        const init = await window.playbill.controller.getState();
+        if (init && init.state) setLivetv(init.state.livetv);
+      } catch (_) { /* controller may not be up yet */ }
+      unsub = window.playbill.controller.onState((s) => { if (s) setLivetv(s.livetv); });
+    })();
+    return () => { if (unsub) unsub(); };
+  }, []);
+
   async function rescan() {
     setError(null); setScanning(true);
     try {
@@ -51,8 +70,17 @@ function LiveView({ focus }) {
   async function watch(ch) {
     setError(null); setTuning(ch.name);
     try {
+      // Tune still goes through the legacy playbill.dvb.* shim (which
+      // forwards to controller livetv.tune); player playback now goes
+      // straight to the controller's transport.play so we don't depend on
+      // the soon-to-be-deleted app/main/services/player.js.
       const { tsPath } = await window.playbill.dvb.tune({ adapter: 0, channel: ch.name });
-      await window.playbill.player.play({ source: tsPath });
+      await window.playbill.controller.command({
+        action: 'transport.play',
+        url:    tsPath,
+        mediaType: 'video',
+        metadata: { title: ch.name, sourceItemId: ch.name },
+      });
     } catch (e) {
       setError(String(e.message || e));
     } finally {

@@ -18,7 +18,7 @@
 
 [Unit]
 Description=TrailCurrent Playbill — control daemon (MQTT subscriber, mpv owner)
-Documentation=https://github.com/trailcurrent/TrailCurrentPlaybill/blob/main/docs/app/architecture-v2.md
+Documentation=https://github.com/trailcurrent/TrailCurrentPlaybill/blob/main/docs/app/architecture.md
 
 # We do not depend on the network being up here — the controller comes up
 # in the unconfigured state if there's no broker reachable, and reconnects
@@ -26,7 +26,11 @@ Documentation=https://github.com/trailcurrent/TrailCurrentPlaybill/blob/main/doc
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/playbill-controller
+# Runs as the logged-in user. Node binary needs cap_net_bind_service for
+# the onboarding claim listener on port 80; the rsdk image-build hook 5a
+# applies the capability via `setcap`.
+ExecStart=/usr/bin/node /opt/trailcurrent-playbill/controller/src/index.js
+WorkingDirectory=/opt/trailcurrent-playbill/controller
 Restart=always
 RestartSec=3
 

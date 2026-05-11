@@ -52,7 +52,12 @@ function SideNav({ active, onSelect, focusId, expanded, onHover }) {
       ))}
       <div className="spacer"></div>
       <button
-        className={'nav-btn' + (focusId === 'nav-settings' ? ' focused' : '')}
+        className={
+          'nav-btn' +
+          (active === 'settings' ? ' active' : '') +
+          (focusId === 'nav-settings' ? ' focused' : '')
+        }
+        onClick={() => onSelect('settings')}
       >
         <ion-icon name="settings-outline"></ion-icon>
         <span className="l">Settings</span>

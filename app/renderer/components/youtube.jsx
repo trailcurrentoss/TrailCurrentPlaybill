@@ -8,10 +8,34 @@
    tile-grid focus engine. The global keyboard handler in app.jsx already
    bails out for screens that contain inputs/buttons. */
 
-function YoutubeResultCard({ item, onPlay, busy }) {
+// React.forwardRef so YoutubeView can autofocus the first card after a
+// search lands — TV-remote users immediately get an Enter-to-play target
+// without having to Tab through the search box first.
+const YoutubeResultCard = React.forwardRef(function YoutubeResultCard(
+  { item, onPlay, busy }, ref
+) {
   const dur = item.duration ? formatDuration(item.duration) : null;
+  function trigger(e) {
+    // Don't double-fire when the inner Play button is the source.
+    if (e && e.target && e.target.closest && e.target.closest('button.tv-btn')) return;
+    onPlay(item);
+  }
+  function onKey(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      trigger();
+    }
+  }
   return (
-    <div className={'yt-card' + (busy ? ' busy' : '')}>
+    <div
+      ref={ref}
+      className={'yt-card' + (busy ? ' busy' : '')}
+      tabIndex={0}                    // makes the whole row a remote D-pad target
+      role="button"
+      aria-label={`Play ${item.title}`}
+      onClick={trigger}
+      onKeyDown={onKey}
+    >
       <div className="yt-thumb" style={{ backgroundImage: item.thumbnail ? `url(${item.thumbnail})` : '' }}>
         {dur && <div className="yt-dur">{dur}</div>}
       </div>
@@ -25,14 +49,14 @@ function YoutubeResultCard({ item, onPlay, busy }) {
       <button
         className="tv-btn primary"
         disabled={busy}
-        onClick={() => onPlay(item)}
+        onClick={(e) => { e.stopPropagation(); onPlay(item); }}
       >
         <ion-icon name="play"></ion-icon>
         {busy ? 'Loading…' : 'Play'}
       </button>
     </div>
   );
-}
+});
 
 function YoutubeView() {
   const [query, setQuery]       = useState('');
@@ -41,10 +65,66 @@ function YoutubeView() {
   const [error, setError]       = useState(null);
   const [playingId, setPlayingId] = useState(null);
   const [nowPlaying, setNowPlaying] = useState(null);
-  const inputRef = useRef(null);
+  const inputRef       = useRef(null);
+  const firstResultRef = useRef(null);
+  const resultsRef     = useRef(null);
 
   // Autofocus the search box on mount + on every visible-from-elsewhere.
   useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
+
+  // After a search lands, jump focus to the first result so the user can
+  // immediately Enter-to-play with a remote (no need to Tab out of the
+  // search box and into the list).
+  useEffect(() => {
+    if (results.length > 0 && firstResultRef.current) {
+      firstResultRef.current.focus();
+    }
+  }, [results]);
+
+  // Arrow-key navigation between result cards. Without this the browser's
+  // default behavior is to scroll the container, which makes the page move
+  // but doesn't shift focus — the user can't actually pick a different row
+  // with a remote.  ArrowDown from the search input jumps into the list;
+  // ArrowUp from the first card jumps back to the search input.
+  function onScreenKeyDown(e) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const target = e.target;
+    const inSearch = target === inputRef.current;
+    const onCard   = target && target.classList && target.classList.contains('yt-card');
+    if (!inSearch && !onCard) return;            // some other input — let browser handle
+
+    const cards = resultsRef.current
+      ? Array.from(resultsRef.current.querySelectorAll('.yt-card'))
+      : [];
+
+    if (inSearch && e.key === 'ArrowDown' && cards.length) {
+      e.preventDefault();
+      cards[0].focus();
+      cards[0].scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    if (onCard) {
+      const i = cards.indexOf(target);
+      if (i < 0) return;
+      let next;
+      if (e.key === 'ArrowDown') {
+        if (i >= cards.length - 1) return;       // already at last; let browser handle (no-op)
+        next = cards[i + 1];
+      } else {
+        // ArrowUp from the first card jumps back to the search input.
+        if (i === 0) {
+          e.preventDefault();
+          inputRef.current && inputRef.current.focus();
+          return;
+        }
+        next = cards[i - 1];
+      }
+      e.preventDefault();
+      next.focus();
+      next.scrollIntoView({ block: 'nearest' });
+    }
+  }
 
   // Subscribe to controller state for live now-playing updates so the
   // header can show what's playing across pause/resume/stop/etc. without
@@ -112,7 +192,7 @@ function YoutubeView() {
   }
 
   return (
-    <div className="yt-view">
+    <div className="yt-view" onKeyDown={onScreenKeyDown}>
       <div className="yt-header">
         <h1><ion-icon name="logo-youtube" style={{color:'#FF0000', verticalAlign:'middle'}}></ion-icon> YouTube</h1>
         <form className="yt-search" onSubmit={doSearch}>
@@ -163,10 +243,11 @@ function YoutubeView() {
         </div>
       )}
 
-      <div className="yt-results">
-        {results.map((it) => (
+      <div className="yt-results" ref={resultsRef}>
+        {results.map((it, i) => (
           <YoutubeResultCard
             key={it.id}
+            ref={i === 0 ? firstResultRef : null}
             item={it}
             onPlay={play}
             busy={playingId === it.id}

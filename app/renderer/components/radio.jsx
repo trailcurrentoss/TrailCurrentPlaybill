@@ -44,6 +44,32 @@ function RadioView({ focus, setFocus }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Subscribe to controller state changes so PWA / CAN button / IR remote
+  // -driven tunes reflect in this UI immediately. Without this, radio.jsx
+  // only knows what *it* did — external drivers update state.radio in the
+  // controller but the UI sits stale until the user clicks Refresh. Apply
+  // the delta to local state + dial position; the user's local edits get
+  // overwritten when something actually tunes, which is the right behavior
+  // for a multi-driver appliance ("show me what's actually playing").
+  useEffect(() => {
+    if (!window.playbill || !window.playbill.controller) return;
+    let unsub;
+    function apply(r) {
+      if (!r) return;
+      setState(r);
+      if (r.band)        setBand(r.band);
+      if (r.frequencyHz) setFreq(r.frequencyHz);
+    }
+    (async () => {
+      try {
+        const init = await window.playbill.controller.getState();
+        if (init && init.state) apply(init.state.radio);
+      } catch (_) { /* controller may not be up yet */ }
+      unsub = window.playbill.controller.onState((s) => { if (s) apply(s.radio); });
+    })();
+    return () => { if (unsub) unsub(); };
+  }, []);
+
   const stepHz = band === 'fm' ? FM_STEP_HZ : AM_STEP_HZ;
   const minHz  = band === 'fm' ? FM_MIN_HZ  : AM_MIN_HZ;
   const maxHz  = band === 'fm' ? FM_MAX_HZ  : AM_MAX_HZ;

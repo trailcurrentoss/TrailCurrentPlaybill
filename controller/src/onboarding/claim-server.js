@@ -28,6 +28,7 @@ const fs   = require('fs');
 
 const { CA_CERT_FILE } = require('../paths');
 const { SERVICE_PORT } = require('./mdns');
+const { normalizeBrokerUrl } = require('../mqtt-bridge');
 
 const MAX_BODY_BYTES = 16 * 1024;   // creds + cert fits comfortably; reject anything wild
 
@@ -39,8 +40,10 @@ class ClaimServer {
    * @param {() => boolean} opts.isClaimed       returns true iff connection.json already exists
    * @param {() => void} [opts.onClaimed]        called after a successful claim, before 200 returns
    * @param {object} [opts.stateStore]           optional — patched with claim status if provided
+   * @param {object} [opts.settings]             optional — SettingsStore for settings.json,
+   *                                              used to write deviceName when present in the claim
    */
-  constructor({ connection, mqtt, isClaimed, onClaimed, stateStore }) {
+  constructor({ connection, mqtt, isClaimed, onClaimed, stateStore, settings }) {
     if (!connection || !mqtt || typeof isClaimed !== 'function') {
       throw new Error('ClaimServer: connection + mqtt + isClaimed required');
     }
@@ -49,6 +52,7 @@ class ClaimServer {
     this._isClaimed = isClaimed;
     this._onClaimed = onClaimed || (() => {});
     this._state = stateStore || null;
+    this._settings = settings || null;
     this._server = null;
   }
 
@@ -104,11 +108,17 @@ class ClaimServer {
       return reply(res, 400, { error: 'Invalid JSON: ' + e.message });
     }
 
-    const { brokerUrl, username, password, caCertPem, tlsCertHostname } = payload;
+    const { brokerUrl, username, password, caCertPem, tlsCertHostname, deviceName } = payload;
 
-    // 1. Validate.
-    if (typeof brokerUrl !== 'string' || !brokerUrl.startsWith('mqtt')) {
-      return reply(res, 400, { error: 'brokerUrl required, must be mqtt:// or mqtts://' });
+    // 1. Validate. brokerUrl gets canonicalized: hostname-only input is
+    //    accepted; mqtt:// is upgraded to mqtts:// (we never connect
+    //    insecurely); missing port defaults to 8883. The persisted form
+    //    is always strict mqtts://host:port.
+    let normalizedBrokerUrl;
+    try {
+      normalizedBrokerUrl = normalizeBrokerUrl(brokerUrl);
+    } catch (e) {
+      return reply(res, 400, { error: e.message });
     }
     if (typeof username !== 'string' || !username.length) {
       return reply(res, 400, { error: 'username required' });
@@ -121,6 +131,21 @@ class ClaimServer {
     }
     if (caCertPem && !caCertPem.includes('-----BEGIN CERTIFICATE-----')) {
       return reply(res, 400, { error: 'caCertPem does not look PEM-encoded' });
+    }
+    // deviceName is optional. PWA wizard uses it to pre-fill what the user
+    // typed on the claim card; user can still rename later via Playbill's
+    // Settings → Device tab. Reject obviously bogus shapes; let validation
+    // of the normal-character set fall to settings.schema.json (1–64 chars).
+    let normalizedDeviceName = null;
+    if (deviceName !== undefined && deviceName !== null) {
+      if (typeof deviceName !== 'string') {
+        return reply(res, 400, { error: 'deviceName must be a string when present' });
+      }
+      const trimmed = deviceName.trim();
+      if (trimmed.length < 1 || trimmed.length > 64) {
+        return reply(res, 400, { error: 'deviceName must be 1–64 characters' });
+      }
+      normalizedDeviceName = trimmed;
     }
 
     // 2. Reclaim guard.
@@ -136,10 +161,30 @@ class ClaimServer {
         fs.writeFileSync(CA_CERT_FILE, caCertPem, { mode: 0o600 });
       }
       await this._connection.replace({
-        brokerUrl, username, password,
+        brokerUrl: normalizedBrokerUrl,
+        username, password,
         tlsCertHostname: tlsCertHostname || null,
         caCertProvided: !!caCertPem,
       });
+      // Optional deviceName from the PWA wizard. Persisted to the device
+      // sub-tree of settings.json via the existing SettingsStore.patch
+      // path so the schema's pattern/length rules apply uniformly. Also
+      // mirror into state.device.name so subscribers (and the state→MQTT
+      // presence fan-out) see the new name immediately, not after the
+      // next settings.* command roundtrip.
+      if (normalizedDeviceName && this._settings) {
+        const cur = this._settings.get() || {};
+        const nextDevice = { ...(cur.device || {}), name: normalizedDeviceName };
+        await this._settings.patch({ device: nextDevice });
+        if (this._state) {
+          const stCur = this._state.get();
+          this._state.patch({
+            settings: this._settings.get(),
+            device:   { ...stCur.device, name: normalizedDeviceName },
+          });
+        }
+        console.log(`[claim] deviceName set to "${normalizedDeviceName}"`);
+      }
     } catch (e) {
       // Don't echo creds even on error — only the message + the kind of failure.
       console.error('[claim-server] persist failed:', e.message);
@@ -147,7 +192,7 @@ class ClaimServer {
     }
 
     // 4. Reconnect MQTT in the background. Don't block the 200.
-    console.log(`[claim] persisted; calling mqtt.reconfigure for brokerUrl=${brokerUrl}` +
+    console.log(`[claim] persisted; calling mqtt.reconfigure for brokerUrl=${normalizedBrokerUrl}` +
                 (tlsCertHostname ? ` (tlsCertHostname=${tlsCertHostname})` : '') +
                 (caCertPem ? ' (caCert provided)' : ''));
     this._mqtt.reconfigure().catch((e) => {
@@ -156,11 +201,10 @@ class ClaimServer {
 
     // 5. State update + onClaimed (which stops the mDNS advert).
     if (this._state) {
-      const cur = this._state.get();
       this._state.patch({
         connection: {
           status: 'configured',
-          brokerUrl,
+          brokerUrl: normalizedBrokerUrl,    // mirror the canonical persisted form
           lastError: null,
         },
       });

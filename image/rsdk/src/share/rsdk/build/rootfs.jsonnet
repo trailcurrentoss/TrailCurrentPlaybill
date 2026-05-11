@@ -480,7 +480,19 @@ function(
                         libatspi2.0-0 \
                         libasound2t64 \
                         libglib2.0-bin \
-                        libglib2.0-dev-bin
+                        libglib2.0-dev-bin \
+                        nodejs \
+                        yt-dlp \
+                        avahi-daemon \
+                        avahi-utils \
+                        libcap2-bin
+                # Note on yt-dlp: apt's package can lag YouTube's extractor
+                # changes by months. Hook 5a installs a fresh release blob
+                # (fetched by build.sh) to /usr/local/bin/yt-dlp; that path
+                # PATH-shadows /usr/bin/yt-dlp at runtime. The apt one stays
+                # as a safety-net fallback. To force a fresh fetch on the
+                # next build instead of using the 7-day-cached copy, run
+                # `REFRESH_YTDLP=1 sudo ./image/build.sh`.
 
                 # Fail-fast verification: hook 8c expects flatpak; hook 5
                 # expects libnss3/libxss1/libxtst6/libatspi2.0-0; the
@@ -499,7 +511,8 @@ function(
                 for pkg in ubuntu-desktop gnome-shell gdm3 firefox-esr flatpak \
                            qcom-fastrpc1 mesa-vulkan-drivers libnss3 libxss1 \
                            libxtst6 libatspi2.0-0t64 libasound2t64 \
-                           rtl-sdr librtlsdr2 dvb-tools dtv-scan-tables mpv; do
+                           rtl-sdr librtlsdr2 dvb-tools dtv-scan-tables mpv \
+                           nodejs yt-dlp avahi-daemon libcap2-bin; do
                     if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
                         MISSING="$MISSING $pkg"
                     fi
@@ -696,6 +709,106 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
+            // Hook 5a: Stage playbill-controller daemon + systemd user unit
+            //
+            // The controller is the always-running Node.js daemon that owns
+            // MQTT, mpv, the source plugins (radio, livetv, youtube),
+            // device discovery, and the IPC socket the GUI client subscribes
+            // to. Lives at /opt/trailcurrent-playbill/controller/.
+            //
+            // Three things this hook does:
+            //   1. Copy the controller tree (incl. node_modules — staged by
+            //      build.sh) to /opt/trailcurrent-playbill/controller/
+            //   2. Install the systemd user unit so the daemon auto-starts
+            //      with every user session, and symlink it into
+            //      default.target.wants/ for image-baked auto-enable
+            //   3. setcap CAP_NET_BIND_SERVICE on /usr/bin/node so the
+            //      controller's onboarding HTTP listener can bind port 80
+            //      without running as root (per docs/app/onboarding.md)
+            //
+            // Order: AFTER hook 3a (apt installs nodejs + libcap2-bin) and
+            //        AFTER hook 5 (Electron app, sibling install dir).
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 5a] staging playbill-controller daemon + systemd user unit"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+
+                if [ ! -d "$STAGING/controller" ]; then
+                    echo "  ERROR: $STAGING/controller missing — build.sh should have staged it" >&2
+                    exit 1
+                fi
+                if [ ! -f "$STAGING/controller/src/index.js" ]; then
+                    echo "  ERROR: $STAGING/controller/src/index.js missing — controller staging is incomplete" >&2
+                    exit 1
+                fi
+                if [ ! -d "$STAGING/controller/node_modules" ]; then
+                    echo "  ERROR: $STAGING/controller/node_modules missing — must include for runtime" >&2
+                    exit 1
+                fi
+                if [ ! -f "$STAGING/files/systemd-user/playbill-controller.service" ]; then
+                    echo "  ERROR: $STAGING/files/systemd-user/playbill-controller.service missing" >&2
+                    exit 1
+                fi
+
+                # 1. Stage the daemon.
+                CTRL_DIR="$1/opt/trailcurrent-playbill/controller"
+                mkdir -p "$CTRL_DIR"
+                cp -a "$STAGING/controller/." "$CTRL_DIR/"
+                CTRL_SIZE=$(du -sh "$CTRL_DIR" | cut -f1)
+                echo "  staged $CTRL_SIZE controller (incl. node_modules)"
+
+                # 2. Install systemd user unit + image-baked auto-enable.
+                mkdir -p "$1/usr/lib/systemd/user"
+                install -m 644 "$STAGING/files/systemd-user/playbill-controller.service" \
+                    "$1/usr/lib/systemd/user/playbill-controller.service"
+                # Symlink into default.target.wants so it auto-enables on
+                # every user's first systemd-user manager start. Equivalent
+                # to `systemctl --user enable` per-user but baked at image
+                # time — no first-boot logic needed.
+                mkdir -p "$1/usr/lib/systemd/user/default.target.wants"
+                ln -sf ../playbill-controller.service \
+                    "$1/usr/lib/systemd/user/default.target.wants/playbill-controller.service"
+                echo "  installed playbill-controller.service (auto-enabled via default.target.wants)"
+
+                # 3. setcap on the node binary so the controller's onboarding
+                #    HTTP listener can bind port 80 (the privileged-port
+                #    requirement comes from Headwaters' mDNS proxy hardcoding
+                #    http://<host>.local — see docs/app/onboarding.md). The
+                #    capability survives reboots. Requires libcap2-bin
+                #    (installed in hook 3a) for the setcap binary itself.
+                NODE_BIN="$1/usr/bin/node"
+                if [ ! -x "$NODE_BIN" ]; then
+                    echo "  ERROR: /usr/bin/node not present in rootfs — hook 3a should have installed nodejs" >&2
+                    exit 1
+                fi
+                chroot "$1" setcap "cap_net_bind_service=+ep" /usr/bin/node
+                # Verify it stuck (setcap silently no-ops on filesystems
+                # without xattr support; ext4 in our rootfs.tar is fine but
+                # let's not assume).
+                CAPS=$(chroot "$1" getcap /usr/bin/node 2>/dev/null || true)
+                case "$CAPS" in
+                    *cap_net_bind_service*) echo "  ✓ setcap applied: $CAPS" ;;
+                    *) echo "  ERROR: setcap on /usr/bin/node did not take effect: $CAPS" >&2; exit 1 ;;
+                esac
+
+                # 4. Install the fresh yt-dlp release fetched by build.sh
+                #    into /usr/local/bin/yt-dlp. PATH precedence makes this
+                #    shadow /usr/bin/yt-dlp from apt; the apt one stays as a
+                #    safety-net fallback if /usr/local/bin/yt-dlp ever gets
+                #    nuked by a user. See build.sh "Fetch the latest yt-dlp
+                #    release" block — it caches in image/cache/ and only
+                #    re-downloads if older than 7 days.
+                if [ -f "$STAGING/files/yt-dlp/yt-dlp" ]; then
+                    install -m 755 "$STAGING/files/yt-dlp/yt-dlp" "$1/usr/local/bin/yt-dlp"
+                    YT_VER=$(chroot "$1" /usr/local/bin/yt-dlp --version 2>&1 | head -1 || echo "?")
+                    echo "  installed /usr/local/bin/yt-dlp ($YT_VER) — shadows apt /usr/bin/yt-dlp"
+                else
+                    echo "  WARNING: $STAGING/files/yt-dlp/yt-dlp missing — apt yt-dlp is the only fallback (likely stale)" >&2
+                fi
+            |||,
+
+            // ════════════════════════════════════════════════════════════
             // Hook 6: Audio — pin default sink to the analog jack
             //
             // The Q6A's WCD938x analog codec is the only output we use.
@@ -884,6 +997,50 @@ function(
                 else
                     echo "  WARNING: /etc/dconf/db/gdm NOT compiled — GDM overrides will not apply"
                 fi
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 7b: GDM auto-login for the trailcurrent user
+            //
+            // Playbill is a daily-driver desktop with a single user; an
+            // interactive login at every boot is friction. More important:
+            // the playbill-controller daemon is a `systemctl --user` unit,
+            // so it only runs once a user session is active. Without
+            // auto-login, a freshly-booted device sits at GDM and:
+            //   * mDNS doesn't advertise (controller not running)
+            //   * the claim listener isn't bound (port 80 idle)
+            //   * the PWA wizard's discovery scan finds nothing
+            // Auto-login makes the appliance behaviour appliance-like.
+            //
+            // The Ubuntu-shipped gdm3 conf has the lines commented out:
+            //     [daemon]
+            //     # AutomaticLoginEnable = true
+            //     # AutomaticLogin = user1
+            // Uncomment + retarget at our `trailcurrent` user. Idempotent
+            // sed (the build re-runs as a single transactional install).
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 7b] enabling GDM auto-login for the trailcurrent user"
+                CONF="$1/etc/gdm3/custom.conf"
+                if [ ! -f "$CONF" ]; then
+                    echo "  ERROR: $CONF missing — gdm3 should have been installed by hook 3a" >&2
+                    exit 1
+                fi
+                sed -i \
+                    -e "s/^#\\s*AutomaticLoginEnable\\s*=\\s*true/AutomaticLoginEnable = true/" \
+                    -e "s/^#\\s*AutomaticLogin\\s*=\\s*user1/AutomaticLogin = trailcurrent/" \
+                    "$CONF"
+                # Verify the substitutions actually landed; sed silently
+                # no-ops if the source comments don't match (e.g. distro
+                # changes the spacing in a future release).
+                if ! grep -qE "^AutomaticLoginEnable\\s*=\\s*true" "$CONF" \
+                || ! grep -qE "^AutomaticLogin\\s*=\\s*trailcurrent" "$CONF"; then
+                    echo "  ERROR: GDM auto-login lines did not get uncommented in $CONF — check the distro's default custom.conf format" >&2
+                    grep -i automatic "$CONF" >&2 || true
+                    exit 1
+                fi
+                echo "  ✓ AutomaticLoginEnable=true + AutomaticLogin=trailcurrent set"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -1584,6 +1741,42 @@ function(
                 check_x "$1" /opt/trailcurrent-playbill/trailcurrent-playbill
                 check   "$1" /usr/share/applications/trailcurrent-playbill.desktop
                 check   "$1" /usr/share/icons/hicolor/512x512/apps/trailcurrent-playbill.png
+
+                # Playbill controller daemon (Hook 5a)
+                check   "$1" /opt/trailcurrent-playbill/controller/src/index.js
+                check   "$1" /opt/trailcurrent-playbill/controller/node_modules
+                check   "$1" /usr/lib/systemd/user/playbill-controller.service
+                check   "$1" /usr/lib/systemd/user/default.target.wants/playbill-controller.service
+                check_x "$1" /usr/bin/node
+                check_x "$1" /usr/bin/yt-dlp                # apt fallback
+                check_x "$1" /usr/local/bin/yt-dlp          # fresh GH release (Hook 5a)
+                # /usr/local/bin/yt-dlp must run, not just exist; smoke-test it
+                YTDLP_VER=$(chroot "$1" /usr/local/bin/yt-dlp --version 2>&1 | head -1 || true)
+                if [ -n "$YTDLP_VER" ] && [ "$YTDLP_VER" != "?" ]; then
+                    echo "  ✓ /usr/local/bin/yt-dlp runs ($YTDLP_VER)"
+                else
+                    echo "  ✗ /usr/local/bin/yt-dlp present but does NOT run"
+                    FAIL=$((FAIL+1))
+                fi
+                # setcap on /usr/bin/node — onboarding listener needs port 80
+                CAPS=$(chroot "$1" getcap /usr/bin/node 2>/dev/null || true)
+                case "$CAPS" in
+                    *cap_net_bind_service*) echo "  ✓ /usr/bin/node has cap_net_bind_service" ;;
+                    *) echo "  ✗ /usr/bin/node MISSING cap_net_bind_service — onboarding will fail to bind :80"; FAIL=$((FAIL+1)) ;;
+                esac
+
+                # GDM auto-login (Hook 7b) — required for the controller
+                # daemon to be running on a freshly-booted device. Without
+                # this, the device sits at the GDM login screen, the
+                # systemd user manager doesn't start, and the PWA wizard
+                # discovers nothing.
+                if grep -qE "^AutomaticLoginEnable\\s*=\\s*true" "$1/etc/gdm3/custom.conf" 2>/dev/null \
+                && grep -qE "^AutomaticLogin\\s*=\\s*trailcurrent" "$1/etc/gdm3/custom.conf" 2>/dev/null; then
+                    echo "  ✓ GDM auto-login enabled for trailcurrent user"
+                else
+                    echo "  ✗ GDM auto-login NOT configured — fresh boot will sit at login screen, controller won't start, PWA discovery will see nothing"
+                    FAIL=$((FAIL+1))
+                fi
 
                 # Branding
                 check   "$1" /usr/share/plymouth/themes/trailcurrent/trailcurrent.plymouth

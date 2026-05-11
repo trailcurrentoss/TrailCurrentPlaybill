@@ -216,6 +216,7 @@ async function main() {
   const claim = new ClaimServer({
     connection,
     mqtt,
+    settings,                                 // for optional deviceName in the claim payload
     isClaimed: () => connection.isPresent(),
     stateStore: state,
     onClaimed: () => {
@@ -332,29 +333,65 @@ function installStateToMqttFanout({ state, mqtt }) {
     mqtt.publishStatus(feature, payload, { retain: true, qos: 1 });
   }
 
+  // Single source of truth for what each feature topic carries. Called both
+  // by the state.subscribe diff path (only fires for changed slices) and by
+  // the mqtt.onConnect snapshot path (republishes everything that has a
+  // non-null current value).
+  function publishFeature(feature, cur) {
+    switch (feature) {
+      case 'system':
+        publish('system', {
+          online: true,
+          guiOpen: !!(cur.gui && cur.gui.running),
+          currentScreen: cur.ui && cur.ui.screen,
+          name: cur.device.name,
+          hostname: cur.device.hostname,
+          version: cur.device.version,
+          uptimeSec: cur.device.uptimeSec,
+          ts: Date.now(),
+        });
+        break;
+      case 'transport': publish('transport', cur.nowPlaying || { paused: true }); break;
+      case 'radio':     publish('radio',     cur.radio  || null); break;
+      case 'livetv':    publish('livetv',    cur.livetv || null); break;
+      case 'volume':    publish('volume',    cur.audio  || null); break;
+      // 'source' carries the current "mode" — which thing on the device is
+      // active right now (radio | livetv | youtube | plex | ... | null).
+      // Other clients (PWA, Milepost, future CAN listener) consume this so
+      // their UI shows the right view when a different device flips modes.
+      case 'source':    publish('source',    { source: cur.source || null, ts: Date.now() }); break;
+    }
+  }
+
   state.subscribe(({ patch, state: cur }) => {
     // Presence updates whenever device id/name/version moves OR the GUI
-    // launches/quits. Authoritative `guiOpen` from state.gui — that one
-    // is driven by the IPC server's first-/last-client events, which is
-    // the actual fact of "is a Playbill GUI process connected to me right
-    // now," not a UI-layer hint.
-    if (patch.device || patch.connection || patch.gui) {
-      publish('system', {
-        online: true,
-        guiOpen: !!(cur.gui && cur.gui.running),
-        currentScreen: cur.ui && cur.ui.screen,
-        name: cur.device.name,
-        hostname: cur.device.hostname,
-        version: cur.device.version,
-        uptimeSec: cur.device.uptimeSec,
-        ts: Date.now(),
-      });
-    }
-    if (patch.nowPlaying !== undefined) publish('transport', cur.nowPlaying || { paused: true });
-    if (patch.radio !== undefined)      publish('radio', cur.radio || null);
-    if (patch.livetv !== undefined)     publish('livetv', cur.livetv || null);
-    if (patch.audio !== undefined)      publish('volume', cur.audio || null);
+    // launches/quits. Authoritative `guiOpen` from state.gui — driven by
+    // the IPC server's first-/last-client events.
+    if (patch.device || patch.connection || patch.gui) publishFeature('system', cur);
+    if (patch.nowPlaying !== undefined) publishFeature('transport', cur);
+    if (patch.radio !== undefined)      publishFeature('radio',     cur);
+    if (patch.livetv !== undefined)     publishFeature('livetv',    cur);
+    if (patch.audio !== undefined)      publishFeature('volume',    cur);
+    // patch.source uses `in patch` rather than !== undefined because we
+    // explicitly set source:null on stop and that needs to publish too.
+    if ('source' in patch)              publishFeature('source',    cur);
   });
+
+  // Republish every feature whenever the broker (re)connects. Handles two
+  // races: (1) state mutated before this subscribe ran — e.g. the audio
+  // probe at startup; (2) state mutated while the broker was disconnected.
+  // Without this, those values never reach the broker.
+  if (typeof mqtt.onConnect === 'function') {
+    mqtt.onConnect(() => {
+      const cur = state.get();
+      publishFeature('system', cur);
+      if (cur.nowPlaying !== undefined) publishFeature('transport', cur);
+      if (cur.radio      !== undefined) publishFeature('radio',     cur);
+      if (cur.livetv     !== undefined) publishFeature('livetv',    cur);
+      if (cur.audio      !== undefined) publishFeature('volume',    cur);
+      publishFeature('source', cur);   // always; null is a meaningful value
+    });
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -404,13 +441,20 @@ function registerSystemHandlers({ bus, state, settings, connection, mqtt }) {
     return safe;
   });
 
-  // connection.set — write or replace the MQTT connection config. Triggers
-  // a reconnect once the MQTT module lands in Phase 1b.
+  // connection.set — write or replace the MQTT connection config. Same
+  // brokerUrl normalization as the claim-server (hostname-only accepted,
+  // mqtt:// upgraded to mqtts://, default port 8883). Persisted form is
+  // always strict `mqtts://host:port`.
   bus.register('connection.set', async (cmd) => {
     if (!cmd.value || typeof cmd.value !== 'object') {
       throw new Error('connection.set: value must be an object');
     }
-    await connection.replace(cmd.value);
+    const v = { ...cmd.value };
+    if (v.brokerUrl !== undefined) {
+      const { normalizeBrokerUrl } = require('./mqtt-bridge');
+      v.brokerUrl = normalizeBrokerUrl(v.brokerUrl);
+    }
+    await connection.replace(v);
     state.patch({
       connection: { status: 'configured', brokerUrl: connection.get().brokerUrl, lastError: null },
     });

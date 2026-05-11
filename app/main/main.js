@@ -6,7 +6,6 @@
 const { app, BrowserWindow, screen, nativeTheme, ipcMain, globalShortcut, Menu } = require('electron');
 const path = require('path');
 
-const player = require('./services/player');
 const ControllerClient = require('./ipc-client');
 
 // Radio AND Live TV are owned by the controller daemon
@@ -154,12 +153,9 @@ ipcMain.handle('playbill.radio.listPresets',  forwardToController('radio.listPre
 ipcMain.handle('playbill.radio.setPresets',   forwardToController('radio.setPresets',   (a) => a || []));
 ipcMain.handle('playbill.radio.probeTools',   forwardToController('radio.probeTools'));
 
-// mpv player
-ipcMain.handle('playbill.player.play',     (_e, args) => player.play(args || {}));
-ipcMain.handle('playbill.player.stop',     () => player.stop());
-ipcMain.handle('playbill.player.setVolume',(_e, v) => player.setVolume(v));
-ipcMain.handle('playbill.player.setMute',  (_e, m) => player.setMute(m));
-ipcMain.handle('playbill.player.probeTools',() => player.probeTools());
+// (mpv player handlers retired in Phase 7 — playback is owned by the
+// controller daemon. Live TV calls controller.command transport.play
+// directly with the dvbv5-zap TS path; YouTube routes the same way.)
 
 app.whenReady().then(() => {
   createWindow();
@@ -201,12 +197,10 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  // mpv playback is the only subprocess this process still owns directly.
-  // Radio (rtl_fm) and Live TV (dvbv5-zap) live in the controller daemon
-  // and are stopped during its own shutdown — closing the GUI doesn't
-  // stop audio playback, by design (see architecture-v2 §2 "Why a
-  // daemon-and-GUI split?", reason 2).
-  player.stop().catch(() => {});
+  // The GUI no longer owns any media subprocess. Radio (rtl_fm), Live TV
+  // (dvbv5-zap), and mpv all live in the controller daemon and survive
+  // GUI quit by design (architecture-v2 §2 reason 2). All we tear down
+  // here is our IPC client to the controller.
   try { controller.stop(); } catch (_) {}
 });
 

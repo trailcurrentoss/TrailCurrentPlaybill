@@ -9,8 +9,8 @@
   "properties": {
     "brokerUrl": {
       "type": "string",
-      "format": "uri",
-      "description": "Full broker URL, e.g. mqtts://headwaters.local:8883",
+      "pattern": "^mqtts://[^/]+:[0-9]+$",
+      "description": "Canonical mqtts://host:port form. The Settings UI accepts a hostname-only input (e.g. 'headwaters.local') and the controller's normalizeBrokerUrl() in mqtt-bridge.js prepends mqtts:// + default port 8883 before persistence. We never connect insecurely.",
       "examples": ["mqtts://headwaters.local:8883"]
     },
     "username": {

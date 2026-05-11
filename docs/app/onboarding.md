@@ -69,7 +69,12 @@ Content-Type: application/json
 ```
 
 **Required:** `brokerUrl`, `username`, `password`.
-**Optional:** `caCertPem` (only when `brokerUrl` starts with `mqtts://`), `tlsCertHostname` (TLS SAN override for self-signed rig certs).
+**Optional:**
+- `caCertPem` (only when `brokerUrl` starts with `mqtts://`)
+- `tlsCertHostname` (TLS SAN override for self-signed rig certs)
+- `deviceName` (1–64 chars; if present, persisted to `settings.device.name` so the user doesn't need to walk to the TV to name the Playbill — they typed it on the wizard card before clicking Claim. The user can rename later via Playbill's Settings → Device tab; this field is a pre-fill convenience, not the only path. Also accepted: `null` or omission, in which case the existing `device.name` survives.)
+
+**brokerUrl normalization (since 2026-05-11):** the controller accepts hostname-only input (`headwaters.local`), full URLs (`mqtts://headwaters.local:8883`), or insecure URLs (`mqtt://headwaters.local`). All three normalize to strict `mqtts://host:port` (port defaults to 8883) before persistence — Playbill never connects insecurely. PWAs can keep sending whatever shape they like; the canonical form is what lands on disk.
 
 **On receipt:**
 

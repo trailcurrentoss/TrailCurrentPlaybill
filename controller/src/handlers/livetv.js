@@ -20,6 +20,8 @@
 'use strict';
 
 const livetv = require('../services/livetv');
+const radio  = require('../services/radio');
+const player = require('../services/player');
 
 function register({ bus, state }) {
   // Helper to write into state.livetv in one place. Mirrors handlers/radio's
@@ -35,6 +37,15 @@ function register({ bus, state }) {
     const v = cmd.value || cmd;
     const { adapter, channel } = v;
     if (!channel) throw new Error('livetv.tune: channel required');
+
+    // Architecture rule (architecture.md §6): only one source plays at a
+    // time. Stop radio + any prior mpv before the dvbv5-zap capture starts
+    // (player.play below will be invoked separately by the caller — for
+    // example live.jsx — to actually play the resulting tsPath; that
+    // player.play replaces any prior mpv, so we don't stop player here).
+    try { await radio.stop(); state.patch({ radio: null }); }
+    catch (e) { console.warn('[livetv.tune] radio.stop failed:', e.message); }
+
     const result = await livetv.tune({ adapter, channel });
     setLivetvState({
       tuned:       true,
@@ -43,6 +54,7 @@ function register({ bus, state }) {
       tsPath:      result.tsPath,
       lastTuneAt:  Date.now(),
     });
+    state.patch({ source: 'livetv' });
     return result;
   });
 
@@ -50,6 +62,7 @@ function register({ bus, state }) {
     const v = cmd.value || cmd;
     await livetv.stopTune({ adapter: v.adapter });
     setLivetvState({ tuned: false, tsPath: null });
+    if (state.get().source === 'livetv') state.patch({ source: null });
     return { ok: true };
   });
 

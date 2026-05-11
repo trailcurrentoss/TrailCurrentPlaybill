@@ -3,8 +3,12 @@
 <head>
   <meta charset="utf-8">
   <title>TrailCurrent Playbill</title>
+  <!-- img-src https: allows YouTube thumbnail CDNs (i.ytimg.com,
+       i9.ytimg.com, yt3.ggpht.com — Google rotates the host per
+       request) and any future source's thumbnail/artwork URLs without
+       per-source allowlisting. The rest stays restrictive. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self';">
+        content="default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self';">
 
   <link rel="stylesheet" href="styles/colors_and_type.css">
   <link rel="stylesheet" href="styles/tv.css">

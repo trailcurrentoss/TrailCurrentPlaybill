@@ -129,11 +129,98 @@ log "Staging icon set"
 mkdir -p "$STAGING_DIR/files/icons"
 cp -a "$ICONS_DIR/." "$STAGING_DIR/files/icons/"
 
-# Unpacked Electron app
+# Unpacked Electron app — rebuild via electron-builder if any source under
+# app/main or app/renderer is newer than the bundled asar (or if the dist
+# is missing entirely). Without this guard, an image build silently ships
+# whatever was in dist/ at the time of the last manual `npm run dist` —
+# usually weeks stale, missing every screen added since.
+ASAR="$ELECTRON_APP_DIR/resources/app.asar"
+NEED_BUILD=0
+if [ ! -f "$ASAR" ]; then
+    NEED_BUILD=1
+    log "Electron asar missing — building"
+elif [ -n "$(find "$REPO_ROOT/app/main" "$REPO_ROOT/app/renderer" -newer "$ASAR" -print -quit 2>/dev/null)" ]; then
+    NEED_BUILD=1
+    log "Electron source newer than bundled asar — rebuilding"
+fi
+if [ "$NEED_BUILD" = 1 ]; then
+    if [ ! -d "$REPO_ROOT/app/node_modules" ]; then
+        log "  app/node_modules missing — running npm install"
+        ( cd "$REPO_ROOT/app" && npm install 2>&1 | tail -3 ) || fatal "app npm install failed"
+    fi
+    ( cd "$REPO_ROOT/app" && npm run dist 2>&1 | tail -8 ) || fatal "electron-builder dist failed"
+    if [ ! -f "$ASAR" ]; then
+        fatal "electron-builder ran but $ASAR still missing"
+    fi
+fi
+
 log "Staging unpacked Electron app from $ELECTRON_APP_DIR"
 APP_SRC_SIZE=$(du -sh "$ELECTRON_APP_DIR" | cut -f1)
 cp -a "$ELECTRON_APP_DIR/." "$STAGING_DIR/electron-app/"
 log "  staged $APP_SRC_SIZE Electron app"
+
+# Controller daemon — Node.js code + node_modules. Runs as a systemd
+# user service alongside the GUI; owns the MQTT bridge, mpv playback,
+# YouTube source, etc. Must include node_modules so the board can run
+# without npm. See architecture-v2 §2 for the daemon-and-GUI split.
+CONTROLLER_DIR="${CONTROLLER_DIR:-$REPO_ROOT/controller}"
+log "Staging controller daemon from $CONTROLLER_DIR"
+if [ ! -d "$CONTROLLER_DIR/node_modules" ]; then
+    log "  controller/node_modules missing — running npm install"
+    (cd "$CONTROLLER_DIR" && npm install --omit=dev) || fatal "controller npm install failed"
+fi
+mkdir -p "$STAGING_DIR/controller"
+# Skip .git, .env-style files, anything obviously not for shipping.
+rsync -a --exclude='.git' --exclude='*.log' --exclude='.env*' \
+    "$CONTROLLER_DIR/" "$STAGING_DIR/controller/"
+CONTROLLER_SIZE=$(du -sh "$STAGING_DIR/controller" | cut -f1)
+log "  staged $CONTROLLER_SIZE controller (incl. node_modules)"
+
+# systemd user unit for the controller daemon. Hook 5a installs it into
+# /usr/lib/systemd/user/ + symlinks default.target.wants/ for auto-start.
+mkdir -p "$STAGING_DIR/files/systemd-user"
+install -m 644 "$CONTROLLER_DIR/systemd/playbill-controller.service" \
+    "$STAGING_DIR/files/systemd-user/playbill-controller.service"
+
+# ── Fetch the latest yt-dlp release ───────────────────────────────────────
+# The apt-shipped yt-dlp lags YouTube's extractor changes by months, which
+# breaks the bestvideo+bestaudio adaptive-format selector. Bake a fresh
+# binary at image-build time so flashed devices aren't immediately stale.
+# Hook 5a copies it to /usr/local/bin/yt-dlp (PATH-shadows /usr/bin/yt-dlp).
+#
+# Cache: keep the downloaded blob in image/cache/ so dev rebuilds don't
+# hammer GitHub. Re-fetch if the cached copy is older than 7 days, OR if
+# CI/the user explicitly asks via REFRESH_YTDLP=1.
+YTDLP_URL="https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+YTDLP_CACHE="$CACHE_DIR/yt-dlp"
+mkdir -p "$CACHE_DIR"
+NEED_FETCH=0
+if [ ! -f "$YTDLP_CACHE" ]; then
+    NEED_FETCH=1
+elif [ -n "${REFRESH_YTDLP:-}" ]; then
+    NEED_FETCH=1
+elif find "$YTDLP_CACHE" -mtime +7 2>/dev/null | grep -q .; then
+    NEED_FETCH=1
+fi
+if [ "$NEED_FETCH" = 1 ]; then
+    log "Fetching latest yt-dlp release from GitHub"
+    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$YTDLP_CACHE.tmp" "$YTDLP_URL"; then
+        fatal "failed to fetch yt-dlp from $YTDLP_URL"
+    fi
+    chmod +x "$YTDLP_CACHE.tmp"
+    # Smoke-test the binary with --version so we fail fast if GitHub served
+    # garbage (rate-limit HTML, etc.) instead of the actual binary.
+    if ! "$YTDLP_CACHE.tmp" --version >/dev/null 2>&1; then
+        rm -f "$YTDLP_CACHE.tmp"
+        fatal "downloaded yt-dlp doesn't run; check $YTDLP_URL is serving the binary"
+    fi
+    mv "$YTDLP_CACHE.tmp" "$YTDLP_CACHE"
+    log "  cached $(du -h "$YTDLP_CACHE" | cut -f1) yt-dlp $("$YTDLP_CACHE" --version)"
+else
+    log "Using cached yt-dlp $("$YTDLP_CACHE" --version) (set REFRESH_YTDLP=1 to force re-download)"
+fi
+mkdir -p "$STAGING_DIR/files/yt-dlp"
+install -m 755 "$YTDLP_CACHE" "$STAGING_DIR/files/yt-dlp/yt-dlp"
 
 # ── Compile device-tree overlays ────────────────────────────────────────────
 log "Compiling device-tree overlays"

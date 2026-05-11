@@ -100,7 +100,7 @@ CAN IDs: `0x101` / `0x111` / `0x121`.
 
 ### `+0x2` — `PlaybillTransportStatus<N>` (size 8, ← Playbill)
 
-What's playing right now, numeric form. Text titles, artwork URLs, etc. live on the MQTT-only `local/playbill/<id>/now-playing` topic — see [architecture-v2.md §4](architecture-v2.md#4--mqtt-topic-surface).
+What's playing right now, numeric form. Text titles, artwork URLs, etc. live on the MQTT-only `local/playbill/<id>/now-playing` topic — see [architecture.md §4](architecture.md#4--mqtt-topic-surface).
 
 | Signal         | Bits      | Range | Meaning |
 |----------------|-----------|-------|---------|

@@ -56,9 +56,12 @@ function ConnectionForm({ initial, onSave, busy }) {
   return (
     <form onSubmit={submit} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:18}}>
       <div>
-        <label style={labelStyle}>Broker URL</label>
-        <input style={inputStyle} type="text" placeholder="mqtts://headwaters.local:8883"
+        <label style={labelStyle}>Broker hostname</label>
+        <input style={inputStyle} type="text" placeholder="headwaters.local"
                value={brokerUrl} onChange={(e) => setBrokerUrl(e.target.value)} required />
+        <div style={{fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:6}}>
+          Always TLS (mqtts://). Port defaults to 8883 — append <code>:&lt;port&gt;</code> only if your broker uses a different one.
+        </div>
       </div>
       <div>
         <label style={labelStyle}>Username</label>

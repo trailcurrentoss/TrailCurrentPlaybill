@@ -41,15 +41,22 @@ function getMetadata() { return session ? session.metadata || null : null; }
  * Start mpv on `url`. `metadata` is mirrored back into events as the
  * authoritative now-playing source for any subscribers (state-store, etc.)
  *
+ * If `audioUrl` is provided, mpv loads it as a separate audio track via
+ * --audio-file= and muxes the two streams in real time. This is what
+ * yt-dlp returns for YouTube videos when bestvideo+bestaudio resolves
+ * to two separate URLs (the only way to get >720p content from YouTube,
+ * which only ships separate streams for the higher resolutions).
+ *
  * @param {object} opts
- * @param {string} opts.url               playable URL (file://, http://, hls, etc.)
+ * @param {string} opts.url                 playable URL (file://, http://, hls, etc.)
+ * @param {string} [opts.audioUrl]          optional separate audio track to mux in
  * @param {string} [opts.hwdec='auto-safe']
- * @param {object} [opts.headers]         passed to mpv as --http-header-fields
- * @param {string} [opts.mediaType='video']  'video' or 'audio'
- * @param {object} [opts.metadata]        title/subtitle/artworkUrl/sourceItemId
+ * @param {object} [opts.headers]           passed to mpv as --http-header-fields
+ * @param {string} [opts.mediaType='video'] 'video' or 'audio'
+ * @param {object} [opts.metadata]          title/subtitle/artworkUrl/sourceItemId
  * @param {boolean} [opts.fullscreen=true]
  */
-function play({ url, hwdec = 'auto-safe', headers, mediaType = 'video', metadata, fullscreen = true } = {}) {
+function play({ url, audioUrl, hwdec = 'auto-safe', headers, mediaType = 'video', metadata, fullscreen = true } = {}) {
   if (!url) return Promise.reject(new Error('player.play: url required'));
   ensureDirs();
   return stop().then(() => new Promise((resolve, reject) => {
@@ -58,7 +65,12 @@ function play({ url, hwdec = 'auto-safe', headers, mediaType = 'video', metadata
     const args = [
       ...(fullscreen ? ['--fs'] : []),
       '--no-border', '--ontop', '--no-osc',
-      '--no-input-default-bindings',
+      // KEEP mpv's default key bindings — they're exactly the 10-foot
+      // keyboard map we want: Esc/q quits (only way for the user to get
+      // back to Playbill once playback starts in fullscreen), Space
+      // toggles pause, LEFT/RIGHT seek, UP/DOWN volume, m mute, f
+      // fullscreen toggle. Earlier we passed --no-input-default-bindings
+      // and inadvertently locked the user inside mpv with no escape.
       '--keep-open=no',
       `--hwdec=${hwdec}`,
       '--vo=' + (mediaType === 'audio' ? 'null' : 'gpu-next'),
@@ -76,6 +88,17 @@ function play({ url, hwdec = 'auto-safe', headers, mediaType = 'video', metadata
       for (const [k, v] of Object.entries(headers)) {
         args.push('--http-header-fields=' + k + ': ' + v);
       }
+    }
+
+    // Separate audio track (the YouTube high-quality path). --audio-file
+    // is mpv's way to mux a second source into the demuxer; the same
+    // headers (User-Agent, etc.) apply to both connections, so we don't
+    // need to re-pass them. --audio-file-auto=no stops mpv from also
+    // side-loading any .mp3/.aac files in the CWD — irrelevant for our
+    // remote URLs but defensive.
+    if (audioUrl) {
+      args.push(`--audio-file=${audioUrl}`);
+      args.push('--audio-file-auto=no');
     }
 
     args.push(url);
