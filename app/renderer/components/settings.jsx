@@ -419,7 +419,8 @@ function HeadwatersScreen({ ctrlState }) {
         calls into Headwaters services.
       </p>
 
-      <section style={{marginBottom:32}}>
+      <section data-zone="settings.headwaters.broker" data-zone-axis="vertical"
+               style={{marginBottom:32}}>
         <h2 style={sectionHdr}>Broker</h2>
         {brokerResult && brokerResult.ok && (
           <div style={{marginBottom:14}}>
@@ -451,7 +452,8 @@ function HeadwatersScreen({ ctrlState }) {
         )}
       </section>
 
-      <section style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+      <section data-zone="settings.headwaters.apikey" data-zone-axis="vertical"
+               style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
         <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:14}}>
           <h2 style={{...sectionHdr, margin:0}}>API Key</h2>
           {apiKeySet && (
@@ -610,8 +612,13 @@ function SettingsView({ focus }) {
   ];
 
   return (
-    <div style={{position:'absolute', inset:0, display:'flex'}}>
-      <div style={{width:240, padding:'80px 0 0', borderRight:'1px solid rgba(255,255,255,0.06)',
+    // data-zone-root marks this screen as using the spatial focus engine
+    // (see docs/app/navigation.md). The d-pad walks zones automatically;
+    // no per-screen keyboard handling needed.
+    <div data-zone-root data-zone="settings" data-zone-axis="horizontal"
+         style={{position:'absolute', inset:0, display:'flex'}}>
+      <div data-zone="settings.tabs" data-zone-axis="vertical"
+           style={{width:240, padding:'80px 0 0', borderRight:'1px solid rgba(255,255,255,0.06)',
                     background:'rgba(0,0,0,0.2)', flexShrink:0}}>
         <div style={{padding:'0 24px 16px', font:'700 11px var(--font-sans)',
                        letterSpacing:2, color:'rgba(255,255,255,0.4)', textTransform:'uppercase'}}>
@@ -619,6 +626,10 @@ function SettingsView({ focus }) {
         </div>
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
+                  onFocus={() => setTab(t.id)}
+                  data-tab={t.id}
+                  data-tab-active={tab===t.id ? 'true' : undefined}
+                  data-zone-default={tab===t.id ? 'true' : undefined}
                   style={{display:'flex', alignItems:'center', gap:12, width:'100%',
                           padding:'12px 24px', background:tab===t.id?'rgba(82,164,65,0.12)':'transparent',
                           border:0, borderLeft:tab===t.id?'3px solid var(--tc-primary)':'3px solid transparent',
@@ -629,7 +640,8 @@ function SettingsView({ focus }) {
           </button>
         ))}
       </div>
-      <div style={{flex:1, overflow:'auto'}}>
+      <div data-zone="settings.content" data-zone-axis="vertical"
+           style={{flex:1, overflow:'auto'}}>
         {tab === 'headwaters' && <HeadwatersScreen ctrlState={ctrlState} />}
         {tab === 'device'     && <DeviceScreen     ctrlState={ctrlState} />}
         {tab === 'youtube'    && <YoutubeScreen    ctrlState={ctrlState} />}
@@ -768,6 +780,12 @@ function LibraryScreen({ ctrlState }) {
   const [result, setResult] = useState(null);   // {ok, kind?, message?}
   const [fieldErr, setFieldErr] = useState(null);
 
+  // Poster-refresh state. Separate from the key-save flow so they don't
+  // step on each other (different busy spinners, different result text).
+  const [refreshBusy, setRefreshBusy]     = useState(false);
+  const [refreshResult, setRefreshResult] = useState(null); // {attempted, downloaded, failed, skipped, total}
+  const [refreshError, setRefreshError]   = useState(null);
+
   const sectionHdr = { font:'600 11px var(--font-sans)', letterSpacing:2,
                        textTransform:'uppercase', color:'rgba(255,255,255,0.45)',
                        margin:'0 0 14px' };
@@ -822,6 +840,16 @@ function LibraryScreen({ ctrlState }) {
     } finally { setBusy(false); }
   }
 
+  async function refreshPosters() {
+    setRefreshBusy(true); setRefreshResult(null); setRefreshError(null);
+    try {
+      const r = await window.playbill.controller.command({ action: 'dvd.refreshPosters' });
+      setRefreshResult(r);
+    } catch (e) {
+      setRefreshError(String(e.message || e));
+    } finally { setRefreshBusy(false); }
+  }
+
   return (
     <div style={{padding:'40px 60px', maxWidth:900}}>
       <h1 style={{margin:'0 0 8px', font:'700 32px var(--font-sans)', letterSpacing:-1}}>Library</h1>
@@ -829,7 +857,8 @@ function LibraryScreen({ ctrlState }) {
         Settings for the offline media library &mdash; movies and TV ripped from inserted DVDs.
       </p>
 
-      <section style={{marginBottom:32}}>
+      <section data-zone="settings.library.omdb" data-zone-axis="vertical"
+               style={{marginBottom:32}}>
         <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:14}}>
           <h2 style={{...sectionHdr, margin:0}}>OMDb API key</h2>
           {omdbKeySet && (
@@ -893,7 +922,43 @@ function LibraryScreen({ ctrlState }) {
         </form>
       </section>
 
-      <section style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+      <section data-zone="settings.library.posters" data-zone-axis="vertical"
+               style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+        <h2 style={sectionHdr}>Poster cache</h2>
+        <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:18, maxWidth:680}}>
+          Posters are downloaded to <code style={{color:'rgba(255,255,255,0.7)'}}>&lt;Title&gt;.jpg</code>
+          alongside each ripped <code style={{color:'rgba(255,255,255,0.7)'}}>.mkv</code> so the
+          Library renders posters with no internet. If a rip happened off-grid, the poster file
+          is missing &mdash; click <em>Refresh posters</em> after reconnecting to backfill them all
+          from each title's stored OMDb URL.
+        </p>
+
+        {refreshError && (
+          <div style={{marginBottom:14}}>
+            <ErrorAlert kind="unknown" title="Poster refresh failed" message={refreshError} />
+          </div>
+        )}
+        {refreshResult && (
+          <div style={{marginBottom:14}}>
+            <SuccessAlert
+              title="Poster refresh complete."
+              message={`Scanned ${refreshResult.total} title${refreshResult.total === 1 ? '' : 's'}: `
+                     + `${refreshResult.downloaded} downloaded, `
+                     + `${refreshResult.skipped} already cached, `
+                     + `${refreshResult.failed} failed.`}
+            />
+          </div>
+        )}
+
+        <button type="button" className="tv-btn" onClick={refreshPosters} disabled={refreshBusy}>
+          <ion-icon name={refreshBusy ? 'sync-outline' : 'images-outline'}
+                    style={{animation: refreshBusy ? 'spin 1s linear infinite' : 'none'}}></ion-icon>
+          {refreshBusy ? 'Refreshing…' : 'Refresh posters'}
+        </button>
+      </section>
+
+      <section data-zone="settings.library.location" data-zone-axis="vertical"
+               style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
         <h2 style={sectionHdr}>Library location</h2>
         <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:14, maxWidth:680}}>
           Ripped titles are written to:

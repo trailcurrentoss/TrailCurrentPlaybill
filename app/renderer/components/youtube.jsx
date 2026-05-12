@@ -192,8 +192,13 @@ function YoutubeView() {
   }
 
   return (
-    <div className="yt-view" onKeyDown={onScreenKeyDown}>
-      <div className="yt-header">
+    // data-zone-root marks this screen as using the spatial focus engine.
+    // The legacy onScreenKeyDown handler stays for the search↔results jump
+    // refinement on real keyboards; FocusZones handles all remote presses
+    // and the up-from-first-result / down-from-search edge cases too.
+    <div data-zone-root data-zone="youtube" data-zone-axis="vertical"
+         className="yt-view" onKeyDown={onScreenKeyDown}>
+      <div data-zone="youtube.search" data-zone-axis="horizontal" className="yt-header">
         <h1><ion-icon name="logo-youtube" style={{color:'#FF0000', verticalAlign:'middle'}}></ion-icon> YouTube</h1>
         <form className="yt-search" onSubmit={doSearch}>
           <ion-icon name="search"></ion-icon>
@@ -243,7 +248,8 @@ function YoutubeView() {
         </div>
       )}
 
-      <div className="yt-results" ref={resultsRef}>
+      <div data-zone="youtube.results" data-zone-axis="vertical"
+           className="yt-results" ref={resultsRef}>
         {results.map((it, i) => (
           <YoutubeResultCard
             key={it.id}

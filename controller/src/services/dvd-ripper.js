@@ -34,6 +34,7 @@ const os   = require('os');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { EventEmitter } = require('events');
+const { downloadPoster } = require('./dvd-poster');
 
 const LIBRARY_ROOT = path.join(os.homedir(), 'Videos', 'Playbill Library');
 const HANDBRAKE_BIN = 'HandBrakeCLI';     // resolved via PATH
@@ -121,6 +122,23 @@ class DvdRipper extends EventEmitter {
       file: path.basename(target.file),
     };
     fs.writeFileSync(target.json, JSON.stringify(sidecar, null, 2));
+
+    // Best-effort poster download — kick off in parallel with HandBrake
+    // (network + disk-write parallelism, neither stalls the other). The
+    // 'finished' event fires whether or not the poster download has
+    // completed; the library scanner picks up the local file on its
+    // next scan whenever it lands. Off-grid usage is the headline goal
+    // for TrailCurrent, so persisting posters locally is mandatory.
+    if (metadata.posterUrl) {
+      downloadPoster({ url: metadata.posterUrl, dir: target.dir, basename: target.base })
+        .then((r) => {
+          if (r.ok) {
+            this.emit('poster-saved', { path: r.posterPath, metadata });
+          } else {
+            console.warn(`[dvd-ripper] poster download failed for "${metadata.title}":`, r.error);
+          }
+        });
+    }
 
     // HandBrake args:
     //   -i <device>            source

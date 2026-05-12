@@ -6,9 +6,12 @@
   <!-- img-src https: allows YouTube thumbnail CDNs (i.ytimg.com,
        i9.ytimg.com, yt3.ggpht.com — Google rotates the host per
        request) and any future source's thumbnail/artwork URLs without
-       per-source allowlisting. The rest stays restrictive. -->
+       per-source allowlisting. img-src file: lets the Library grid load
+       locally-cached poster JPGs from ~/Videos/Playbill Library/ —
+       essential for off-grid use (TrailCurrent's primary goal).
+       The rest stays restrictive. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self';">
+        content="default-src 'self'; img-src 'self' https: file: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self';">
 
   <link rel="stylesheet" href="styles/colors_and_type.css">
   <link rel="stylesheet" href="styles/tv.css">
@@ -33,6 +36,7 @@
        view components → app (uses everything) → bootstrap (mounts <TVApp />). -->
   <script src="react-globals.js"></script>
   <script src="data.js"></script>
+  <script src="focus-zones.js"></script>
   <script src="../build/components/chrome.js"></script>
   <script src="../build/components/home.js"></script>
   <script src="../build/components/apps.js"></script>

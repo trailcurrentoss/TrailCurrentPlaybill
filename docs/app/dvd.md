@@ -76,19 +76,33 @@ title/year manually. Without internet (rig parked off-grid), the rip
 flow still works — the lookup silently fails and the manual-entry form
 appears.
 
-Setting the key (no Settings UI yet; coming in a follow-up):
-
-```bash
-# From any Playbill IPC client (Electron app, PWA, MQTT, ...)
-playbill.controller.command({
-  action: 'dvd.setOmdbKey',
-  value:  { apiKey: 'YOUR_OMDB_KEY' }
-})
-```
+**Setting the key from the GUI** — open Playbill → side nav →
+Settings → **Library**, paste the 8-character hex key, click *Save key*.
+The controller validates against omdbapi.com BEFORE persisting; a typo'd
+key never gets stored. Once saved the "Key stored" pill appears and the
+*Remove key* button shows up alongside *Save key* for rotation.
 
 The key persists in `~/.config/trailcurrent-playbill/headwaters.json`
 (file mode 0600). The same file already carries the Headwaters API
-key — both are external-service credentials, one file.
+key — both are external-service credentials, one file. The key is
+never returned over IPC after saving; rotation means paste-and-save again.
+
+## Posters are stored locally
+
+When OMDb returns a poster URL, the controller downloads the JPG to
+`<title>.jpg` alongside the `.mkv` so the library renders posters with
+**no internet** — TrailCurrent's headline use case is off-grid.
+
+- Poster download runs **in parallel** with HandBrakeCLI (both are
+  bottlenecked on different resources; neither stalls the other).
+- The download is **best-effort**: if the rig is off-grid at rip time,
+  the rip succeeds anyway and the title appears in the library with no
+  poster (placeholder square). Run `dvd.refreshPosters` later from
+  the bus or PWA when you're back on a network to backfill.
+- The sidecar carries `posterPath: "Inception (2010).jpg"` (relative,
+  for portability) alongside the remote URL. The library scanner prefers
+  the local file and falls back to the URL only if no local copy exists
+  yet.
 
 ## On-disk layout
 
@@ -97,16 +111,19 @@ key — both are external-service credentials, one file.
 ├── Movies/
 │   └── Inception (2010)/
 │       ├── Inception (2010).mkv      ← H.264 + AC3 passthrough
+│       ├── Inception (2010).jpg      ← cached poster (off-grid playback)
 │       └── Inception (2010).json     ← metadata sidecar
 └── Shows/
     └── Breaking Bad/
         ├── Breaking Bad - S01E03.mkv
+        ├── Breaking Bad - S01E03.jpg
         └── Breaking Bad - S01E03.json
 ```
 
-Each title is a folder containing one `.mkv` plus one sidecar `.json`
-with `{ title, year, kind, plot, posterUrl, rating, runtime, imdbId,
-source, rippedAt, rippedFromDevice }`. The library scanner
+Each title is a folder containing one `.mkv`, one `.jpg` poster (when
+the rip had internet), and one sidecar `.json` with `{ title, year,
+kind, plot, posterUrl, posterPath, posterBytes, rating, runtime,
+imdbId, source, rippedAt, rippedFromDevice }`. The library scanner
 (`controller/src/services/dvd-library.js`) reads sidecars to populate
 the LocalView grid; an `.mkv` without a sidecar is treated as a
 half-written rip and ignored.
@@ -119,6 +136,7 @@ half-written rip and ignored.
 | Disc encrypted, `libdvdcss2` missing | HandBrake exits with `Could not read VTS_01_0.IFO`. | Reflash the image — `libdvd-pkg` build step failed at image-build time. |
 | Disc ejected mid-rip | Modal flips to error with HandBrake's last stderr line. Partial `.mkv` left on disk but no sidecar → not visible in library. | Re-insert disc, try again. |
 | No internet, no OMDb key | Lookup silently fails; modal falls through to manual entry with a yellow "no metadata key configured" note. | Edit title / year by hand and rip. Or set a key (above). |
+| Internet at rip time but no poster cached on disk | Off-grid playback later renders a placeholder square instead of the poster. | Reconnect to a network and click Settings → Library → *Refresh posters* (or call `dvd.refreshPosters`); the controller walks the library and downloads every missing poster. |
 | Rip in progress, second disc inserted | The DvdWatcher does NOT re-prompt — the in-flight rip's prompt stays. | Wait for the rip to finish, eject, then insert the next disc. |
 | Re-inserting the same disc after dismissing | `dvd.dismiss` flags the disc as dismissed. Re-prompt requires either ejecting and re-inserting, OR calling `dvd.refreshStatus`. | Eject + re-insert is the user-facing path. |
 

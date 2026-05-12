@@ -18,6 +18,16 @@ function safeReadJson(file) {
   catch (_) { return null; }
 }
 
+// Build a file:// URL from an absolute path. The renderer uses these
+// as <img> / background-image sources. Paths contain spaces and
+// parentheses (e.g. "Inception (2010).jpg") so encodeURI is mandatory
+// to keep them legal.
+function toFileUrl(absPath) {
+  // encodeURI preserves '/' but escapes spaces/parens. Prepend file://
+  // (Linux paths begin with '/', so the result is file:///home/...).
+  return 'file://' + encodeURI(absPath);
+}
+
 function scanCategory(category) {
   const root = path.join(LIBRARY_ROOT, category);
   if (!fs.existsSync(root)) return [];
@@ -36,13 +46,30 @@ function scanCategory(category) {
       // .mkv with no sidecar means a half-written rip — skip; the library
       // shouldn't show broken entries.
       if (!meta) continue;
+      // Resolve the poster: prefer the on-disk file (off-grid usage),
+      // fall back to the remote URL only when no local copy exists yet
+      // (rip in progress, or older rip from before poster-caching).
+      let posterLocalUrl = null;
+      const localPosterRel = meta.posterPath
+        || (fs.existsSync(path.join(dir, base + '.jpg')) ? base + '.jpg' : null);
+      if (localPosterRel) {
+        const absPoster = path.join(dir, localPosterRel);
+        if (fs.existsSync(absPoster)) posterLocalUrl = toFileUrl(absPoster);
+      }
       out.push({
         id:        path.join(category, entry.name, f),
         kind:      category === 'Shows' ? 'show' : 'movie',
         title:     meta.title || base,
         year:      meta.year || null,
         plot:      meta.plot || null,
-        posterUrl: meta.posterUrl || null,
+        // Primary display source — local file:// URL if present,
+        // remote URL otherwise. Renderer just uses .posterUrl and
+        // doesn't have to know which it is.
+        posterUrl: posterLocalUrl || meta.posterUrl || null,
+        // Remote URL kept separately so a backfill action can re-fetch
+        // it later without having to re-look-up in OMDb.
+        posterUrlRemote: meta.posterUrl || null,
+        posterLocal:     !!posterLocalUrl,
         rating:    meta.rating || null,
         runtime:   meta.runtime || null,
         path:      path.join(dir, f),

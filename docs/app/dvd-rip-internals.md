@@ -16,6 +16,17 @@ inside the controller daemon and the Electron GUI. Companion to
                        │    │ 'inserted' / 'removed' events    │
                        │    ▼                                  │
                        │  handlers/dvd.js                      │
+                       │    │  ┌─────────────────────────────┐ │
+                       │    │  │ services/dvd-ripper.js      │ │
+                       │    │  │   └─▶ HandBrakeCLI          │ │
+                       │    │  │   └─▶ dvd-poster (parallel) │ │
+                       │    │  ├─────────────────────────────┤ │
+                       │    │  │ services/dvd-metadata.js    │ │
+                       │    │  │   └─▶ omdbapi.com           │ │
+                       │    │  ├─────────────────────────────┤ │
+                       │    │  │ services/dvd-library.js     │ │
+                       │    │  │   └─▶ filesystem scan       │ │
+                       │    │  └─────────────────────────────┘ │
                        │    │                                  │
                        │    │ state.patch({dvd: {...}})        │
                        │    │ ipc.publishEvent('dvd.detected') │
@@ -133,6 +144,36 @@ sidecar AND skips zero-size `.mkv` files, but a partial `.mkv` with a
 sidecar would appear as a broken entry until the user manually cleans
 up. Acceptable for an MVP; future work could check `.mkv` integrity
 before listing.
+
+Right after the sidecar write, the ripper kicks off a parallel poster
+download (`services/dvd-poster.js`) — see the "Poster caching" section
+below. The download does not block HandBrake; the rip's `finished`
+event fires whether or not the poster is on disk yet.
+
+## Poster caching — `services/dvd-poster.js`
+
+TrailCurrent's headline use is off-grid, so the library must keep
+rendering posters with no internet. The ripper downloads the OMDb
+poster URL to `<title>.jpg` alongside the `.mkv` so it does.
+
+Properties:
+
+| Aspect | Behaviour |
+|---|---|
+| **Best-effort** | Failure to download (no network, OMDb down, URL rot) never fails the rip. Caller fires the download and ignores rejection; failures are logged at `warn` level. |
+| **Parallel with HandBrake** | Both run concurrently — different resources (network vs CPU+disk), neither stalls the other. The ripper's `finished` event does NOT wait for the poster. |
+| **Atomic** | Writes to `<title>.jpg.part`, then renames to `<title>.jpg` on close. Failed downloads leave a `.part` file that the scanner ignores. |
+| **Bounded** | 15 s timeout, 10 MB cap (a movie poster is <200 KB; the cap protects against a server streaming an unbounded body). Up to 5 redirect hops. |
+| **Sidecar update** | On success, patches `<title>.json` with `posterPath` (relative filename for portability) and `posterBytes`. The next library scan returns a `file://` URL instead of the remote https one. |
+
+Backfill — `dvd.refreshPosters` walks the library, finds titles whose
+sidecar has a `posterUrl` but no on-disk `.jpg`, and downloads them
+serially. Used when:
+- the rip happened off-grid and the rig later reconnects
+- the original download failed for transient reasons (OMDb 5xx)
+- an older rip pre-dates poster caching
+
+Output: `{ ok, attempted, downloaded, failed, skipped, total }`.
 
 ## Metadata lookup — `services/dvd-metadata.js`
 

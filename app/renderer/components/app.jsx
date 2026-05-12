@@ -134,6 +134,20 @@ function TVApp() {
     return () => window.removeEventListener('playbill:navigate', onNavigate);
   }, []);
 
+  // When changing to a zone-root screen (Settings / YouTube), drop focus
+  // into the screen so the first remote press lands somewhere useful
+  // instead of staying on <body>. Uses rAF so the new screen's DOM is
+  // mounted before we look up its root.
+  useEffect(() => {
+    if (screen !== 'settings' && screen !== 'youtube') return;
+    const id = requestAnimationFrame(() => {
+      if (!window.FocusZones || !window.FocusZones.getRoot) return;
+      const root = window.FocusZones.getRoot();
+      if (root) window.FocusZones.enterZone(root);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [screen]);
+
   // ─── Navigation routing — two lanes ────────────────────────────────
   //
   // GLOBAL commands (home, back, menu, …) must always work regardless of
@@ -177,7 +191,10 @@ function TVApp() {
     setFocus(initialFocusFor(parent));
     setSideNav({ focused: false, hovered: false });
   };
-  // Helper: Menu — open the side nav focused at the current screen's row.
+  // Helper: focus the SideNav at the current screen's row. Reached by
+  // pressing Left from the leftmost zone of any screen — never by a
+  // dedicated key. (The Argon Remote's Menu key is RESERVED; see
+  // docs/app/navigation.md.)
   const openSideNavMenu = () => {
     setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screenRef.current) });
   };
@@ -186,10 +203,14 @@ function TVApp() {
     if (!window.playbill || !window.playbill.controller ||
         typeof window.playbill.controller.onNavDpad !== 'function') return;
 
+    // Per the contract (docs/app/navigation.md): only Home and Back are
+    // global hierarchy keys. Menu is reserved for future contextual
+    // options and is a no-op for now — drop it on the floor so we don't
+    // accidentally tie behavior to it.
     const GLOBAL = {
       home: goHome,
       back: goBack,
-      menu: openSideNavMenu,
+      menu: () => { /* reserved — see docs/app/navigation.md */ },
     };
     const KEY_MAP = {
       up:     'ArrowUp',
@@ -331,41 +352,33 @@ function TVApp() {
   // Keyboard handler
   useEffect(() => {
     const onKey = (e) => {
-      // Form-heavy screens — for a real keyboard, the browser's native
-      // focus handles Tab / arrows / typing. We only intercept H (and only
-      // when no input is focused, so the user can type "h" in the search
-      // box). For the remote, synthetic KeyboardEvents have isTrusted=false
-      // and the browser will NOT walk Tab focus or activate buttons on
-      // Enter from them — and the remote has no Tab key anyway. So when
-      // the event is synthetic, translate D-pad arrows into focus walking
-      // and Enter into a click/submit on the active element.
-      if (screen === 'settings' || screen === 'youtube') {
-        // Only TEXT-accepting elements should swallow 'h' / Escape — those
-        // characters are part of typed input there. Buttons don't accept
-        // text, so a real-keyboard Home/Back while DOM focus is on a button
-        // must still navigate.
+      // Zone-root screens (Settings, YouTube — anything tagged with
+      // data-zone-root). The spatial focus engine handles all d-pad
+      // navigation per docs/app/navigation.md. We only handle the
+      // hierarchy keys (Home/Back) and the Left-at-root-edge case that
+      // bubbles out of the zone tree.
+      if (window.FocusZones && window.FocusZones.getRoot && window.FocusZones.getRoot()) {
+        // Hierarchy keys — real keyboard convenience. The remote sends
+        // these via the GLOBAL map above, never through DOM events.
         const inField = e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
-        if ((e.key === 'h' || e.key === 'H') && !inField) { goHome(); e.preventDefault(); }
-        if (e.key === 'Escape' && !inField)               { goBack(); e.preventDefault(); }
-        if (e.key === 'ContextMenu')                      { openSideNavMenu(); e.preventDefault(); }
-        if (!e.isTrusted) {
-          const active = document.activeElement;
-          if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-            moveFocus(active, 1);
-            e.preventDefault();
-          } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-            moveFocus(active, -1);
-            e.preventDefault();
-          } else if (e.key === 'Enter') {
-            if (active && active.tagName === 'BUTTON') {
-              active.click();
-              e.preventDefault();
-            } else if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
-                       && active.form && typeof active.form.requestSubmit === 'function') {
-              active.form.requestSubmit();
-              e.preventDefault();
-            }
-          }
+        if ((e.key === 'h' || e.key === 'H') && !inField) { goHome(); e.preventDefault(); return; }
+        if (e.key === 'Escape' && !inField)               { goBack(); e.preventDefault(); return; }
+
+        // Hand the directional/activate keys to the zone engine.
+        const handled = window.FocusZones.handleKeydown(e);
+        if (handled) return;
+
+        // FocusZones declined. Two reasons:
+        //  1. Real keyboard Left/Right in a text field — let the browser
+        //     handle cursor movement.
+        //  2. Directional move at the screen-root edge — Left here means
+        //     "escape to the SideNav".
+        const cursorEdit = inField && e.isTrusted &&
+                           (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+        if (cursorEdit) return;
+        if (e.key === 'ArrowLeft') {
+          openSideNavMenu();
+          e.preventDefault();
         }
         return;
       }
@@ -374,11 +387,10 @@ function TVApp() {
       // dpad path so keyboard and remote behave identically.
       if (e.key === 'h' || e.key === 'H') { goHome(); return; }
       if (e.key === 'Escape' || e.key === 'Backspace') { goBack(); return; }
-      if (e.key === 'ContextMenu') {
-        openSideNavMenu();
-        e.preventDefault();
-        return;
-      }
+      // ContextMenu / remote Menu intentionally NOT handled here. The
+      // Menu key is reserved for future contextual options per
+      // docs/app/navigation.md — adding a handler now would re-introduce
+      // the "too many ways to open the side nav" confusion.
 
       // Side nav navigation
       if (sideNav.focused) {

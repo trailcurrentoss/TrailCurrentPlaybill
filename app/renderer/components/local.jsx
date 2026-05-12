@@ -33,15 +33,55 @@ function LocalView({ focus }) {
   const liveMovies = ripped.movies.length ? ripped.movies.map((m) => ({
     id:    m.id,
     title: m.title,
+    year:  m.year,
     meta:  [m.year, m.runtime].filter(Boolean).join(' · '),
     img:   m.posterUrl || '',
+    path:  m.path,
   })) : D.movies;
   const liveShows  = ripped.shows.length ? ripped.shows.map((m) => ({
     id:    m.id,
     title: m.title,
+    year:  m.year,
     meta:  [m.year, m.runtime].filter(Boolean).join(' · '),
     img:   m.posterUrl || '',
+    path:  m.path,
   })) : D.movies.slice().reverse();
+
+  // Resolve a library item to a Playable and hand it to the controller.
+  // file:// URLs need encodeURI on the absolute path so spaces and parens
+  // in folder names ("Inception (2010)") stay legal.
+  function playItem(item) {
+    if (!item || !item.path) return;
+    if (!window.playbill || !window.playbill.controller) return;
+    const url = 'file://' + encodeURI(item.path);
+    window.playbill.controller.command({
+      action: 'transport.play',
+      url,
+      mediaType: 'video',
+      metadata: {
+        title:    item.title,
+        subtitle: item.year ? String(item.year) : null,
+        artworkUrl: item.img || null,
+      },
+    }).catch((e) => console.warn('[local] transport.play failed:', e && e.message));
+  }
+
+  // Enter / Space while a library card is focused triggers playback.
+  // app.jsx's global keydown only handles Enter for the apps row; per-
+  // screen Enter handling for the library lives here so the data we
+  // already have in this component drives the play call.
+  useEffect(() => {
+    function onKey(e) {
+      if (focus.row !== 'lib-grid') return;
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (filter !== 'movies' && filter !== 'shows') return;
+      const items = filter === 'movies' ? liveMovies : liveShows;
+      const item = items[focus.col];
+      if (item) playItem(item);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [focus.row, focus.col, filter, liveMovies, liveShows]);
 
   const filters = [
     { id: 'movies', label: 'Movies', count: ripped.movies.length || 142 },
@@ -91,7 +131,13 @@ function LocalView({ focus }) {
       ) : (
         <div className="poster-grid">
           {(filter === 'movies' ? liveMovies : liveShows).map((m, i) => (
-            <div key={m.id} className={'card poster' + (focus.row === 'lib-grid' && focus.col === i ? ' focused' : '')} style={{width: 'auto'}}>
+            <div
+              key={m.id}
+              className={'card poster' + (focus.row === 'lib-grid' && focus.col === i ? ' focused' : '')}
+              style={{width: 'auto', cursor: m.path ? 'pointer' : 'default'}}
+              onClick={() => playItem(m)}
+              role={m.path ? 'button' : undefined}
+            >
               <div className="thumb" style={{ backgroundImage: m.img ? `url(${m.img})` : 'none', aspectRatio: '2/3' }}></div>
               <div style={{padding: '8px 10px 10px'}}>
                 <div className="title">{m.title}</div>

@@ -73,13 +73,15 @@ function NowPlayingBar() {
 }
 
 function RemoteHint() {
+  // Reflects the Argon Remote / virtual-remote vocabulary documented in
+  // docs/app/navigation.md. Eight semantic keys; everything else (Menu,
+  // Vol +/-, Power) is either reserved or handled at a lower layer.
   return (
     <div className="remote-hint">
       <span className="chip">←↑→↓ Navigate</span>
-      <span className="chip">⏎ Select</span>
-      <span className="chip">⌫ Back</span>
+      <span className="chip">⏎ OK</span>
+      <span className="chip">Esc Back</span>
       <span className="chip">H Home</span>
-      <span className="chip">Ctrl+Shift+⌫ Exit App</span>
     </div>
   );
 }

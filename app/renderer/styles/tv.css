@@ -891,6 +891,7 @@ body {
   animation: dvdFade 0.18s ease-out;
 }
 @keyframes dvdFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes spin    { to { transform: rotate(360deg); } }
 .dvd-prompt-card {
   width: min(560px, 92%);
   max-height: 86vh; overflow-y: auto;

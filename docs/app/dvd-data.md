@@ -20,8 +20,10 @@ they hit a handler.
 | `dvd.startRip` | `{ metadata: { title, year?, kind, ... } }` | `{ ok:true, target }` | fire-and-forget; progress arrives via state patches |
 | `dvd.cancelRip` | — | `{ ok:boolean, cancelled:boolean }` | SIGTERMs HandBrakeCLI |
 | `dvd.eject` | — | `{ ok:boolean, error? }` | shells `eject /dev/sr0` |
-| `dvd.libraryList` | — | `{ movies:[...], shows:[...], root }` | scans disk on every call |
-| `dvd.setOmdbKey` | `{ apiKey?:string }` | `{ ok:true, cleared? }` | empty / missing `apiKey` clears the stored key |
+| `dvd.libraryList` | — | `{ movies:[...], shows:[...], root }` | scans disk on every call. Each entry includes `posterUrl` (local `file://` if cached, else remote https), `posterUrlRemote` (the original URL), and `posterLocal:bool` |
+| `dvd.refreshPosters` | — | `{ ok, attempted, downloaded, failed, skipped, total }` | walks the library and downloads any missing posters using the URL in each sidecar. Used to backfill after the rig comes back online. |
+| `dvd.setOmdbKey` | `{ apiKey?:string }` | `{ ok:true, cleared? }` | empty / missing `apiKey` clears the stored key. Updates `state.dvd.omdbApiKeySet`. |
+| `dvd.validateOmdbKey` | `{ apiKey?:string }` | `{ ok, kind?, error? }` | no-op OMDb lookup to confirm a key works. Used by Settings → Library before persisting. With no `value`, validates the currently-stored key. |
 
 `dvd.startRip` metadata schema:
 
@@ -75,6 +77,11 @@ state.dvd = {
   } | null,
   error:     'HandBrakeCLI exited 1: ...' | null,
   dismissed: bool,                      // user clicked Not Now
+  omdbApiKeySet: bool,                  // whether an OMDb API key is stored.
+                                        // The Settings → Library tab reads
+                                        // this to show "Key stored" + the
+                                        // "Remove key" button. The key value
+                                        // itself is never sent over IPC.
 };
 ```
 
@@ -123,8 +130,10 @@ generic MQTT bridge behaviour, not DVD-specific — see
 | Path | Owner | What |
 |---|---|---|
 | `~/Videos/Playbill Library/Movies/<Title (Year)>/<Title (Year)>.mkv` | user | the ripped movie |
+| `~/Videos/Playbill Library/Movies/<Title (Year)>/<Title (Year)>.jpg` | user | cached poster (off-grid playback). Absent if rip happened off-grid — backfill via `dvd.refreshPosters`. |
 | `~/Videos/Playbill Library/Movies/<Title (Year)>/<Title (Year)>.json` | user | metadata sidecar |
 | `~/Videos/Playbill Library/Shows/<Show>/<Show> - SnnEnn.mkv` | user | one ripped episode |
+| `~/Videos/Playbill Library/Shows/<Show>/<Show> - SnnEnn.jpg` | user | cached poster |
 | `~/Videos/Playbill Library/Shows/<Show>/<Show> - SnnEnn.json` | user | metadata sidecar |
 | `~/.config/trailcurrent-playbill/headwaters.json` | user, mode 0600 | shared with the Headwaters integration; carries `omdbApiKey` alongside the existing `apiKey` |
 
@@ -132,20 +141,28 @@ Sidecar shape (`<title>.json`):
 
 ```json
 {
-  "title":     "Inception",
-  "year":      "2010",
-  "kind":      "movie",
-  "plot":      "Cobb is a thief who...",
-  "posterUrl": "https://m.media-amazon.com/...",
-  "rating":    "8.8",
-  "runtime":   "148 min",
-  "imdbId":    "tt1375666",
-  "source":    "omdb",
+  "title":       "Inception",
+  "year":        "2010",
+  "kind":        "movie",
+  "plot":        "Cobb is a thief who...",
+  "posterUrl":   "https://m.media-amazon.com/...",
+  "posterPath":  "Inception (2010).jpg",
+  "posterBytes": 184232,
+  "rating":      "8.8",
+  "runtime":     "148 min",
+  "imdbId":      "tt1375666",
+  "source":      "omdb",
   "rippedAt":         "2026-05-12T19:23:14.000Z",
   "rippedFromDevice": "/dev/sr0",
   "file":             "Inception (2010).mkv"
 }
 ```
+
+`posterPath` is relative (not absolute) so a backup / copy / NAS-move
+of the title folder still resolves correctly. The library scanner uses
+the sidecar's `posterPath` first, and if it's absent falls back to
+looking for `<basename>.jpg` next to the `.mkv` (so a manually-dropped
+poster works too).
 
 ## Filename sanitisation
 

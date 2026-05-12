@@ -17,6 +17,7 @@ const { execFile } = require('child_process');
 const DvdWatcher    = require('../services/dvd-watcher');
 const dvdRipper     = require('../services/dvd-ripper');
 const dvdLibrary    = require('../services/dvd-library');
+const { downloadPoster } = require('../services/dvd-poster');
 const { heuristicTitle, lookupOmdb } = require('../services/dvd-metadata');
 const SettingsStore = require('../settings');
 const { HEADWATERS_FILE } = require('../paths');
@@ -226,6 +227,31 @@ function register({ bus, state, ipc }) {
   });
 
   bus.register('dvd.libraryList', async () => dvdLibrary.list());
+
+  // dvd.refreshPosters — walk the library, find titles that have a
+  // remote posterUrl in their sidecar but no local .jpg next to the
+  // .mkv, and download them. Used for older rips (before poster-caching
+  // was wired) and for retrying titles where the original download
+  // failed (no internet at rip time). Synchronous serial fetch — the
+  // library is on the order of hundreds of entries, network is the
+  // bottleneck, parallelism gains nothing.
+  bus.register('dvd.refreshPosters', async () => {
+    const lib = dvdLibrary.list();
+    const all = [...lib.movies, ...lib.shows];
+    const fs = require('fs');
+    const path = require('path');
+    let attempted = 0, ok = 0, failed = 0, skipped = 0;
+    for (const item of all) {
+      if (item.posterLocal) { skipped++; continue; }
+      if (!item.posterUrlRemote) { skipped++; continue; }
+      attempted++;
+      const dir = path.dirname(item.path);
+      const base = path.basename(item.path, '.mkv');
+      const r = await downloadPoster({ url: item.posterUrlRemote, dir, basename: base });
+      if (r.ok) ok++; else failed++;
+    }
+    return { ok: true, attempted, downloaded: ok, failed, skipped, total: all.length };
+  });
 
   bus.register('dvd.setOmdbKey', async (cmd) => {
     // Persist the OMDb key alongside the Headwaters API key. Two keys, one

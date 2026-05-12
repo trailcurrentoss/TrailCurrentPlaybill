@@ -14,7 +14,17 @@
 
    Schema (from commands.schema.json):
      { action: 'nav.dpad', key: 'up'|'down'|'left'|'right'|
-                               'select'|'back'|'home'|'menu' } */
+                               'select'|'back'|'home'|'menu' }
+
+   Key semantics (see docs/app/navigation.md for the full contract):
+     up/down/left/right  Spatial focus movement. Never hierarchy.
+     select              Activate focused element (click / submit).
+     back                Previous screen.
+     home                Home screen.
+     menu                RESERVED — currently a no-op in the renderer.
+                         Reserved for future contextual options
+                         (Roku-Star pattern). Validation still accepts it
+                         so the Argon Remote's ≡ button doesn't error. */
 
 'use strict';
 

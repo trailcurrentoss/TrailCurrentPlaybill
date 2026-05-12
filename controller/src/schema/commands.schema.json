@@ -92,7 +92,8 @@
     { "$ref": "#/$defs/DvdEject" },
     { "$ref": "#/$defs/DvdLibraryList" },
     { "$ref": "#/$defs/DvdSetOmdbKey" },
-    { "$ref": "#/$defs/DvdValidateOmdbKey" }
+    { "$ref": "#/$defs/DvdValidateOmdbKey" },
+    { "$ref": "#/$defs/DvdRefreshPosters" }
   ],
 
   "$defs": {
@@ -201,6 +202,7 @@
 
     "NavDpad": {
       "x-class": "A", "x-dbc": "PlaybillNavCmd",
+      "description": "Remote/keyboard navigation key. Vocabulary matches the Argon IR Remote and the model documented in docs/app/navigation.md. up/down/left/right are spatial. select activates the focused element. back returns to the previous screen. home returns to home. menu is RESERVED for future contextual options (Roku-Star pattern) and is currently a no-op in the renderer.",
       "type": "object", "additionalProperties": false, "required": ["action", "key"],
       "properties": {
         "action": { "const": "nav.dpad" },
@@ -717,6 +719,12 @@
           "properties": { "apiKey": { "type": "string" } }
         }
       }
+    },
+    "DvdRefreshPosters": {
+      "x-class": "B",
+      "description": "Walk the on-disk library and download any missing poster .jpg files using the remote URL stored in each title's JSON sidecar. Used to backfill posters for rips made before poster-caching landed, and to retry titles where the original download failed (no internet at rip time).",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "dvd.refreshPosters" } }
     }
   }
 }
