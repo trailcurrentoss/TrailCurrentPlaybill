@@ -195,6 +195,57 @@ On the first board boot the codec attached but PipeWire showed only "Dummy Outpu
 ### Force-load the audio modules — the DT compatible string isn't always reliable
 `snd_soc_qcm6490` is the QCS6490-specific machine driver (mainline since April 2024). Auto-loading is wired through device-tree compatible-string matching, and on at least one running kernel revision the wrong machine driver (`snd_soc_sc8280xp`) was probed instead with `use_count=0` — never bound, never registered the codec. Belt-and-suspenders: list the right modules in [`image/files/modules-load.d/q6a-audio.conf`](../image/files/modules-load.d/q6a-audio.conf) (`snd_soc_qcm6490`, `snd_soc_sc7280`, `snd_soc_wcd938x`, `snd_soc_qcom_q6apm_dai`, `audioreach`). Modules that don't exist in the running kernel fail silently; no harm.
 
+## Video / GStreamer / AirPlay
+
+### Q6A V4L2 H.264 hardware decode is broken on current kernel
+`v4l2h264dec` (the kernel-side stateless H.264 decoder exposed via V4L2 M2M) initializes but throws `gst_v4l2_object_reset_compose_region: Failed to get default compose rectangle with VIDIOC_G_SELECTION: Invalid argument` on the first caps probe. No frames are ever decoded. The Cast feature's earliest pipeline failure traced to this — when iOS pushed an AirPlay H.264 stream, GStreamer's `decodebin` picked `v4l2h264dec` by rank and the pipeline collapsed with `not-negotiated (-4)` 3 s after the iPhone showed "Connected."
+
+**Root cause:** the Qualcomm Venus driver in use on Noble's kernel does not fully implement the V4L2 stateless decoder interface for this SoC family. The replacement Iris driver (Dmitry Baryshkov's port for SC7280/QCS6490 / [LWN coverage](https://lwn.net/Articles/1042587/)) is upstream in Linux 6.18+, but Noble ships 6.x kernels that predate it. Tracked at [qualcomm-linux/kernel-topics#222](https://github.com/qualcomm-linux/kernel-topics/issues/222).
+
+**Workaround until kernel 6.18 lands:** force GStreamer to skip the hardware decoder and use libav (`avdec_h264`). The A78 cores decode 1080p H.264 in software comfortably (~150 % of one core sustained). Applied in [`controller/src/sources/cast/uxplay.js`](../controller/src/sources/cast/uxplay.js) via UxPlay's `-avdec` flag.
+
+When the Iris driver lands: drop `-avdec`, switch to `-vd v4l2h264dec`, retest cast end-to-end. mpv playback (Live TV via `--hwdec=auto-safe`) currently does whatever the kernel allows it to negotiate, which on this kernel is software fallback — same upgrade applies.
+
+### GStreamer `autovideosink` picks xvimagesink on GNOME Wayland
+GStreamer's `autovideosink` selects sinks by rank. On the Q6A:
+- `xvimagesink` ranks **primary (256)** — X11 path via XWayland.
+- `glimagesink` ranks **secondary (128)** — EGL on Wayland.
+- `waylandsink` ranks **marginal (64)** — Wayland native protocol.
+
+Under GNOME on Wayland, `autovideosink` picks `xvimagesink`. The pipeline negotiates successfully and `xvimagesink` accepts data, but XWayland never produces a visible window — the iPhone's AirPlay handshake completes (iPhone shows "Connected"), zero frames ever display.
+
+**Rule:** never use `-vs autovideosink` for video destined for the GNOME desktop. Always pass an explicit sink.
+
+### glimagesink decodes but doesn't fullscreen
+After ruling out `autovideosink`, `glimagesink` was the obvious next pick — it talks EGL directly against a Wayland surface, video shows up immediately. But: when UxPlay passes `-fs`, `glimagesink` does NOT send `xdg_toplevel.set_fullscreen` to the compositor. Mutter draws the iPhone mirror as a small floating window sized by its defaults (~500 px wide). Manual fullscreen-toggle from the keyboard (Super+Up etc.) works but the user shouldn't have to.
+
+**Rule:** for any GStreamer pipeline that needs a fullscreen Wayland window on this board, use `waylandsink`. It talks Wayland natively and properly requests fullscreen. Tradeoff: marginal rank means it's never the default — caller must specify `-vs waylandsink` (UxPlay) or set it in the pipeline (`appsrc ... ! waylandsink fullscreen=true`).
+
+### UxPlay 1.68 from apt is too old; build 1.73.6 from source
+Ubuntu Noble ships `uxplay` 1.68.2 (frozen at release). With current iOS, the AirPlay handshake succeeds and the iPhone reports "Connected," but every H.264 NAL unit is rejected by `h264parse` as `broken/invalid nal Type: 1 Slice` and no frames decode. Switching `-avdec` doesn't fix it on 1.68.2 — the underlying iOS bitstream handling is upstream.
+
+Three load-bearing fixes between 1.68.2 and 1.73.6:
+- **1.68.3** — GStreamer 1.24 compatibility (Noble ships GStreamer 1.24)
+- **1.70** — GStreamer ≥1.24 sleep/wake handling, H.265/4K paths
+- **1.72.2** — race-condition segfault fix on Debian-family during pipeline restart
+
+**Fix:** image hook 3c clones [FDH2/UxPlay](https://github.com/FDH2/UxPlay) at pinned tag `v1.73.6` and builds with cmake inside the qemu-aarch64 chroot. Installs to `/usr/local/bin/uxplay`, PATH-shadowing the apt-shipped binary at `/usr/bin/uxplay` (kept as a fallback that's never picked). Pinned tag is editable at the top of hook 3c — bump deliberately when an iOS bitstream change forces it.
+
+Build deps require `libdrm-dev`, which is normally blocked by hook 4's `Pin-Priority -1` for `libdrm*`. Hook 3c runs **before** hook 4 specifically so the pin file isn't placed yet — `libdrm-dev` installs cleanly. If a future refactor reorders these hooks, the chroot will fail to install `libdrm-dev` (transitive dep of `libgstreamer-plugins-qcom-base1.0-dev`) and the build aborts.
+
+### Controller spawning UxPlay needs explicit Wayland env injection
+The Playbill controller is a systemd USER service. GNOME's session imports `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS` etc. into the user systemd manager via `systemctl --user import-environment` at gnome-session startup — **but** if the controller starts before that import lands (boot race), its `process.env.WAYLAND_DISPLAY` is undefined.
+
+UxPlay launched from a controller without Wayland env in its process environment will open zero windows and silently park. Telltale: handshake completes, the iPhone shows "Connected to Playbill," the journal is empty, and the cast screen stays on its "Waiting…" pill forever.
+
+**Fix:** the controller's [`uxplay.js`](../controller/src/sources/cast/uxplay.js) `resolveDisplayEnv()` discovers the Wayland socket by scanning `$XDG_RUNTIME_DIR` for a `wayland-N` entry and injects `WAYLAND_DISPLAY` + `GDK_BACKEND=wayland` into the spawn env before exec. Falls back to `/run/user/<uid>/` when XDG_RUNTIME_DIR is also missing. The same fix would apply to mpv if we ever hit this on the Live TV / YouTube paths (mpv tolerates missing Wayland by falling through to other VOs — UxPlay's pipeline does not).
+
+### `avahi-daemon` must be running at boot for AirPlay discovery
+UxPlay registers `_airplay._tcp` and `_raop._tcp` via the Bonjour-compatibility shim against the running avahi daemon. If avahi isn't up, mDNS publish silently no-ops and the iPhone never sees the receiver — UxPlay reports no error. `avahi-daemon` is installed in hook 3a and starts automatically on Ubuntu's default unit ordering, but if you're slimming a related image, **don't disable it**. Verify with:
+```
+avahi-browse -rt _airplay._tcp | grep Playbill
+```
+
 ## Desktop / Ubuntu environment
 
 ### `ubuntu-desktop-minimal` is too minimal

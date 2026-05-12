@@ -26,6 +26,13 @@ const TV_DATA = {
       bg: '#FF0000',
       launch: 'youtube',
     },
+    {
+      id: 'cast',
+      label: 'Cast',
+      icon: 'phone-portrait-outline',
+      bg: 'linear-gradient(135deg, #5a8a4a, #2b4a23)',
+      launch: 'cast',
+    },
   ],
 
   rowTrails: [],

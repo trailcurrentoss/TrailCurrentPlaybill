@@ -225,6 +225,11 @@ function(
             "handbrake-cli",
             "lsdvd",
             "libdvd-pkg",
+            //   eject            — userspace `eject /dev/sr0` invoked by
+            //                      the dvd.eject command-bus handler after
+            //                      a rip finishes, so the user doesn't
+            //                      have to walk to the rig with a paperclip
+            "eject",
 
             // ── OpenCL on Adreno (for llama.cpp GGML_OPENCL etc.) ───────
             // The ICD itself ships in radxa-firmware-qcs6490 (below). The
@@ -486,6 +491,39 @@ function(
                 set -e
                 echo "[hook 3a] installing desktop + app userspace via apt-get (loud — bypasses --include silent rollback)"
 
+                # ── Third-party apt repo: Brave ─────────────────────────
+                # Brave is the kiosk browser for Netflix / Disney+ / Max
+                # (any Widevine-DRM streaming service). We use Brave rather
+                # than Google Chrome because Google does NOT ship Chrome for
+                # ARM64 Linux at all (verified May 2026: dl.google.com only
+                # serves amd64; the direct-download arm64 .deb URL 404s).
+                # Brave does ship an arm64 stable build, and it's still
+                # Chromium-based so all the kiosk flags work the same way.
+                #
+                # Widevine on Brave is downloaded as a Chromium component on
+                # first access to a DRM site, not bundled in the .deb. For
+                # Netflix this means the first launch may briefly show a
+                # loading state while the CDM downloads (~5MB); subsequent
+                # launches play immediately. Cookies + the downloaded CDM
+                # persist in the per-source user-data-dir managed by
+                # controller/src/sources/netflix/browser.js.
+                #
+                # Pulled in below by `brave-browser` in the apt-get install
+                # list, then spawned on demand by the controller's
+                # sources/netflix/browser.js when the user opens Netflix.
+                # The same brave-browser binary will host Disney+/Prime/Max
+                # source plugins when those land.
+                echo "[hook 3a]   installing Brave signing key + apt source"
+                chroot "$1" sh -c '
+                    set -e
+                    install -d -m 0755 /usr/share/keyrings
+                    curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg \
+                        https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+                    chmod 0644 /usr/share/keyrings/brave-browser-archive-keyring.gpg
+                    echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg arch=arm64] https://brave-browser-apt-release.s3.brave.com/ stable main" \
+                        > /etc/apt/sources.list.d/brave-browser-release.list
+                '
+
                 chroot "$1" apt-get update
 
                 # The list below mirrors `packages+:` for the desktop /
@@ -517,6 +555,7 @@ function(
                         gstreamer1.0-plugins-ugly \
                         gstreamer1.0-libav \
                         gstreamer1.0-tools \
+                        gstreamer1.0-gl \
                         v4l-utils \
                         libva2 \
                         vainfo \
@@ -562,7 +601,9 @@ function(
                         yt-dlp \
                         avahi-daemon \
                         avahi-utils \
-                        libcap2-bin
+                        libcap2-bin \
+                        uxplay \
+                        brave-browser
                 # Note on yt-dlp: apt's package can lag YouTube's extractor
                 # changes by months. Hook 5a installs a fresh release blob
                 # (fetched by build.sh) to /usr/local/bin/yt-dlp; that path
@@ -570,6 +611,34 @@ function(
                 # as a safety-net fallback. To force a fresh fetch on the
                 # next build instead of using the 7-day-cached copy, run
                 # `REFRESH_YTDLP=1 sudo ./image/build.sh`.
+                #
+                # Note on uxplay: AirPlay receiver. Spawned on demand by the
+                # controller daemon when the user opens the Cast screen, so
+                # the device only advertises itself on the LAN while the
+                # user is actively trying to mirror a phone. Depends on the
+                # gstreamer1.0-plugins-{good,bad,libav} set already in the
+                # list above (good = rtp/rtsp, bad = h264parse/avdec, libav =
+                # avdec_h264). avahi-daemon must be running at boot — it's
+                # the mDNS responder UxPlay registers `_airplay._tcp` with.
+                #
+                # Note on brave-browser: kiosk browser for DRM-locked
+                # streaming services. Spawned on demand by the controller's
+                # sources/netflix/browser.js with --kiosk --app=netflix.com.
+                # Widevine L3 is downloaded as a Chromium component on first
+                # DRM playback (cap is 720p on non-certified ARM64 Linux).
+                # The repo entry + signing key are installed above this
+                # block; if Brave ever rotates the key, refresh both files.
+                # Same brave-browser binary will host Disney+/Prime/Max
+                # source plugins when those land.
+                #
+                # gstreamer1.0-gl provides `glimagesink` — the EGL-backed
+                # video sink we pass to uxplay (-vs glimagesink). Without
+                # it, autovideosink falls back to xvimagesink (XWayland),
+                # which accepts the AirPlay handshake but never displays
+                # frames under GNOME Wayland. Verified May 2026 on a Q6A
+                # board where iPhone connect succeeded but the screen
+                # stayed black; installing gstreamer1.0-gl + switching to
+                # explicit `-vs glimagesink` fixed it.
 
                 # Fail-fast verification: hook 8c expects flatpak; hook 5
                 # expects libnss3/libxss1/libxtst6/libatspi2.0-0; the
@@ -591,8 +660,10 @@ function(
                            rtl-sdr librtlsdr2 dvb-tools dtv-scan-tables mpv \
                            handbrake handbrake-cli lsdvd \
                            gstreamer1.0-plugins-ugly gstreamer1.0-tools \
+                           gstreamer1.0-gl \
                            ffmpeg lame flac libdvdread8 libdvdnav4 \
-                           nodejs yt-dlp avahi-daemon libcap2-bin; do
+                           nodejs yt-dlp avahi-daemon libcap2-bin \
+                           uxplay brave-browser; do
                     if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
                         MISSING="$MISSING $pkg"
                     fi
@@ -684,6 +755,93 @@ function(
                 fi
                 CSS_VER=$(chroot "$1" dpkg-query -W -f='${Version}' libdvdcss2 2>/dev/null || echo "?")
                 echo "  ✓ libdvdcss2 ($CSS_VER) installed — encrypted DVDs are rippable"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 3c: Build UxPlay 1.73.6 from upstream source
+            //
+            // The apt-shipped uxplay (1.68.2 in Noble) does NOT work on this
+            // device with current iOS phones. Symptoms: AirPlay handshake
+            // succeeds, iPhone shows "Connected to Playbill", but every
+            // H.264 NAL unit is rejected by GStreamer's h264parse as
+            // "broken/invalid nal Type: 1 Slice" and no frames decode.
+            // Three load-bearing fixes land between 1.68.2 and 1.73:
+            //   * 1.68.3 — GStreamer 1.24 compatibility (Noble ships 1.24)
+            //   * 1.70   — GStreamer ≥1.24 sleep/wake handling
+            //   * 1.72.2 — Debian-family pipeline-restart race-condition fix
+            // Plus iOS 17+ bitstream handling improvements throughout 1.70+.
+            //
+            // We clone the FDH2/UxPlay repo at a pinned tag and build with
+            // cmake inside the chroot. Install lands at /usr/local/bin/uxplay
+            // which PATH-shadows the apt binary at /usr/bin/uxplay (the apt
+            // one stays installed as a safety net but is never picked).
+            //
+            // The Q6A's V4L2 hardware H.264 decoder is also broken on the
+            // current kernel (Venus driver — fixed when the Iris port lands
+            // in kernel 6.18+). The controller passes `-avdec` to force
+            // software decode; the A78 cores handle 1080p H.264 comfortably.
+            // The runtime sink is `waylandsink` (NOT glimagesink — see the
+            // controller code comment for why).
+            //
+            // Order: AFTER hook 3a (apt installs apt-shipped uxplay's runtime
+            // deps + the GStreamer plugin packs we link against). BEFORE
+            // hook 4 (apt pinning would block libdrm-dev install if reversed).
+            //
+            // To bump the pinned tag, edit UXPLAY_TAG below and re-flash.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                UXPLAY_TAG="v1.73.6"
+                echo "[hook 3c] building UxPlay $UXPLAY_TAG from FDH2/UxPlay"
+
+                # Build deps. cmake / git / libssl-dev / libplist-dev /
+                # libavahi-compat-libdnssd-dev / libdbus-1-dev / liborc-0.4-dev
+                # aren't on the runtime image; we install them for the build
+                # and leave them — image size cost is ~80 MB, but a future
+                # image hook that wants to rebuild any other small component
+                # (or a user who wants to recompile uxplay with different
+                # flags) can do so without an apt round-trip.
+                #
+                # libdrm-dev is required by libgstreamer-plugins-qcom-base1.0-dev
+                # (the Qualcomm-replaced plugins-base dev package). At this
+                # point in the build, hook 4's apt pin (which blocks libdrm-dev
+                # at Pin-Priority -1) has not yet landed, so libdrm-dev is
+                # installable normally.
+                chroot "$1" env DEBIAN_FRONTEND=noninteractive \
+                    apt-get install -y --no-install-recommends \
+                        cmake build-essential git pkg-config \
+                        libssl-dev libplist-dev libdrm-dev \
+                        libavahi-compat-libdnssd-dev libdbus-1-dev \
+                        liborc-0.4-dev \
+                        libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+                # Clone + build inside the chroot. /tmp inside the chroot is
+                # ephemeral for the rsdk build process — gets thrown away when
+                # the image is finalized, so a multi-hundred-MB git history +
+                # build tree leaves no trace in the shipped image.
+                chroot "$1" /bin/bash -c "
+                    set -e
+                    cd /tmp
+                    rm -rf UxPlay
+                    git clone --depth 1 --branch ${UXPLAY_TAG} https://github.com/FDH2/UxPlay.git UxPlay
+                    cd UxPlay
+                    mkdir -p build
+                    cd build
+                    cmake -DCMAKE_BUILD_TYPE=Release ..
+                    make -j\$(nproc)
+                    install -m 755 uxplay /usr/local/bin/uxplay
+                    cd /tmp && rm -rf UxPlay
+                "
+
+                # Verify the binary actually runs and reports the pinned
+                # version. cmake + make can succeed but produce a broken
+                # binary if a runtime lib is mis-linked; -v flushes that.
+                ACTUAL=$(chroot "$1" /usr/local/bin/uxplay -v 2>&1 | head -1 || echo "FAILED")
+                if ! echo "$ACTUAL" | grep -q "${UXPLAY_TAG#v}"; then
+                    echo "  ERROR: /usr/local/bin/uxplay did not return ${UXPLAY_TAG#v}: $ACTUAL" >&2
+                    exit 1
+                fi
+                echo "  ✓ $ACTUAL — installed to /usr/local/bin/uxplay (shadows apt's 1.68.2 at /usr/bin/uxplay)"
             |||,
 
             // ════════════════════════════════════════════════════════════

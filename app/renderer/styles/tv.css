@@ -770,3 +770,335 @@ body {
 .yt-views { font-size: 12px; color: rgba(255,255,255,0.4); margin-top: 2px; }
 
 .yt-card .tv-btn { flex-shrink: 0; padding: 10px 18px; }
+
+/* ── Cast screen ──────────────────────────────────────────────────────── */
+.cast-view {
+  display: flex; align-items: center; justify-content: center;
+  padding: 80px 60px;
+}
+.cast-card {
+  width: min(720px, 90%);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 24px;
+  padding: 48px 56px 40px;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.4);
+}
+.cast-glyph {
+  width: 96px; height: 96px;
+  margin: 0 auto 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(82,164,65,0.25), rgba(82,164,65,0.08));
+  border: 1px solid rgba(82,164,65,0.4);
+  display: flex; align-items: center; justify-content: center;
+}
+.cast-glyph ion-icon { font-size: 52px; color: var(--tc-primary, #52a441); }
+.cast-name {
+  font: 700 32px var(--font-sans);
+  letter-spacing: -0.01em;
+  margin-bottom: 12px;
+}
+.cast-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font: 600 13px var(--font-sans);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin-bottom: 28px;
+}
+.cast-status.pending {
+  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.cast-status.ready {
+  background: rgba(82,164,65,0.12); color: var(--tc-primary, #52a441);
+  border: 1px solid rgba(82,164,65,0.4);
+}
+.cast-status.live {
+  background: rgba(82,164,65,0.2); color: #fff;
+  border: 1px solid rgba(82,164,65,0.6);
+}
+.cast-status.error {
+  background: rgba(216,80,80,0.15); color: #f1b5b5;
+  border: 1px solid rgba(216,80,80,0.5);
+}
+.cast-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--tc-primary, #52a441);
+  box-shadow: 0 0 0 0 rgba(82,164,65,0.5);
+  animation: castPulse 1.6s ease-out infinite;
+}
+@keyframes castPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(82,164,65,0.6); }
+  100% { box-shadow: 0 0 0 10px rgba(82,164,65,0); }
+}
+.cast-error {
+  font: 500 13px/1.5 var(--font-sans);
+  color: #f1b5b5;
+  background: rgba(216,80,80,0.08);
+  border: 1px solid rgba(216,80,80,0.3);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 0 auto 24px;
+  max-width: 480px;
+  text-align: left;
+}
+.cast-howto {
+  text-align: left;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 14px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+.cast-howto-title {
+  font: 700 12px var(--font-sans);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: rgba(255,255,255,0.5);
+  margin-bottom: 10px;
+}
+.cast-howto ol {
+  margin: 0 0 14px 0; padding-left: 24px;
+  font: 500 16px/1.7 var(--font-sans);
+  color: rgba(255,255,255,0.92);
+}
+.cast-howto ol strong { color: var(--tc-primary, #52a441); font-weight: 700; }
+.cast-howto-note {
+  font: 400 12px/1.5 var(--font-sans);
+  color: rgba(255,255,255,0.55);
+  border-top: 1px dashed rgba(255,255,255,0.1);
+  padding-top: 12px;
+}
+.cast-hint {
+  font: 500 12px var(--font-sans);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: rgba(255,255,255,0.4);
+}
+.cast-hint strong { color: rgba(255,255,255,0.7); font-weight: 700; }
+
+/* ============ DVD prompt overlay ============
+   Modal that asks the user whether to add an inserted disc to the
+   library, then walks them through metadata lookup, optional manual
+   edit, and rip progress. Mounted globally by app.jsx so it sits on
+   top of whatever view the user happens to be on. */
+.dvd-prompt-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex; align-items: center; justify-content: center;
+  animation: dvdFade 0.18s ease-out;
+}
+@keyframes dvdFade { from { opacity: 0; } to { opacity: 1; } }
+.dvd-prompt-card {
+  width: min(560px, 92%);
+  max-height: 86vh; overflow-y: auto;
+  background: #1a1c1f;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  padding: 32px 36px 28px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+  color: rgba(255,255,255,0.92);
+}
+[data-theme="light"] .dvd-prompt-card {
+  background: #fff;
+  border-color: rgba(0,0,0,0.08);
+  color: #1a1a1a;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.18);
+}
+.dvd-prompt-header {
+  display: flex; gap: 14px; align-items: center;
+  margin-bottom: 20px;
+}
+.dvd-prompt-header ion-icon {
+  font-size: 36px;
+  color: var(--tc-primary, #52a441);
+}
+.dvd-prompt-eyebrow {
+  font: 700 11px var(--font-sans);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--tc-primary, #52a441);
+  margin-bottom: 2px;
+}
+.dvd-prompt-label {
+  font: 500 14px var(--font-sans);
+  color: rgba(255,255,255,0.65);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.01em;
+}
+[data-theme="light"] .dvd-prompt-label { color: rgba(0,0,0,0.55); }
+.dvd-prompt-card h2 {
+  font: 700 22px/1.25 var(--font-sans);
+  margin: 0 0 10px 0;
+  letter-spacing: -0.01em;
+}
+.dvd-prompt-card p {
+  font: 400 15px/1.55 var(--font-sans);
+  color: rgba(255,255,255,0.78);
+  margin: 0 0 22px 0;
+}
+[data-theme="light"] .dvd-prompt-card p { color: rgba(0,0,0,0.7); }
+.dvd-prompt-card p strong { color: rgba(255,255,255,0.96); font-weight: 600; }
+[data-theme="light"] .dvd-prompt-card p strong { color: #1a1a1a; }
+.dvd-prompt-actions {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  margin-top: 8px;
+}
+.dvd-prompt-actions button {
+  font: 600 14px var(--font-sans);
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+.dvd-prompt-actions button:active { transform: translateY(1px); }
+.dvd-prompt-actions .primary {
+  background: var(--tc-primary, #52a441);
+  color: #fff;
+}
+.dvd-prompt-actions .primary:hover { background: #61b34f; }
+.dvd-prompt-actions .primary:disabled {
+  background: rgba(82,164,65,0.4); cursor: not-allowed;
+}
+.dvd-prompt-actions .secondary {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.92);
+  border-color: rgba(255,255,255,0.12);
+}
+.dvd-prompt-actions .secondary:hover { background: rgba(255,255,255,0.14); }
+[data-theme="light"] .dvd-prompt-actions .secondary {
+  background: rgba(0,0,0,0.06); color: #1a1a1a;
+  border-color: rgba(0,0,0,0.1);
+}
+[data-theme="light"] .dvd-prompt-actions .secondary:hover { background: rgba(0,0,0,0.1); }
+.dvd-prompt-actions .ghost {
+  background: transparent;
+  color: rgba(255,255,255,0.55);
+}
+.dvd-prompt-actions .ghost:hover { color: rgba(255,255,255,0.85); }
+[data-theme="light"] .dvd-prompt-actions .ghost { color: rgba(0,0,0,0.55); }
+[data-theme="light"] .dvd-prompt-actions .ghost:hover { color: rgba(0,0,0,0.85); }
+
+/* Review card (after a successful online lookup) */
+.dvd-prompt-review {
+  display: flex; gap: 18px;
+  margin-bottom: 22px;
+}
+.dvd-prompt-poster {
+  width: 120px; height: 180px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+  flex-shrink: 0;
+}
+.dvd-prompt-review-body { flex: 1 1 auto; min-width: 0; }
+.dvd-prompt-title-row {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.dvd-prompt-title-text {
+  font: 700 19px var(--font-sans);
+  letter-spacing: -0.01em;
+}
+.dvd-prompt-year {
+  font: 500 14px var(--font-sans);
+  color: rgba(255,255,255,0.55);
+}
+[data-theme="light"] .dvd-prompt-year { color: rgba(0,0,0,0.55); }
+.dvd-prompt-rating {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px var(--font-sans);
+  color: #f5c542;
+  margin-bottom: 6px;
+}
+.dvd-prompt-meta {
+  font: 500 12px var(--font-sans);
+  color: rgba(255,255,255,0.55);
+  margin-bottom: 10px;
+}
+[data-theme="light"] .dvd-prompt-meta { color: rgba(0,0,0,0.55); }
+.dvd-prompt-plot {
+  font: 400 14px/1.55 var(--font-sans);
+  color: rgba(255,255,255,0.78);
+  margin: 0;
+}
+[data-theme="light"] .dvd-prompt-plot { color: rgba(0,0,0,0.7); }
+
+/* Manual entry form */
+.dvd-prompt-form {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px;
+  margin-bottom: 18px;
+}
+.dvd-prompt-form label {
+  display: flex; flex-direction: column; gap: 6px;
+  font: 600 11px var(--font-sans);
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: rgba(255,255,255,0.55);
+}
+[data-theme="light"] .dvd-prompt-form label { color: rgba(0,0,0,0.55); }
+.dvd-prompt-form label:first-child { grid-column: 1 / -1; }
+.dvd-prompt-form input,
+.dvd-prompt-form select {
+  font: 500 15px var(--font-sans);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.95);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  outline: none;
+}
+.dvd-prompt-form input:focus,
+.dvd-prompt-form select:focus {
+  border-color: var(--tc-primary, #52a441);
+  background: rgba(255,255,255,0.09);
+}
+[data-theme="light"] .dvd-prompt-form input,
+[data-theme="light"] .dvd-prompt-form select {
+  background: #f5f5f7; color: #1a1a1a;
+  border-color: rgba(0,0,0,0.12);
+}
+[data-theme="light"] .dvd-prompt-form input:focus,
+[data-theme="light"] .dvd-prompt-form select:focus { background: #fff; }
+.dvd-prompt-note {
+  font: 500 13px/1.5 var(--font-sans);
+  background: rgba(245,197,66,0.1);
+  border: 1px solid rgba(245,197,66,0.3);
+  color: #f5c542;
+  padding: 10px 14px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+
+/* Progress (ripping) */
+.dvd-prompt-progress {
+  height: 8px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 16px 0 10px;
+}
+[data-theme="light"] .dvd-prompt-progress { background: rgba(0,0,0,0.08); }
+.dvd-prompt-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--tc-primary, #52a441), #6cc356);
+  transition: width 0.4s ease-out;
+}
+.dvd-prompt-progress-row {
+  display: flex; justify-content: space-between;
+  font: 500 13px var(--font-sans);
+  color: rgba(255,255,255,0.65);
+  margin-bottom: 18px;
+}
+[data-theme="light"] .dvd-prompt-progress-row { color: rgba(0,0,0,0.6); }
+.dvd-prompt-error {
+  background: rgba(216,80,80,0.1);
+  border: 1px solid rgba(216,80,80,0.35);
+  color: #f1b5b5;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font: 500 13px/1.5 var(--font-mono, ui-monospace, monospace);
+  margin: 0 0 18px 0;
+  word-break: break-word;
+}

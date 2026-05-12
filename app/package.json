@@ -7,7 +7,8 @@
   "scripts": {
     "build:vendor": "node packaging/copy-vendor.js",
     "build:renderer": "babel renderer/components --out-dir build/components --presets=@babel/preset-react",
-    "build": "npm run build:vendor && npm run build:renderer",
+    "build:creds": "node ../build-tools/embed-yt-credentials.js",
+    "build": "npm run build:creds && npm run build:vendor && npm run build:renderer",
     "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder --config electron-builder.config.js"
   },

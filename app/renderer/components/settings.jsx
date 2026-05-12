@@ -330,6 +330,11 @@ function HeadwatersScreen({ ctrlState }) {
       setBrokerResult(result);
       const cur = await window.playbill.controller.command({ action: 'connection.get' });
       setConn(cur);
+    } catch (e) {
+      // Surface dispatch / IPC / schema rejections — without this the form
+      // appears to do nothing on a controller-side failure (no status, no
+      // attempt) because the exception goes nowhere.
+      setBrokerResult({ ok: false, kind: 'unknown', message: String(e.message || e) });
     } finally {
       setBusy(false);
     }
@@ -598,6 +603,7 @@ function SettingsView({ focus }) {
     { id: 'headwaters', label: 'Headwaters', icon: 'water-outline' },
     { id: 'device',     label: 'Device',     icon: 'hardware-chip-outline' },
     { id: 'youtube',    label: 'YouTube',    icon: 'logo-youtube' },
+    { id: 'library',    label: 'Library',    icon: 'film-outline' },
     // Phase 2+: { id: 'sources', label: 'Sources', icon: 'apps-outline' },
     // Phase 2+: { id: 'display', label: 'Display', icon: 'color-palette-outline' },
     // Phase 2+: { id: 'about',   label: 'About',   icon: 'information-circle-outline' },
@@ -627,51 +633,28 @@ function SettingsView({ focus }) {
         {tab === 'headwaters' && <HeadwatersScreen ctrlState={ctrlState} />}
         {tab === 'device'     && <DeviceScreen     ctrlState={ctrlState} />}
         {tab === 'youtube'    && <YoutubeScreen    ctrlState={ctrlState} />}
+        {tab === 'library'    && <LibraryScreen    ctrlState={ctrlState} />}
       </div>
     </div>
   );
 }
 
-// ─── YouTube settings: clientId/secret + sign-in device flow ─────────
+// ─── YouTube settings: sign-in device flow only ──────────────────────
+//
+// OAuth credentials are baked into the build from .env (see
+// build-tools/embed-yt-credentials.js) and are NEVER exposed to the user
+// or rendered into the UI. The renderer only sees the device-flow state:
+// not-signed-in / pending / signed-in.
 
 function YoutubeScreen({ ctrlState }) {
   const yt = (ctrlState && ctrlState.youtube) || {};
-  const [clientId, setClientId]         = useState('');
-  const [clientSecret, setClientSecret] = useState('');
-  const [busy, setBusy]                 = useState(false);
-  const [error, setError]               = useState(null);
-  const [signInResult, setSignInResult] = useState(null);
-
-  // When the controller reports clientId already present, prefill the field
-  // (the secret is intentionally never returned so it stays blank).
-  useEffect(() => {
-    (async () => {
-      try {
-        const s = await window.playbill.controller.command({ action: 'youtube.getSettings' });
-        if (s && s.clientId) setClientId(s.clientId);
-      } catch (_) {}
-    })();
-  }, []);
-
-  async function saveSettings(e) {
-    if (e) e.preventDefault();
-    setError(null); setBusy(true);
-    try {
-      const value = {};
-      if (clientId.trim()) value.clientId = clientId.trim();
-      if (clientSecret.trim()) value.clientSecret = clientSecret.trim();
-      if (!Object.keys(value).length) { setBusy(false); return; }
-      await window.playbill.controller.command({ action: 'youtube.setSettings', value });
-      setClientSecret('');
-    } catch (e) { setError(String(e.message || e)); }
-    finally { setBusy(false); }
-  }
+  const [busy, setBusy]   = useState(false);
+  const [error, setError] = useState(null);
 
   async function startSignIn() {
-    setError(null); setBusy(true); setSignInResult(null);
+    setError(null); setBusy(true);
     try {
-      const r = await window.playbill.controller.command({ action: 'youtube.signInStart' });
-      setSignInResult(r);
+      await window.playbill.controller.command({ action: 'youtube.signInStart' });
     } catch (e) { setError(String(e.message || e)); }
     finally { setBusy(false); }
   }
@@ -679,7 +662,7 @@ function YoutubeScreen({ ctrlState }) {
   async function cancelSignIn() {
     setBusy(true);
     try { await window.playbill.controller.command({ action: 'youtube.signInCancel' }); }
-    finally { setBusy(false); setSignInResult(null); }
+    finally { setBusy(false); }
   }
 
   async function signOut() {
@@ -689,13 +672,6 @@ function YoutubeScreen({ ctrlState }) {
     catch (e) { setError(String(e.message || e)); }
     finally { setBusy(false); }
   }
-
-  const labelStyle = { display:'block', fontSize:12, letterSpacing:1,
-                       textTransform:'uppercase', color:'rgba(255,255,255,0.6)',
-                       marginBottom:6 };
-  const inputStyle = { width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
-                       border:'1px solid rgba(255,255,255,0.1)', borderRadius:8,
-                       color:'#fff', font:'14px var(--font-sans)' };
 
   return (
     <div style={{padding:'40px 60px', maxWidth:900}}>
@@ -714,9 +690,8 @@ function YoutubeScreen({ ctrlState }) {
       </div>
 
       <p style={{color:'rgba(255,255,255,0.6)', fontSize:14, marginBottom:24, maxWidth:680}}>
-        Personalized YouTube features (subscriptions, playlists, watch later) require Google OAuth credentials.
-        Create an OAuth client of type <em>TVs and Limited Input devices</em> in
-        Google Cloud Console (no review required for read-only YouTube scope) and paste the credentials below.
+        Sign in to YouTube to search, browse your subscriptions, and watch your playlists.
+        Playbill will show a one-time activation code; enter it at the URL on your phone or laptop to finish.
       </p>
 
       {error && (
@@ -728,11 +703,11 @@ function YoutubeScreen({ ctrlState }) {
       {/* Sign-in pending: big code + URL */}
       {yt.pending && (
         <div style={{padding:'24px', marginBottom:24, background:'rgba(82,164,65,0.06)',
-                     border:'1px solid rgba(82,164,65,0.3)', borderRadius:12}}>
+                     border:'1px solid rgba(82,164,65,0.3)', borderRadius:12, maxWidth:600}}>
           <div style={{fontSize:13, color:'rgba(255,255,255,0.7)', marginBottom:8}}>
             On your phone or laptop, open:
           </div>
-          <div style={{font:'600 18px var(--font-mono)', color:'#fff', marginBottom:18}}>
+          <div style={{font:'600 22px var(--font-mono)', color:'#fff', marginBottom:24}}>
             {yt.pending.verification_url}
           </div>
           <div style={{fontSize:13, color:'rgba(255,255,255,0.7)', marginBottom:8}}>
@@ -741,40 +716,28 @@ function YoutubeScreen({ ctrlState }) {
           <div style={{font:'700 48px var(--font-mono)', color:'var(--tc-primary)', letterSpacing:6, marginBottom:18}}>
             {yt.pending.user_code}
           </div>
+          <div style={{fontSize:12, color:'rgba(255,255,255,0.5)', marginBottom:18}}>
+            Waiting for confirmation…
+          </div>
           <button className="tv-btn" onClick={cancelSignIn} disabled={busy}>
             <ion-icon name="close"></ion-icon> Cancel
           </button>
         </div>
       )}
 
-      {/* Credentials form */}
-      <form onSubmit={saveSettings} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:18, marginBottom:32}}>
-        <div>
-          <label style={labelStyle}>Client ID</label>
-          <input style={inputStyle} type="text"
-                 placeholder="123456789-abc...apps.googleusercontent.com"
-                 value={clientId} onChange={(e) => setClientId(e.target.value)} />
-        </div>
-        <div>
-          <label style={labelStyle}>Client Secret {yt.clientSecretSet && '(currently set; leave blank to keep)'}</label>
-          <input style={inputStyle} type="password"
-                 placeholder={yt.clientSecretSet ? '••••••••' : 'GOCSPX-…'}
-                 value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
-        </div>
-        <div>
-          <button type="submit" className="tv-btn primary" disabled={busy}>
-            <ion-icon name="save-outline"></ion-icon>
-            Save credentials
-          </button>
-        </div>
-      </form>
-
-      {/* Sign-in actions */}
-      {yt.configured && !yt.signedIn && !yt.pending && (
+      {/* Primary action */}
+      {!yt.signedIn && !yt.pending && yt.canSignIn && (
         <button className="tv-btn primary" onClick={startSignIn} disabled={busy}>
           <ion-icon name="log-in-outline"></ion-icon>
           {busy ? 'Starting…' : 'Sign in to YouTube'}
         </button>
+      )}
+      {!yt.signedIn && !yt.pending && !yt.canSignIn && (
+        <div style={{padding:'12px 14px', background:'rgba(255,255,255,0.04)',
+                     border:'1px solid rgba(255,255,255,0.08)', borderRadius:8,
+                     color:'rgba(255,255,255,0.6)', fontSize:13, maxWidth:600}}>
+          Sign-in is not available in this build. Rebuild Playbill with valid OAuth credentials in <code>.env</code>.
+        </div>
       )}
       {yt.signedIn && (
         <button className="tv-btn" onClick={signOut} disabled={busy}
@@ -782,6 +745,170 @@ function YoutubeScreen({ ctrlState }) {
           <ion-icon name="log-out-outline"></ion-icon> Sign Out
         </button>
       )}
+    </div>
+  );
+}
+
+// ─── Library settings: OMDb metadata API key + library root path ─────
+//
+// The OMDb key is optional — without it the DVD-rip flow falls back to
+// manual title entry. With it, an inserted disc gets a poster + plot +
+// IMDb rating auto-filled into the rip prompt.
+//
+// State lives on state.dvd.omdbApiKeySet (boolean). The key itself is
+// never returned over IPC; the user re-pastes it to rotate. Same pattern
+// as the Headwaters API key screen.
+
+function LibraryScreen({ ctrlState }) {
+  const omdbKeySet = !!(ctrlState && ctrlState.dvd && ctrlState.dvd.omdbApiKeySet);
+
+  const [key, setKey]     = useState('');
+  const [busy, setBusy]   = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [result, setResult] = useState(null);   // {ok, kind?, message?}
+  const [fieldErr, setFieldErr] = useState(null);
+
+  const sectionHdr = { font:'600 11px var(--font-sans)', letterSpacing:2,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.45)',
+                       margin:'0 0 14px' };
+  const labelStyle = { display:'block', fontSize:12, letterSpacing:1,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.6)',
+                       marginBottom:6 };
+  const inputStyle = { width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
+                       border:'1px solid rgba(255,255,255,0.1)', borderRadius:8,
+                       color:'#fff', font:'14px var(--font-sans)' };
+
+  function validateKey(v) {
+    const t = (v || '').trim();
+    if (!t) return 'Paste your OMDb API key.';
+    // OMDb keys are 8 hex characters. Reject obvious mistakes early so
+    // the user fixes typos here instead of waiting for a 401 from OMDb.
+    if (!/^[a-f0-9]{6,16}$/i.test(t)) return 'OMDb keys are 8 hex characters (request one at omdbapi.com/apikey.aspx).';
+    return null;
+  }
+
+  async function saveKey(e) {
+    if (e) e.preventDefault();
+    setResult(null); setSaved(false);
+    const err = validateKey(key);
+    setFieldErr(err);
+    if (err) return;
+    setBusy(true);
+    try {
+      // Validate BEFORE persisting — a typo'd key shouldn't get saved.
+      const v = await window.playbill.controller.command({
+        action: 'dvd.validateOmdbKey',
+        value:  { apiKey: key.trim() },
+      });
+      if (!v.ok) { setResult({ ok: false, kind: v.kind || 'unknown', message: v.error }); return; }
+      await window.playbill.controller.command({
+        action: 'dvd.setOmdbKey',
+        value:  { apiKey: key.trim() },
+      });
+      setKey('');
+      setSaved(true);
+    } catch (e) {
+      setResult({ ok: false, kind: 'unknown', message: String(e.message || e) });
+    } finally { setBusy(false); }
+  }
+
+  async function clearKey() {
+    if (!confirm('Remove the stored OMDb API key? Future disc inserts will fall back to manual title entry.')) return;
+    setBusy(true); setResult(null); setSaved(false);
+    try {
+      await window.playbill.controller.command({ action: 'dvd.setOmdbKey', value: { apiKey: '' } });
+    } catch (e) {
+      setResult({ ok: false, kind: 'unknown', message: String(e.message || e) });
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{padding:'40px 60px', maxWidth:900}}>
+      <h1 style={{margin:'0 0 8px', font:'700 32px var(--font-sans)', letterSpacing:-1}}>Library</h1>
+      <p style={{color:'rgba(255,255,255,0.6)', fontSize:14, marginBottom:32, maxWidth:680}}>
+        Settings for the offline media library &mdash; movies and TV ripped from inserted DVDs.
+      </p>
+
+      <section style={{marginBottom:32}}>
+        <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:14}}>
+          <h2 style={{...sectionHdr, margin:0}}>OMDb API key</h2>
+          {omdbKeySet && (
+            <div style={{display:'inline-flex', alignItems:'center', gap:8, padding:'4px 12px',
+                         borderRadius:9999, background:'rgba(82,164,65,0.1)',
+                         border:'1px solid rgba(82,164,65,0.3)', color:'#52a441',
+                         fontSize:11, letterSpacing:0.5, textTransform:'uppercase'}}>
+              <span style={{width:6, height:6, borderRadius:'50%', background:'#52a441',
+                            boxShadow:'0 0 8px #52a44180'}}></span>
+              Key stored
+            </div>
+          )}
+        </div>
+        <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:18, maxWidth:680}}>
+          When you insert a DVD, Playbill can look up the title's poster, year, runtime, plot,
+          and IMDb rating from <a href="https://www.omdbapi.com/" target="_blank" rel="noreferrer"
+            style={{color:'#52a441'}}>OMDb</a> so you don't have to type it. The free tier is 1000
+          lookups/day &mdash; plenty for a personal library. Without a key the rip flow still works;
+          you just enter the title and year by hand. Stored at file mode 0600 alongside the
+          Headwaters API key; never returned over IPC after saving.
+        </p>
+        <p style={{color:'rgba(255,255,255,0.4)', fontSize:12, marginBottom:18}}>
+          Request a free key: <a href="https://www.omdbapi.com/apikey.aspx" target="_blank" rel="noreferrer"
+            style={{color:'#52a441'}}>omdbapi.com/apikey.aspx</a> &mdash; takes about a minute, key arrives by email.
+        </p>
+
+        {result && !result.ok && (
+          <div style={{marginBottom:14}}>
+            <ErrorAlert kind={result.kind} title="OMDb key validation failed" message={result.message} />
+          </div>
+        )}
+        {saved && (
+          <div style={{marginBottom:14}}>
+            <SuccessAlert title="OMDb key saved." message="Future disc inserts will auto-fill metadata." />
+          </div>
+        )}
+
+        <form onSubmit={saveKey} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:14}} noValidate>
+          <div>
+            <label style={labelStyle}>API key {omdbKeySet && '(currently set; paste again to rotate)'}</label>
+            <input style={{...inputStyle,
+                            border: `1px solid ${fieldErr ? 'rgba(255,84,83,0.6)' : 'rgba(255,255,255,0.1)'}`}}
+                   type="password"
+                   placeholder={omdbKeySet ? '••••••••' : '8-character hex key'}
+                   value={key} onChange={(e) => { setKey(e.target.value); setFieldErr(null); }}
+                   autoComplete="off" spellCheck="false" />
+            <FieldError>{fieldErr}</FieldError>
+          </div>
+          <div style={{display:'flex', gap:12}}>
+            <button type="submit" className="tv-btn primary" disabled={busy || !key.trim()}>
+              <ion-icon name="save-outline"></ion-icon>
+              {busy ? 'Validating…' : 'Save key'}
+            </button>
+            {omdbKeySet && (
+              <button type="button" className="tv-btn" onClick={clearKey} disabled={busy}
+                      style={{background:'rgba(255,84,83,0.1)', color:'#ff5453'}}>
+                <ion-icon name="trash-outline"></ion-icon> Remove key
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+
+      <section style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+        <h2 style={sectionHdr}>Library location</h2>
+        <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:14, maxWidth:680}}>
+          Ripped titles are written to:
+        </p>
+        <code style={{display:'block', padding:'12px 14px', background:'rgba(255,255,255,0.03)',
+                       border:'1px dashed rgba(255,255,255,0.1)', borderRadius:8,
+                       color:'rgba(255,255,255,0.7)', fontSize:13, maxWidth:600}}>
+          ~/Videos/Playbill Library/&#123;Movies,Shows&#125;/&lt;Title&gt;/&lt;Title&gt;.mkv
+        </code>
+        <p style={{color:'rgba(255,255,255,0.4)', fontSize:12, marginTop:10, maxWidth:680}}>
+          Each title is a folder with a <code style={{color:'rgba(255,255,255,0.6)'}}>.mkv</code> and a
+          metadata <code style={{color:'rgba(255,255,255,0.6)'}}>.json</code> sidecar. Move, back up,
+          or delete files directly &mdash; the library refreshes the next time you open it.
+        </p>
+      </section>
     </div>
   );
 }

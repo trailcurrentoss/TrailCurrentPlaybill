@@ -34,12 +34,19 @@ const transportHandlers = require('./handlers/transport');
 const youtubeHandlers    = require('./handlers/youtube');
 const headwatersHandlers = require('./handlers/headwaters');
 const navHandlers        = require('./handlers/nav');
+const castHandlers       = require('./handlers/cast');
+const netflixHandlers    = require('./handlers/netflix');
+const dvdHandlers        = require('./handlers/dvd');
 const radioService      = require('./services/radio');
 const volumeService     = require('./services/volume');
 const guiService        = require('./services/gui');
 const livetvService     = require('./services/livetv');
 const playerService     = require('./services/player');
+const uxplayService     = require('./sources/cast/uxplay');
+const netflixBrowser    = require('./sources/netflix/browser');
 const youtubeSource     = require('./sources/youtube');
+const castSource        = require('./sources/cast');
+const netflixSource     = require('./sources/netflix');
 const CanBridge         = require('./can/bridge');
 const MdnsAdvertiser    = require('./onboarding/mdns');
 const ClaimServer       = require('./onboarding/claim-server');
@@ -137,6 +144,9 @@ async function main() {
     gui:   { running: false, openedAt: null, closedAt: null },
     youtube: null,      // populated by youtubeHandlers.register's initial refreshState
     headwaters: null,   // populated by headwatersHandlers.register's initial load
+    cast: null,         // populated by castHandlers.register's initial publish()
+    netflix: null,      // populated by netflixHandlers.register's initial publish()
+    dvd:  null,         // populated by dvdHandlers.register's initial state.patch
     ui: null,
   });
 
@@ -170,9 +180,11 @@ async function main() {
   livetvHandlers.register({ bus, state });
   deviceHandlers.register({ bus, state, settings });
   transportHandlers.register({ bus, state });
-  sourceHandlers.register({ bus, state, sources: [youtubeSource] });
+  sourceHandlers.register({ bus, state, sources: [youtubeSource, castSource, netflixSource] });
   youtubeHandlers.register({ bus, state });
   headwatersHandlers.register({ bus, state });
+  castHandlers.register({ bus, state, settings });
+  netflixHandlers.register({ bus, state });
   // systemHandlers wants `ipc` so system.focus can publish a focus-request
   // event to the Electron main process — registered after ipc is created
   // (below) alongside navHandlers.
@@ -203,6 +215,11 @@ async function main() {
   // GUI connects still hits the bus (and no-ops on the fan-out).
   navHandlers.register({ bus, state, ipc });
   systemHandlers.register({ bus, ipc });
+  // DVD detector publishes a one-shot 'dvd.detected' IPC event when a
+  // disc spins up, so the Electron main process can pop a desktop
+  // Notification. Registered AFTER ipc is created so the watcher's
+  // event handlers can reach publishEvent().
+  dvdHandlers.register({ bus, state, ipc });
 
   const sockPath = await ipc.start();
 
@@ -310,6 +327,9 @@ async function main() {
     try { await radioService.stop(); } catch (e) { console.error('[shutdown] radio:', e); }
     try { await livetvService.stopAll(); } catch (e) { console.error('[shutdown] livetv:', e); }
     try { await playerService.stop(); } catch (e) { console.error('[shutdown] player:', e); }
+    try { await uxplayService.stop(); } catch (e) { console.error('[shutdown] uxplay:', e); }
+    try { await netflixBrowser.stop(); } catch (e) { console.error('[shutdown] netflix:', e); }
+    try { require('./services/dvd-ripper').cancel(); } catch (e) { console.error('[shutdown] dvd:', e); }
     try { await mdns.stop(); }   catch (e) { console.error('[shutdown] mdns:', e); }
     try { await claim.stop(); }  catch (e) { console.error('[shutdown] claim:', e); }
     try { await mqtt.stop(); } catch (e) { console.error('[shutdown] mqtt:', e); }
@@ -374,6 +394,23 @@ function installStateToMqttFanout({ state, mqtt }) {
       // Other clients (PWA, Milepost, future CAN listener) consume this so
       // their UI shows the right view when a different device flips modes.
       case 'source':    publish('source',    { source: cur.source || null, ts: Date.now() }); break;
+      // 'youtube' carries the YouTube source-plugin's status:
+      // {configured, signedIn, account, pending}. PWAs / GUIs render the
+      // sign-in device code from pending.user_code + pending.verification_url
+      // and the post-sign-in account from account.title. Edge-triggered —
+      // republishes only when state.youtube changes (sign-in poll progress,
+      // settings save, sign-out).
+      case 'youtube':   publish('youtube',   cur.youtube || null); break;
+      // 'cast' carries AirPlay receiver state: {running,state,clientName,...}.
+      // Lets PWAs show "Phone connected" without their own UxPlay observer.
+      case 'cast':      publish('cast',      cur.cast    || null); break;
+      // 'netflix' carries the Chrome kiosk state: {running,startedAt,lastError}.
+      // Lets a PWA show "Netflix open" or surface a launch error live.
+      case 'netflix':   publish('netflix',   cur.netflix || null); break;
+      // 'dvd' carries the optical-disc slice: {present,label,prompt,status,ripping}.
+      // Useful for the PWA to mirror the rip prompt and let a phone-side
+      // user dismiss / start ripping without walking to the rig.
+      case 'dvd':       publish('dvd',       cur.dvd     || null); break;
     }
   }
 
@@ -389,6 +426,10 @@ function installStateToMqttFanout({ state, mqtt }) {
     // patch.source uses `in patch` rather than !== undefined because we
     // explicitly set source:null on stop and that needs to publish too.
     if ('source' in patch)              publishFeature('source',    cur);
+    if (patch.youtube !== undefined)    publishFeature('youtube',   cur);
+    if (patch.cast !== undefined)       publishFeature('cast',      cur);
+    if (patch.netflix !== undefined)    publishFeature('netflix',   cur);
+    if (patch.dvd !== undefined)        publishFeature('dvd',       cur);
   });
 
   // Republish every feature whenever the broker (re)connects. Handles two
@@ -402,6 +443,10 @@ function installStateToMqttFanout({ state, mqtt }) {
       if (cur.nowPlaying !== undefined) publishFeature('transport', cur);
       if (cur.radio      !== undefined) publishFeature('radio',     cur);
       if (cur.livetv     !== undefined) publishFeature('livetv',    cur);
+      if (cur.youtube    !== undefined) publishFeature('youtube',   cur);
+      if (cur.cast       !== undefined) publishFeature('cast',      cur);
+      if (cur.netflix    !== undefined) publishFeature('netflix',   cur);
+      if (cur.dvd        !== undefined) publishFeature('dvd',       cur);
       if (cur.audio      !== undefined) publishFeature('volume',    cur);
       publishFeature('source', cur);   // always; null is a meaningful value
     });

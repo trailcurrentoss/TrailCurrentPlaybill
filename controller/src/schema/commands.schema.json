@@ -73,7 +73,26 @@
     { "$ref": "#/$defs/HeadwatersGetSettings" },
     { "$ref": "#/$defs/HeadwatersSetSettings" },
     { "$ref": "#/$defs/HeadwatersClear" },
-    { "$ref": "#/$defs/HeadwatersValidateApiKey" }
+    { "$ref": "#/$defs/HeadwatersValidateApiKey" },
+
+    { "$ref": "#/$defs/CastStart" },
+    { "$ref": "#/$defs/CastStop" },
+    { "$ref": "#/$defs/CastGetStatus" },
+
+    { "$ref": "#/$defs/NetflixStart" },
+    { "$ref": "#/$defs/NetflixStop" },
+    { "$ref": "#/$defs/NetflixGetStatus" },
+
+    { "$ref": "#/$defs/DvdGetStatus" },
+    { "$ref": "#/$defs/DvdRefreshStatus" },
+    { "$ref": "#/$defs/DvdLookup" },
+    { "$ref": "#/$defs/DvdDismiss" },
+    { "$ref": "#/$defs/DvdStartRip" },
+    { "$ref": "#/$defs/DvdCancelRip" },
+    { "$ref": "#/$defs/DvdEject" },
+    { "$ref": "#/$defs/DvdLibraryList" },
+    { "$ref": "#/$defs/DvdSetOmdbKey" },
+    { "$ref": "#/$defs/DvdValidateOmdbKey" }
   ],
 
   "$defs": {
@@ -155,7 +174,7 @@
         "value": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["brokerUrl", "username", "password"],
+          "required": ["username", "password"],
           "properties": {
             "brokerUrl": { "type": "string", "format": "uri" },
             "username":  { "type": "string", "minLength": 1 },
@@ -522,9 +541,47 @@
       "type": "object", "additionalProperties": false, "required": ["action", "sourceId"],
       "properties": {
         "action":     { "const": "source.launch" },
-        "sourceId":   { "enum": ["youtube", "livetv", "radio", "local", "plex", "spotify", "netflix"] },
+        "sourceId":   { "enum": ["youtube", "livetv", "radio", "local", "plex", "spotify", "netflix", "cast"] },
         "subScreen":  { "enum": ["default", "signin", "settings", "search"], "default": "default" }
       }
+    },
+
+    "CastStart": {
+      "x-class": "B",
+      "description": "Start the AirPlay receiver (UxPlay). Idempotent — calling while already running returns the current status. The receiver advertises itself on the LAN as the device's display name (Settings → Device → Name).",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "cast.start" } }
+    },
+    "CastStop": {
+      "x-class": "B",
+      "description": "Stop the AirPlay receiver. SIGTERM with a 600ms grace then SIGKILL. Idempotent.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "cast.stop" } }
+    },
+    "CastGetStatus": {
+      "x-class": "B",
+      "description": "Returns the current receiver state: {running,state,clientName,startedAt}. state is one of 'idle'|'waiting'|'connected'|'streaming'.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "cast.getStatus" } }
+    },
+
+    "NetflixStart": {
+      "x-class": "B",
+      "description": "Launch the Netflix kiosk browser (Google Chrome --app=https://www.netflix.com). Idempotent — calling while already running returns the current status. Cookies persist in a dedicated user-data-dir so sign-in survives reboots.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "netflix.start" } }
+    },
+    "NetflixStop": {
+      "x-class": "B",
+      "description": "Stop the Netflix kiosk browser. SIGTERM with a 600ms grace then SIGKILL. Idempotent.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "netflix.stop" } }
+    },
+    "NetflixGetStatus": {
+      "x-class": "B",
+      "description": "Returns {running, startedAt, lastError}.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "netflix.getStatus" } }
     },
     "SourceList": {
       "x-class": "B",
@@ -553,6 +610,112 @@
         "sourceId": { "type": "string" },
         "query":    { "type": "string", "minLength": 1 },
         "limit":    { "type": "integer", "minimum": 1, "maximum": 200 }
+      }
+    },
+
+    "DvdGetStatus": {
+      "x-class": "B",
+      "description": "Snapshot of the optical-disc slice: present?, label, prompt, ripping progress.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "dvd.getStatus" } }
+    },
+    "DvdRefreshStatus": {
+      "x-class": "B",
+      "description": "Force a watcher probe right now. Useful when the user clicks 'Check for disc' in the GUI for a disc that was already loaded at boot.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "dvd.refreshStatus" } }
+    },
+    "DvdLookup": {
+      "x-class": "B",
+      "description": "Online metadata lookup. Returns null if no API key is configured or no match was found; the GUI then falls back to manual entry.",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "dvd.lookup" },
+        "value": {
+          "type": "object", "additionalProperties": false, "required": ["title"],
+          "properties": {
+            "title": { "type": "string", "minLength": 1 },
+            "year":  { "type": "string", "pattern": "^(19|20)\\d{2}$" }
+          }
+        }
+      }
+    },
+    "DvdDismiss": {
+      "x-class": "B",
+      "description": "User clicked 'Not now' on the prompt. Suppresses re-prompting until the disc is ejected.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "dvd.dismiss" } }
+    },
+    "DvdStartRip": {
+      "x-class": "B",
+      "description": "Begin ripping the inserted disc to the local Playbill Library. Fire-and-forget — progress arrives via state.dvd.ripping patches.",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "dvd.startRip" },
+        "value": {
+          "type": "object", "additionalProperties": false, "required": ["metadata"],
+          "properties": {
+            "metadata": {
+              "type": "object", "additionalProperties": true, "required": ["title"],
+              "properties": {
+                "title":     { "type": "string", "minLength": 1 },
+                "year":      { "type": "string" },
+                "kind":      { "enum": ["movie", "show"] },
+                "show":      { "type": "string" },
+                "season":    { "type": "integer", "minimum": 1 },
+                "episode":   { "type": "integer", "minimum": 1 },
+                "plot":      { "type": "string" },
+                "posterUrl": { "type": "string" },
+                "rating":    { "type": "string" },
+                "runtime":   { "type": "string" },
+                "imdbId":    { "type": "string" },
+                "source":    { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "DvdCancelRip": {
+      "x-class": "B",
+      "description": "SIGTERM the in-flight HandBrakeCLI. Leaves a partial .mkv on disk; the library scanner filters out files without a sidecar so it doesn't appear in the library.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "dvd.cancelRip" } }
+    },
+    "DvdEject": {
+      "x-class": "B",
+      "description": "eject(1) the optical drive. Fires after rip completion if the user opts in via the GUI.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "dvd.eject" } }
+    },
+    "DvdLibraryList": {
+      "x-class": "B",
+      "description": "Return the on-disk library — { movies: [...], shows: [...] }. Scanned every call (cheap; folder-per-title layout).",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "dvd.libraryList" } }
+    },
+    "DvdSetOmdbKey": {
+      "x-class": "B",
+      "description": "Persist the user's OMDb API key (https://www.omdbapi.com). Free tier is 1000 lookups/day — plenty for a personal library. Empty value clears.",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "dvd.setOmdbKey" },
+        "value": {
+          "type": "object", "additionalProperties": false,
+          "properties": { "apiKey": { "type": "string" } }
+        }
+      }
+    },
+    "DvdValidateOmdbKey": {
+      "x-class": "B",
+      "description": "Validate an OMDb API key (or whichever key is currently stored if 'value' is omitted) by doing a no-op lookup. Used by Settings → Library before persisting.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "dvd.validateOmdbKey" },
+        "value": {
+          "type": "object", "additionalProperties": false,
+          "properties": { "apiKey": { "type": "string" } }
+        }
       }
     }
   }

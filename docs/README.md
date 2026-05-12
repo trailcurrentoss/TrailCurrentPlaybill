@@ -45,7 +45,9 @@ TrailCurrentPlaybill/
 ├── docs/                   This directory
 │   ├── README.md           ← you are here
 │   ├── SETUP.md            Operator guide: build → flash → first boot
-│   └── KERNEL_UPDATE_POLICY.md   Why we hold kernel + Mesa + linux-firmware
+│   ├── KERNEL_UPDATE_POLICY.md   Why we hold kernel + Mesa + linux-firmware
+│   ├── RADXA_LESSONS_LEARNED.md  Q6A-specific gotchas (boot, audio, video, AirPlay)
+│   └── app/                Per-feature docs (Live TV, Radio, Cast, architecture, onboarding)
 └── STAGE1_PLAN.md          The Stage-1 plan in full
 ```
 
@@ -120,6 +122,9 @@ These are known and accepted; do not file as bugs or attempt to fix.
 
 - **First boot a fresh image:** [SETUP.md](SETUP.md)
 - **Why kernel updates are pinned:** [KERNEL_UPDATE_POLICY.md](KERNEL_UPDATE_POLICY.md)
+- **Per-screen feature docs:** [app/README.md](app/README.md) — Live TV, Radio, Cast, plus the architecture walkthrough
+- **Cast from an iPhone (AirPlay):** [app/cast.md](app/cast.md)
+- **Q6A-specific things that bit us:** [RADXA_LESSONS_LEARNED.md](RADXA_LESSONS_LEARNED.md) — boot chain, audio fabric, video decode, AirPlay receiver
 - **Why this scaffolding is the way it is:** [STAGE1_PLAN.md](../STAGE1_PLAN.md)
 - **The 26 image-build hooks:** [rootfs.jsonnet](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet)
 - **The patched embloader story:** [build-embloader.sh](../image/embloader/build-embloader.sh) + [the patch](../image/embloader/patches/0001-playbill-autoboot-on-timeout-zero.patch)

@@ -85,3 +85,16 @@ branding/_candidates/
 branding/_drafts/
 branding/_working/
 *.bak
+
+# =============================================================================
+# Local-only secrets (never commit)
+# .env carries OAuth credentials that get baked into the build by
+# build-tools/embed-yt-credentials.js. Both the source .env and the
+# generated default-client.local.js sit in .gitignore.
+# =============================================================================
+.env
+.env.local
+.env.*.local
+google_client_secret*.json
+credentials
+controller/src/sources/youtube/default-client.local.js

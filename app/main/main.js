@@ -3,7 +3,7 @@
    normal application launched from the GNOME dock that the user can quit,
    minimize, or alt-tab away from at any time. */
 
-const { app, BrowserWindow, screen, nativeTheme, ipcMain, globalShortcut, Menu } = require('electron');
+const { app, BrowserWindow, screen, nativeTheme, ipcMain, globalShortcut, Menu, Notification } = require('electron');
 const path = require('path');
 
 const ControllerClient = require('./ipc-client');
@@ -105,15 +105,54 @@ function broadcastControllerEvent(channel, payload) {
 // (and in addition to) the renderer broadcast so things that can ONLY
 // happen here (raising our own BrowserWindow under Wayland) still work
 // when the renderer is unfocused, minimized, or behind another app.
+function raiseOwnWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  } catch (e) { console.warn('[main] raise failed:', e && e.message); }
+}
+
 function handleControllerEvent(channel, payload) {
-  if (channel === 'system.focus' && mainWindow && !mainWindow.isDestroyed()) {
+  if (channel === 'system.focus') {
     // Remote/CAN Power → raise our own window. Wayland blocks third-party
     // raise, but Electron is allowed to raise its OWN window.
-    try {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    } catch (e) { console.warn('[main] system.focus raise failed:', e && e.message); }
+    raiseOwnWindow();
+  } else if (channel === 'dvd.detected') {
+    // A disc just spun up. Pop a libnotify-backed desktop Notification.
+    // The body line is the suggested title we got from the volume label;
+    // clicking the notification raises the Playbill window so the renderer
+    // (which subscribes to state.dvd) can present the confirm/rip modal.
+    //
+    // Using Electron's Notification rather than `notify-send` because:
+    //   • notification still appears even if libnotify-bin isn't installed
+    //     (Electron bundles its own libnotify shim)
+    //   • we can call raiseOwnWindow() on click without spawning a child
+    //     process + parsing its exit code
+    //   • the icon is the bundled app icon — branding is consistent with
+    //     the rest of the Playbill UX
+    if (Notification && Notification.isSupported && Notification.isSupported()) {
+      const suggested = (payload && payload.suggestedTitle) || (payload && payload.label) || 'New disc';
+      const n = new Notification({
+        title: 'Disc detected — add to your library?',
+        body:  `"${suggested}" is in the drive. Click to confirm, look up details, and rip.`,
+        icon:  path.join(__dirname, '..', 'packaging', 'icons', '512x512.png'),
+        urgency: 'normal',
+        silent: false,
+      });
+      n.on('click', () => {
+        raiseOwnWindow();
+        // The renderer reads state.dvd.prompt to decide whether to show
+        // the modal. The disc state was already patched before the event
+        // fired, so the modal will be there waiting when we raise.
+      });
+      n.show();
+    } else {
+      // No notification daemon — still raise the window so the user sees
+      // the in-app prompt overlay.
+      raiseOwnWindow();
+    }
   }
   broadcastControllerEvent(channel, payload);
 }

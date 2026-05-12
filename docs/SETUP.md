@@ -148,6 +148,17 @@ Common failure: WCD938x codec doesn't appear in `aplay -l`. This is a known Qual
 3. Sidebar → **Radio**. Use the **FM/AM** toggle, the dial (← / → step, **Enter** tunes), and the 10 preset slots.
 4. The app spawns `rtl_fm | pw-cat` — demodulated PCM goes straight into PipeWire's default sink. Click an empty preset slot to save the current frequency to it.
 
+### Cast — AirPlay screen mirroring from an iPhone or iPad
+
+1. Phone and Playbill must be on the same WiFi network.
+2. Sidebar / apps row → **Cast** (green tile, phone glyph).
+3. The cast screen shows the receiver name and a "Ready · waiting for a device" pill.
+4. On the iPhone: Control Center → **Screen Mirroring** → select the receiver name.
+5. The phone's display fullscreens on the TV via UxPlay 1.73.6 (built from source by image hook 3c).
+6. Press **Back** on the remote (or `Escape`) to stop the receiver and return to the cast screen.
+
+DRM-protected video (Netflix, Disney+, HBO Max, Apple TV+) mirrors as a black frame — that's an iOS-side restriction Apple enforces on non-Apple receivers, not a Playbill bug. Use the Roku or Apple TV in the rig for those services. Full details + troubleshooting: [app/cast.md](app/cast.md).
+
 ## Step 8 — Verify the GPU + 4K hardware video decode
 
 The Q6A's Adreno 643 GPU runs through Mesa Turnip (Vulkan) and freedreno (GL). Hardware video decode goes through the in-kernel `venus` driver as a V4L2 stateful codec on `/dev/videoN`.

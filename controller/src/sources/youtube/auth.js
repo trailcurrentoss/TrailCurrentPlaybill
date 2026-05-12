@@ -39,6 +39,7 @@ const SettingsStore = require('../../settings');
 const {
   sourceSettings, sourceTokens, sourceDir,
 } = require('../../paths');
+const defaultClient = require('./default-client');
 
 const DEVICE_CODE_URL = 'https://oauth2.googleapis.com/device/code';
 const TOKEN_URL       = 'https://oauth2.googleapis.com/token';
@@ -104,11 +105,14 @@ async function _ensureStores() {
 }
 
 function _creds() {
+  // Per-user override wins (kept for admin tooling), then fall back to the
+  // OAuth client baked into the build at <repo>/.env time. Renderer never
+  // sees either set of values.
   const c = credsStore && credsStore.get();
-  if (!c || !c.clientId || !c.clientSecret) {
-    throw new Error('YouTube OAuth not configured: enter clientId + clientSecret in Settings → YouTube');
-  }
-  return c;
+  if (c && c.clientId && c.clientSecret) return c;
+  const d = defaultClient.getDefaultClient();
+  if (d) return d;
+  throw new Error('YouTube OAuth not configured: the build is missing default-client.local.js (run `npm run embed-creds` with a valid .env)');
 }
 
 // ── Device flow ───────────────────────────────────────────────────────
@@ -133,10 +137,14 @@ async function start() {
   }
 
   const expires_at = Date.now() + (j.expires_in || 1800) * 1000;
+  // Google returns `https://www.google.com/device`, but the YouTube-branded
+  // `https://www.youtube.com/activate` page accepts the same code and is the
+  // URL consumer TVs use. Override here so the on-screen text matches what
+  // users expect from Roku/Apple TV/etc.
   pending = {
     device_code:      j.device_code,
     user_code:        j.user_code,
-    verification_url: j.verification_url || j.verification_uri || 'https://www.google.com/device',
+    verification_url: 'https://www.youtube.com/activate',
     expires_at,
     interval:         (j.interval || 5) * 1000,
   };
@@ -281,11 +289,15 @@ async function signOut() {
 async function getSettings() {
   await _ensureStores();
   const c = credsStore.get() || {};
+  const haveDefault = defaultClient.hasDefaultClient();
+  // Never return any clientId / clientSecret value over IPC. The renderer
+  // only needs to know whether sign-in is wired (haveDefault || user creds)
+  // so it can decide whether to enable the Sign In button.
   return {
     clientIdSet:     !!c.clientId,
     clientSecretSet: !!c.clientSecret,
-    // Never return secret values over IPC — only existence flags.
-    clientId:        c.clientId || '',
+    defaultClient:   haveDefault,
+    canSignIn:       haveDefault || (!!c.clientId && !!c.clientSecret),
   };
 }
 

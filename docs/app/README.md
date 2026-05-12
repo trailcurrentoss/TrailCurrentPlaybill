@@ -11,7 +11,13 @@ Playbill is the in-rig entertainment app for the TrailCurrent Linux desktop. It'
 | [README.md](./README.md) | This file — overview, screen index, keyboard reference, planned AppImage migration |
 | [live-tv.md](./live-tv.md) | Live TV from the Hauppauge WinTV-dualHD (ATSC) |
 | [radio.md](./radio.md) | AM / FM radio from the RTL-SDR USB dongle |
+| [cast.md](./cast.md) | AirPlay screen mirroring from an iPhone or iPad (stopgap for streaming-service content) |
+| [dvd.md](./dvd.md) | Insert a DVD → desktop notification → rip to library. User-facing walkthrough. |
+| [dvd-rip-internals.md](./dvd-rip-internals.md) | Internals — watcher, ripper, metadata lookup, library scanner. |
+| [dvd-data.md](./dvd-data.md) | Command bus actions, state shape, MQTT topics, on-disk layout for the DVD pipeline. |
 | [architecture.md](./architecture.md) | For developers — service modules, IPC surface, future remote control / restream hooks |
+| [onboarding.md](./onboarding.md) | First-boot pairing flow (mDNS + claim server) for the Headwaters PWA |
+| [dbc-additions.md](./dbc-additions.md) | CAN message definitions Playbill adds to the rig's DBC |
 | [images/](./images/) | Screenshots referenced by these docs. See [images/README.md](./images/README.md) for capture instructions. |
 
 ## Screens
@@ -24,7 +30,8 @@ Sidebar nav order, top to bottom:
 | **Apps** | Placeholder | Grid of streaming-service launchers (Netflix, YouTube, Spotify, etc.). Tiles render but don't launch external apps yet. |
 | **Live TV** | **Functional** | OTA antenna TV via the Hauppauge WinTV-dualHD. Channel scan, tile-grid channel picker, hardware-decoded fullscreen playback via mpv. See [live-tv.md](./live-tv.md). |
 | **Radio** | **Functional** | AM / FM radio via the RTL-SDR dongle. Band selector, dial, 10 persistent presets. See [radio.md](./radio.md). |
-| **Library** | Placeholder | Local media library (Headwaters NAS). Filter chips + poster grid scaffolded; no real media yet. |
+| **Cast** | **Functional** | AirPlay screen mirroring from an iPhone or iPad. Software H.264 decode → fullscreen Wayland surface. DRM-protected services (Netflix etc.) show black per iOS policy. See [cast.md](./cast.md). |
+| **Library** | **Partial** | Local media library. Poster grid shows DVDs ripped via the [DVD-to-library flow](./dvd.md); Headwaters NAS sync lands in a later stage. |
 | **Rig View** | Placeholder | Exterior + cabin camera feeds. Tile layout exists; no real feeds wired. |
 | Search | Placeholder | Sidebar entry only. |
 | Settings | Placeholder | Sidebar entry only. |
@@ -55,6 +62,7 @@ Per-screen extras (e.g. **B** to swap FM/AM bands inside the Radio dial) are doc
 | `~/.config/trailcurrent-playbill/radio-presets.json` | Saved AM/FM preset slots. |
 | `/tmp/playbill-runtime/tunerN.ts` | Live MPEG-TS capture from the active tuner. mpv reads from here while watching. |
 | `/tmp/playbill-runtime/mpv.sock` | mpv's JSON IPC socket while a video is playing — used by Playbill for stop / volume / mute. |
+| `~/Videos/Playbill Library/{Movies,Shows}/<Title>/` | DVD rips. One folder per title containing the `.mkv` + a `.json` sidecar. See [dvd-data.md](./dvd-data.md) for the layout. |
 
 Deleting `~/.config/trailcurrent-playbill/` resets the app to a fresh state (next launch will re-prompt for a channel scan and start with empty radio presets).
 

@@ -165,12 +165,14 @@ function TVApp() {
     setFocus(initialFocusFor('home'));
     setSideNav({ focused: false, hovered: false });
   };
-  // Helper: Back — exits the current screen to its parent. Settings/YouTube
-  // sit under Apps; everything else returns to the home grid.
+  // Helper: Back — exits the current screen to its parent. Settings/YouTube/
+  // Cast all sit under Apps; everything else returns to the home grid.
+  // (Cast doesn't go through transport.stop — the CastView's unmount effect
+  // fires cast.stop on the controller, which kills UxPlay.)
   const goBack = () => {
     stopPlaybackIfRunning();
     const cur = screenRef.current;
-    const parent = (cur === 'settings' || cur === 'youtube') ? 'apps' : 'home';
+    const parent = (cur === 'settings' || cur === 'youtube' || cur === 'cast') ? 'apps' : 'home';
     setScreen(parent);
     setFocus(initialFocusFor(parent));
     setSideNav({ focused: false, hovered: false });
@@ -481,10 +483,12 @@ function TVApp() {
         {screen === 'rig'      && <RigView      focus={focus} />}
         {screen === 'settings' && <SettingsView focus={focus} />}
         {screen === 'youtube'  && <YoutubeView />}
+        {screen === 'cast'     && <CastView />}
       </div>
 
       <NowPlayingBar />
       <RemoteHint />
+      <DvdPrompt />
     </div>
   );
 }

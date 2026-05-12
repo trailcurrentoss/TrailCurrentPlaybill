@@ -41,9 +41,13 @@ function register({ bus, state }) {
 
     state.patch({
       youtube: {
-        configured:    settings.clientIdSet && settings.clientSecretSet,
-        clientIdSet:   settings.clientIdSet,
-        clientSecretSet: settings.clientSecretSet,
+        // canSignIn is the real gate: true iff either the build embedded a
+        // default OAuth client or an admin set per-user credentials via
+        // youtube.setSettings. The renderer reads this to decide whether
+        // the Sign In button is enabled; it never sees the credential
+        // values themselves.
+        canSignIn:     settings.canSignIn,
+        defaultClient: settings.defaultClient,
         signedIn:      auth.isSignedIn(),
         account,
         pending:       auth.pendingState(),

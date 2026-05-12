@@ -37,11 +37,15 @@ function register({ bus, state }) {
   });
 
   bus.register('transport.play', async (cmd) => {
-    // Two shapes: (1) full Playable already resolved by source.resolve;
-    // (2) {sourceId, itemId} — we look up the source, resolve, then play.
-    // Both shapes can carry an `audioUrl` (yt-dlp returns separate video +
-    // audio streams for the bestvideo+bestaudio formats; player.js mixes
-    // them in mpv via --audio-file=).
+    // Three shapes: (1) full Playable already resolved by source.resolve;
+    // (2) {sourceId, itemId} — we look up the source, resolve, then play;
+    // (3) no args — the dedicated Play button on a remote sends this. It
+    // means "resume whatever is paused". If mpv is up, unpause it. If
+    // nothing's playing, return ok:false rather than throwing — the Play
+    // button shouldn't error the bus when there's nothing to resume.
+    // Both URL/sourceId shapes can carry an `audioUrl` (yt-dlp returns
+    // separate video + audio streams for bestvideo+bestaudio; player.js
+    // mixes them in mpv via --audio-file=).
     let playable;
     if (cmd.url) {
       playable = {
@@ -64,7 +68,12 @@ function register({ bus, state }) {
       // duration the resolve didn't have time to fetch.
       if (cmd.metadata) playable.metadata = { ...(playable.metadata || {}), ...cmd.metadata };
     } else {
-      throw new Error('transport.play: need either {url} or {sourceId,itemId}');
+      // Resume-current: bare Play button from a remote.
+      if (player.isPlaying()) {
+        await player.resume();
+        return { ok: true, resumed: true };
+      }
+      return { ok: false, reason: 'nothing-playing' };
     }
 
     // Architecture rule (architecture.md §6): only one source plays at a
@@ -98,8 +107,24 @@ function register({ bus, state }) {
     return player.stop();
   });
   bus.register('transport.toggle',  async () => player.togglePause());
-  bus.register('transport.next',    async () => { /* TODO: queue */ throw new Error('transport.next: not implemented'); });
-  bus.register('transport.previous',async () => { /* TODO: queue */ throw new Error('transport.previous: not implemented'); });
+  // No real queue concept yet — sources today are single-item (one YouTube
+  // video, one livetv stream, one radio station). Until a queue exists,
+  // map the remote's Next / Previous buttons to skip-ahead / instant-replay
+  // semantics so the buttons actually do something useful during playback.
+  // When a queue lands, promote these to track navigation and keep the seek
+  // behavior on a different binding.
+  const SKIP_AHEAD_SEC   =  30;
+  const INSTANT_REPLAY_S = -10;
+  bus.register('transport.next',    async () => {
+    if (!player.isPlaying()) return { ok: false, reason: 'nothing-playing' };
+    await player.seekRelative(SKIP_AHEAD_SEC);
+    return { ok: true, skippedSec: SKIP_AHEAD_SEC };
+  });
+  bus.register('transport.previous',async () => {
+    if (!player.isPlaying()) return { ok: false, reason: 'nothing-playing' };
+    await player.seekRelative(INSTANT_REPLAY_S);
+    return { ok: true, skippedSec: INSTANT_REPLAY_S };
+  });
 
   bus.register('transport.seekRel', async (cmd) => {
     if (typeof cmd.deltaMs !== 'number') throw new Error('transport.seekRel: deltaMs required');

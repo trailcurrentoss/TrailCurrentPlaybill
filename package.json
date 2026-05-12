@@ -7,9 +7,10 @@
     "app"
   ],
   "scripts": {
-    "build": "npm run build --workspace app",
-    "start": "npm run start --workspace app",
-    "dist": "npm run dist --workspace app"
+    "embed-creds": "node build-tools/embed-yt-credentials.js",
+    "build": "npm run embed-creds && npm run build --workspace app",
+    "start": "npm run embed-creds && npm run start --workspace app",
+    "dist": "npm run embed-creds && npm run dist --workspace app"
   },
   "engines": {
     "node": ">=20.0.0"
