@@ -46,4 +46,16 @@ copy(path.join(pkgDir('react-dom'), 'umd/react-dom.development.js'), path.join(V
 // so the lazy-loader can find every icon SVG offline.
 copyTree(path.join(pkgDir('ionicons'), 'dist'), path.join(VENDOR, 'ionicons'));
 
+// MapLibre GL JS — vector-tile map renderer used by the Explore screen.
+// Use the *-csp builds: the regular maplibre-gl.js inlines a Web Worker via
+// `new Worker(URL.createObjectURL(new Blob(...)))` which violates Electron's
+// `script-src 'self'`. The -csp build separates the worker into its own
+// file so we can load it from /vendor/ over file:// with no inline scripts.
+// `setWorkerUrl` in explore.jsx points the runtime at the vendored worker.
+const MAPLIBRE_DIR = path.join(VENDOR, 'maplibre');
+fs.mkdirSync(MAPLIBRE_DIR, { recursive: true });
+copy(path.join(pkgDir('maplibre-gl'), 'dist/maplibre-gl-csp.js'),        path.join(MAPLIBRE_DIR, 'maplibre-gl-csp.js'));
+copy(path.join(pkgDir('maplibre-gl'), 'dist/maplibre-gl-csp-worker.js'), path.join(MAPLIBRE_DIR, 'maplibre-gl-csp-worker.js'));
+copy(path.join(pkgDir('maplibre-gl'), 'dist/maplibre-gl.css'),           path.join(MAPLIBRE_DIR, 'maplibre-gl.css'));
+
 console.log('Done.');

@@ -93,6 +93,11 @@ class MqttBridge {
     this._currentDeviceId = null;     // remember so we can disconnect with the same LWT topic
     this._canInboundHandler = null;   // null or fn(envelope) — set via subscribeCanInbound
     this._connectListeners = [];      // fn[] — fired on every broker connect (initial + reconnect)
+    // Extra subscriptions keyed by topic pattern. Each entry is { pattern, qos, handler }.
+    // Reapplied on every (re)connect. Used by the telemetry handler to mirror
+    // Headwaters MQTT topics (local/energy/status, local/lights/+/status, …)
+    // into state without each consumer reinventing topic plumbing.
+    this._extraSubs = new Map();
   }
 
   /** Register a callback that fires every time the MQTT client successfully
@@ -118,6 +123,36 @@ class MqttBridge {
         if (err) console.error('[mqtt] subscribe can/inbound failed:', err.message);
       });
     }
+  }
+
+  /** Subscribe to an arbitrary topic pattern. Handler is invoked with
+   *  (topic, payload, raw) where payload is JSON-parsed when possible.
+   *  Survives reconnect. Returns an unsubscribe fn. */
+  subscribeTopic(pattern, handler, { qos = 0 } = {}) {
+    if (typeof pattern !== 'string' || !pattern) throw new Error('subscribeTopic: pattern required');
+    if (typeof handler !== 'function') throw new Error('subscribeTopic: handler required');
+    this._extraSubs.set(pattern, { pattern, qos, handler });
+    if (this._client && this._client.connected) {
+      this._client.subscribe(pattern, { qos }, (err) => {
+        if (err) console.error(`[mqtt] subscribe ${pattern} failed:`, err.message);
+      });
+    }
+    return () => {
+      this._extraSubs.delete(pattern);
+      if (this._client && this._client.connected) {
+        this._client.unsubscribe(pattern, (err) => {
+          if (err) console.error(`[mqtt] unsubscribe ${pattern} failed:`, err.message);
+        });
+      }
+    };
+  }
+
+  /** Publish to an arbitrary topic. Returns true if dispatched. */
+  publishTopic(topic, payload, { qos = 0, retain = false } = {}) {
+    if (!this._client || !this._client.connected) return false;
+    const body = (typeof payload === 'string') ? payload : JSON.stringify(payload);
+    this._client.publish(topic, body, { qos, retain });
+    return true;
   }
 
   /** Publish a CAN frame envelope on can/outbound. No-op when offline. */
@@ -234,6 +269,14 @@ class MqttBridge {
           if (err) console.error('[mqtt] subscribe can/inbound failed:', err.message);
         });
       }
+      // Re-apply any extra subscriptions (telemetry handler, etc.). Must be
+      // done on every connect — fresh client = empty subscription list on
+      // the broker side.
+      for (const { pattern, qos } of this._extraSubs.values()) {
+        client.subscribe(pattern, { qos }, (err) => {
+          if (err) console.error(`[mqtt] subscribe ${pattern} failed:`, err.message);
+        });
+      }
       // Announce presence with retain so PWAs that subscribe later see us.
       client.publish(
         lwtTopic,
@@ -281,6 +324,20 @@ class MqttBridge {
       try { await this._canInboundHandler(env); }
       catch (e) { console.error('[mqtt] can/inbound handler failed:', e.message); }
       return;
+    }
+
+    // Route to extra subscribers (telemetry, etc.). Match topic patterns
+    // with single-level '+' and multi-level '#' wildcards, MQTT-style.
+    if (this._extraSubs.size > 0) {
+      for (const entry of this._extraSubs.values()) {
+        if (matchMqttTopic(entry.pattern, topic)) {
+          let payload;
+          const raw = message.toString('utf8');
+          try { payload = JSON.parse(raw); } catch (_) { payload = raw; }
+          try { entry.handler(topic, payload, raw); }
+          catch (e) { console.error(`[mqtt] handler for ${entry.pattern} threw:`, e.message); }
+        }
+      }
     }
 
     // Topic shape: local/playbill/<deviceOrAll>/<feature>/command
@@ -354,7 +411,21 @@ class MqttBridge {
   }
 }
 
+function matchMqttTopic(pattern, topic) {
+  if (pattern === topic) return true;
+  const p = pattern.split('/');
+  const t = topic.split('/');
+  for (let i = 0; i < p.length; i++) {
+    if (p[i] === '#') return true;
+    if (i >= t.length) return false;
+    if (p[i] === '+') continue;
+    if (p[i] !== t[i]) return false;
+  }
+  return p.length === t.length;
+}
+
 module.exports = MqttBridge;
+module.exports.matchMqttTopic = matchMqttTopic;
 module.exports.topics = {
   TOPIC_ROOT, SUBSYSTEM, BROADCAST,
   commandSub: topicCommandSub,

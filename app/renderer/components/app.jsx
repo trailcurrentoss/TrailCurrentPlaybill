@@ -139,7 +139,7 @@ function TVApp() {
   // instead of staying on <body>. Uses rAF so the new screen's DOM is
   // mounted before we look up its root.
   useEffect(() => {
-    if (screen !== 'settings' && screen !== 'youtube') return;
+    if (screen !== 'settings' && screen !== 'youtube' && screen !== 'rig' && screen !== 'explore') return;
     const id = requestAnimationFrame(() => {
       if (!window.FocusZones || !window.FocusZones.getRoot) return;
       const root = window.FocusZones.getRoot();
@@ -186,6 +186,8 @@ function TVApp() {
   const goBack = () => {
     stopPlaybackIfRunning();
     const cur = screenRef.current;
+    // Explore is reached from the side nav and has no logical "parent
+    // screen," so Back goes home — same convention as Rig/Radio/Live.
     const parent = (cur === 'settings' || cur === 'youtube' || cur === 'cast') ? 'apps' : 'home';
     setScreen(parent);
     setFocus(initialFocusFor(parent));
@@ -303,15 +305,26 @@ function TVApp() {
   const [sideNav, setSideNav] = useState({ focused: false, hovered: false });
   const [clock, setClock] = useState('');
 
-  // Clock
+  // Live clock — ticks every second so seconds advance visibly. The
+  // displayed string includes seconds because we want the user to see
+  // the rig is alive at a glance (no "stuck at 9:42 for ten minutes"
+  // ambiguity). Source is JS Date(), which reads the system clock —
+  // the time-sync handler keeps that disciplined against GNSS time
+  // from the CAN bus.
   useEffect(() => {
-    const tick = () => {
+    function tick() {
       const d = new Date();
-      setClock(d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
-    };
+      setClock(d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }));
+    }
     tick();
-    const iv = setInterval(tick, 30000);
-    return () => clearInterval(iv);
+    // Align the first tick to the next wall-clock second so the display
+    // ticks at the same moment the seconds digit changes, not mid-second.
+    let iv;
+    const align = setTimeout(() => {
+      tick();
+      iv = setInterval(tick, 1000);
+    }, 1000 - (Date.now() % 1000));
+    return () => { clearTimeout(align); if (iv) clearInterval(iv); };
   }, []);
 
   // Row schema per screen — defines nav bounds. App-row widths track the
@@ -342,27 +355,37 @@ function TVApp() {
       { id: 'lib-filter', cols: 5 },
       { id: 'lib-grid',   cols: 7 },
     ],
-    rig: [
-      { id: 'cams', cols: 4 },
-    ],
+    // Rig uses the spatial focus engine (data-zone-root); no row schema needed.
   }), [appsCount]);
 
-  const SIDE_IDS = ['nav-home','nav-apps','nav-live','nav-radio','nav-local','nav-rig','nav-search','nav-settings'];
+  const SIDE_IDS = ['nav-home','nav-apps','nav-live','nav-radio','nav-local','nav-explore','nav-rig','nav-search','nav-settings'];
 
   // Keyboard handler
   useEffect(() => {
     const onKey = (e) => {
-      // Zone-root screens (Settings, YouTube — anything tagged with
+      // Zone-root screens (Settings, YouTube, Rig — anything tagged with
       // data-zone-root). The spatial focus engine handles all d-pad
-      // navigation per docs/app/navigation.md. We only handle the
-      // hierarchy keys (Home/Back) and the Left-at-root-edge case that
-      // bubbles out of the zone tree.
+      // navigation per docs/app/navigation.md. This branch ONLY enforces
+      // the universal contract that every screen inherits:
+      //
+      //   H              → Home
+      //   Esc | Backspace→ Back   (both treated identically; the IR remote's
+      //                            "Back" button delivers KEY_ESC, BUT the
+      //                            keymap also accepts Backspace so a normal
+      //                            keyboard works the same way)
+      //   Left at edge   → open SideNav (after FocusZones decides it can't
+      //                                  move further left within the tree)
+      //
+      // A new screen gets all of this for free by tagging its root with
+      // data-zone-root + data-zone + data-zone-axis. Nothing else needed.
       if (window.FocusZones && window.FocusZones.getRoot && window.FocusZones.getRoot()) {
-        // Hierarchy keys — real keyboard convenience. The remote sends
-        // these via the GLOBAL map above, never through DOM events.
         const inField = e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
         if ((e.key === 'h' || e.key === 'H') && !inField) { goHome(); e.preventDefault(); return; }
-        if (e.key === 'Escape' && !inField)               { goBack(); e.preventDefault(); return; }
+        if ((e.key === 'Escape' || e.key === 'Backspace') && !inField) {
+          // Backspace inside an input is "delete a character" — only treat
+          // it as Back when no text field is focused.
+          goBack(); e.preventDefault(); return;
+        }
 
         // Hand the directional/activate keys to the zone engine.
         const handled = window.FocusZones.handleKeydown(e);
@@ -467,7 +490,8 @@ function TVApp() {
     if (s === 'live')  return { row: 'epg',     col: 0, rowY: 0 };
     if (s === 'radio') return { row: 'radio-band', col: 0, rowY: 0 };
     if (s === 'local') return { row: 'lib-filter', col: 0, rowY: 0 };
-    if (s === 'rig')   return { row: 'cams',    col: 0, rowY: 0 };
+    if (s === 'rig')   return { row: 'rig',     col: 0, rowY: 0 };
+    if (s === 'explore') return { row: 'explore', col: 0, rowY: 0 };
     if (s === 'settings') return { row: 'settings', col: 0, rowY: 0 };
     return { row: 'hero', col: 0, rowY: 0 };
   }
@@ -493,6 +517,7 @@ function TVApp() {
         {screen === 'radio'    && <RadioView    focus={focus} setFocus={setFocus} />}
         {screen === 'local'    && <LocalView    focus={focus} />}
         {screen === 'rig'      && <RigView      focus={focus} />}
+        {screen === 'explore'  && <ExploreView />}
         {screen === 'settings' && <SettingsView focus={focus} />}
         {screen === 'youtube'  && <YoutubeView />}
         {screen === 'cast'     && <CastView />}

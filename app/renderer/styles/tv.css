@@ -57,7 +57,14 @@ body {
 .tv-topbar .sysinfo { display: inline-flex; align-items: center; gap: 18px; font-size: 12px; color: rgba(255,255,255,0.6); }
 .tv-topbar .sysinfo span { display: inline-flex; align-items: center; gap: 6px; }
 .tv-topbar .sysinfo ion-icon { font-size: 15px; }
-.tv-topbar .sysinfo .battery { color: var(--tc-success); }
+.tv-topbar .sysinfo .sysinfo-val { font: 500 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+.tv-topbar .sysinfo .battery-good { color: var(--tc-success); }
+.tv-topbar .sysinfo .battery-warn { color: var(--tc-warning); }
+.tv-topbar .sysinfo .battery-low  { color: var(--tc-danger); }
+.tv-topbar .sysinfo .battery-muted{ color: rgba(255,255,255,0.4); }
+.tv-topbar .sysinfo .solar       { color: var(--tc-solar); }
+.tv-topbar .sysinfo .air-warn    { color: var(--tc-warning); }
+.tv-topbar .sysinfo .air-danger  { color: var(--tc-danger); }
 .tv-topbar .clock { font: 500 14px var(--font-mono); color: #fff; }
 
 /* Side nav rail */
@@ -197,6 +204,30 @@ body {
 
 .card.poster .thumb { aspect-ratio: 2/3; }
 .card.poster { width: 180px; }
+
+/* Library poster fallback — shown when a ripped title has no artwork.
+   The page background is pure black, so the placeholder needs a solid
+   non-black fill that stays bright across the whole tile (no fades to
+   black at the edges) and a subtle highlight border so the rectangle's
+   boundary is unmistakable. */
+.card .thumb.no-poster {
+  background: #3d6b41;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.card .thumb.no-poster::after { background: none; }
+.card .thumb.no-poster .no-poster-inner {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 16px; gap: 10px; text-align: center;
+}
+.card .thumb.no-poster ion-icon {
+  font-size: 56px; color: rgba(255, 255, 255, 0.85);
+}
+.card .thumb.no-poster .no-poster-title {
+  font: 600 13px var(--font-sans); color: #fff;
+  line-height: 1.3; letter-spacing: 0.02em;
+}
 .card.landscape { width: 300px; }
 .card.square { width: 220px; }
 .card.square .thumb { aspect-ratio: 1; }
@@ -576,42 +607,345 @@ body {
   margin-top: 2px;
 }
 
-/* Rig overlay view */
-.rig-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
-.cam-tile {
-  position: relative; border-radius: 12px; overflow: hidden;
-  background: #0a1510; cursor: pointer;
-  aspect-ratio: 16/9;
-}
-.cam-tile.focused { outline: 3px solid var(--tc-primary); outline-offset: 4px; transform: scale(1.02); }
-.cam-tile .feed {
-  position: absolute; inset: 0;
-  background:
-    radial-gradient(ellipse at center, rgba(82,164,65,0.06), transparent 70%),
-    linear-gradient(180deg, #0c1f0c, #050a05);
-}
-.cam-tile .label {
-  position: absolute; top: 12px; left: 12px; z-index: 3;
-  background: rgba(0,0,0,0.7); color: var(--tc-primary);
-  padding: 4px 10px; border-radius: 4px;
-  font: 600 11px var(--font-sans); letter-spacing: 0.4px;
-  display: inline-flex; align-items: center; gap: 6px;
-}
-.cam-tile .label .rec { width: 8px; height: 8px; border-radius: 50%; background: var(--tc-danger); animation: blink 1s infinite; }
-@keyframes blink { 50% { opacity: 0.2; } }
+/* ============================================================
+   Rig View — live Headwaters telemetry
+   Brand-aligned tiles, scales fluidly on any panel size.
+   ============================================================ */
 
-.rig-panel {
-  background: #0e0e0e; border-radius: 12px; padding: 18px;
-  border: 1px solid rgba(255,255,255,0.06);
+.rig-view {
+  /* Per-view accent palette so we can paint the same component blue/green/
+     amber/red without duplicating component variants. Order matches the
+     domain colour map in colors_and_type.css. */
+  --rig-accent-success: var(--tc-success);
+  --rig-accent-info:    var(--tc-info);
+  --rig-accent-warning: var(--tc-warning);
+  --rig-accent-danger:  var(--tc-danger);
+  --rig-accent-solar:   var(--tc-solar);
+  --rig-accent-cooling: var(--tc-cooling);
+  --rig-accent-heating: var(--tc-heating);
+  --rig-accent-fresh:   var(--tc-fresh-water);
+  --rig-accent-grey:    var(--tc-grey-water);
+  --rig-accent-black:   var(--tc-black-water);
+  --rig-accent-muted:   rgba(255,255,255,0.4);
 }
-.rig-panel h3 { font: 600 14px var(--font-sans); letter-spacing: 0.3px; margin: 0 0 12px; color: rgba(255,255,255,0.7); text-transform: uppercase; }
-.rig-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 14px; }
-.rig-row:last-child { border: 0; }
-.rig-row .k { color: rgba(255,255,255,0.5); }
-.rig-row .v { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.rig-row .v.ok { color: var(--tc-success); }
-.rig-row .v.warn { color: var(--tc-warning); }
-.rig-row .v.danger { color: var(--tc-danger); }
+
+.rig-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 60px 24px; text-align: center;
+  color: rgba(255,255,255,0.55);
+  border: 1px dashed rgba(255,255,255,0.12);
+  border-radius: var(--tc-radius-card-web);
+  background: rgba(255,255,255,0.02);
+  margin-bottom: 24px;
+}
+.rig-empty ion-icon { font-size: 56px; color: var(--tc-primary); margin-bottom: 14px; }
+.rig-empty .t { font: 600 22px var(--font-sans); color: #fff; margin-bottom: 6px; }
+.rig-empty .b { font-size: 13px; max-width: 460px; line-height: 1.5; color: rgba(255,255,255,0.55); }
+
+.rig-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+  /* 4-column max on a 1080p TV — clamp by capping minmax min on huge widths. */
+}
+@media (min-width: 1600px) {
+  .rig-tiles { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+}
+
+.rig-tile {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--tc-radius-card-web);
+  padding: 20px 22px 22px;
+  position: relative;
+  overflow: hidden;
+  min-height: 200px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.rig-tile::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--rig-accent-success);
+  opacity: 0.75;
+}
+.rig-tile[data-accent="info"]::before    { background: var(--rig-accent-info); }
+.rig-tile[data-accent="warning"]::before { background: var(--rig-accent-warning); }
+.rig-tile[data-accent="danger"]::before  { background: var(--rig-accent-danger); }
+.rig-tile[data-accent="solar"]::before   { background: var(--rig-accent-solar); }
+.rig-tile[data-accent="cooling"]::before { background: var(--rig-accent-cooling); }
+
+.rig-tile-hdr {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 600 12px var(--font-sans); letter-spacing: 1.2px; text-transform: uppercase;
+  color: rgba(255,255,255,0.7);
+}
+.rig-tile-hdr ion-icon { font-size: 18px; color: var(--tc-primary); }
+.rig-tile-body { display: flex; flex-direction: column; gap: 14px; flex: 1; }
+
+/* Stats: label + value combo used everywhere inside tiles. */
+.rig-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rig-stat-label {
+  font: 500 11px var(--font-sans); letter-spacing: 0.6px; text-transform: uppercase;
+  color: rgba(255,255,255,0.5);
+}
+.rig-stat-value { display: inline-flex; align-items: baseline; gap: 4px; }
+.rig-stat-num {
+  font: 700 28px/1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  color: #fff;
+}
+.rig-stat-unit {
+  font: 500 12px var(--font-mono);
+  color: rgba(255,255,255,0.5);
+  text-transform: uppercase;
+}
+.rig-stat[data-accent="success"] .rig-stat-num { color: var(--rig-accent-success); }
+.rig-stat[data-accent="info"]    .rig-stat-num { color: var(--rig-accent-info); }
+.rig-stat[data-accent="warning"] .rig-stat-num { color: var(--rig-accent-warning); }
+.rig-stat[data-accent="danger"]  .rig-stat-num { color: var(--rig-accent-danger); }
+.rig-stat[data-accent="solar"]   .rig-stat-num { color: var(--rig-accent-solar); }
+.rig-stat[data-accent="cooling"] .rig-stat-num { color: var(--rig-accent-cooling); }
+.rig-stat[data-accent="muted"]   .rig-stat-num { color: rgba(255,255,255,0.4); }
+
+.rig-row-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 14px 18px;
+}
+.rig-row-stats-energy { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Status pill, e.g. "GNSS Locked". */
+.rig-pill {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--tc-radius-full);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  font: 600 10px var(--font-sans); letter-spacing: 0.6px; text-transform: uppercase;
+  color: rgba(255,255,255,0.8);
+}
+.rig-pill-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  box-shadow: 0 0 8px rgba(255,255,255,0.2);
+}
+.rig-pill[data-accent="success"] { color: var(--rig-accent-success); border-color: rgba(116,254,0,0.25); background: rgba(116,254,0,0.06); }
+.rig-pill[data-accent="success"] .rig-pill-dot { background: var(--rig-accent-success); box-shadow: 0 0 10px rgba(116,254,0,0.55); }
+.rig-pill[data-accent="info"]    { color: var(--rig-accent-info);    border-color: rgba(72,230,254,0.25); background: rgba(72,230,254,0.06); }
+.rig-pill[data-accent="info"]    .rig-pill-dot { background: var(--rig-accent-info);    box-shadow: 0 0 10px rgba(72,230,254,0.55); }
+.rig-pill[data-accent="warning"] { color: var(--rig-accent-warning); border-color: rgba(255,193,7,0.30); background: rgba(255,193,7,0.06); }
+.rig-pill[data-accent="warning"] .rig-pill-dot { background: var(--rig-accent-warning); box-shadow: 0 0 10px rgba(255,193,7,0.55); }
+.rig-pill[data-accent="danger"]  { color: var(--rig-accent-danger);  border-color: rgba(255,84,83,0.30); background: rgba(255,84,83,0.06); }
+.rig-pill[data-accent="danger"]  .rig-pill-dot { background: var(--rig-accent-danger);  box-shadow: 0 0 10px rgba(255,84,83,0.55); animation: blink 1.4s infinite; }
+.rig-pill[data-accent="muted"]   { color: rgba(255,255,255,0.5); }
+
+@keyframes blink { 50% { opacity: 0.3; } }
+
+/* ─── Energy tile ─── */
+.rig-soc {
+  display: flex; align-items: center; gap: 18px;
+}
+.rig-gauge { position: relative; width: 110px; height: 110px; flex-shrink: 0; }
+.rig-gauge-value {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center; gap: 2px;
+  flex-direction: row;
+}
+.rig-gauge-num { font: 700 30px/1 var(--font-sans); color: #fff; font-variant-numeric: tabular-nums; }
+.rig-gauge-unit { font: 500 11px var(--font-mono); color: rgba(255,255,255,0.5); align-self: flex-start; margin-top: 4px; }
+.rig-soc-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rig-soc-label {
+  font: 500 11px var(--font-sans); letter-spacing: 0.6px; text-transform: uppercase;
+  color: rgba(255,255,255,0.5);
+}
+.rig-soc-status { display: inline-flex; align-items: center; }
+.rig-soc-runtime { font: 500 13px var(--font-mono); color: rgba(255,255,255,0.7); font-variant-numeric: tabular-nums; }
+
+/* ─── Water tile ─── */
+.rig-tanks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  flex: 1;
+}
+.rig-tank { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.rig-tank-meter {
+  position: relative;
+  width: 100%;
+  height: 140px;
+  min-height: 100px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.rig-tank-fill {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(180deg, var(--rig-accent-fresh) 0%, color-mix(in srgb, var(--rig-accent-fresh) 60%, #000) 100%);
+  transition: height 600ms cubic-bezier(.4,0,.2,1);
+  opacity: 0.78;
+}
+.rig-tank-fill[data-accent="fresh"] {
+  background: linear-gradient(180deg, var(--rig-accent-fresh) 0%, color-mix(in srgb, var(--rig-accent-fresh) 50%, #000) 100%);
+}
+.rig-tank-fill[data-accent="grey"] {
+  background: linear-gradient(180deg, #b8bcc4 0%, var(--rig-accent-grey) 100%);
+  opacity: 0.7;
+}
+.rig-tank-fill[data-accent="black"] {
+  background: linear-gradient(180deg, #6a6a6a 0%, var(--rig-accent-black) 100%);
+  opacity: 0.85;
+}
+.rig-tank-wave {
+  position: absolute; top: -4px; left: 0; right: 0; height: 8px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 50%;
+  filter: blur(2px);
+}
+.rig-tank-pct {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column;
+  gap: 2px;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+}
+.rig-tank-pct .rig-stat-num { font-size: 22px; line-height: 1; color: #fff; }
+.rig-tank-pct .rig-stat-unit { font-size: 11px; }
+.rig-tank-pct[data-tone="success"] .rig-stat-num { color: var(--rig-accent-success); }
+.rig-tank-pct[data-tone="warning"] .rig-stat-num { color: var(--rig-accent-warning); }
+.rig-tank-pct[data-tone="danger"]  .rig-stat-num { color: var(--rig-accent-danger); }
+.rig-tank-label {
+  font: 600 11px var(--font-sans); letter-spacing: 0.8px; text-transform: uppercase;
+  color: rgba(255,255,255,0.6);
+}
+
+/* ─── Climate tile ─── */
+.rig-climate {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+}
+.rig-climate-temp {
+  display: inline-flex; align-items: baseline; gap: 4px;
+}
+.rig-climate-temp .rig-stat-num { font-size: 56px; line-height: 1; letter-spacing: -1.5px; }
+.rig-climate-temp .rig-stat-unit { font-size: 16px; }
+.rig-climate-side {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 10px 18px;
+  flex: 1; min-width: 200px;
+}
+.rig-climate-side .rig-stat-num { font-size: 20px; }
+
+/* ─── Lights tile ─── */
+.rig-lights-toolbar {
+  display: flex; gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding-bottom: 12px;
+}
+.rig-bulk-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--tc-radius-full);
+  color: rgba(255,255,255,0.85);
+  font: 500 12px var(--font-sans); letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.rig-bulk-btn ion-icon { font-size: 16px; color: var(--tc-solar); }
+.rig-bulk-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.18); }
+.rig-bulk-btn:focus { outline: 3px solid var(--tc-primary); outline-offset: 3px; }
+.rig-bulk-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.rig-lights {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.rig-light {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 16px 12px 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--tc-radius-card);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+  overflow: hidden;
+}
+.rig-light:hover:not(:disabled) { border-color: rgba(255,255,255,0.18); transform: translateY(-2px); }
+.rig-light:focus { outline: 3px solid var(--tc-primary); outline-offset: 3px; }
+.rig-light.on {
+  border-color: rgba(255,193,7,0.4);
+  background: linear-gradient(180deg, rgba(255,193,7,0.08), rgba(255,193,7,0.02));
+}
+.rig-light.busy { opacity: 0.55; cursor: progress; }
+.rig-light-glow {
+  position: absolute; top: -40px; left: 50%; transform: translateX(-50%);
+  width: 120px; height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,193,7,0.45), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+.rig-light.on .rig-light-glow { opacity: 1; }
+.rig-light-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px;
+  font-size: 28px;
+  color: rgba(255,255,255,0.55);
+  z-index: 1;
+}
+.rig-light.on .rig-light-icon { color: var(--tc-solar); filter: drop-shadow(0 0 12px rgba(255,193,7,0.6)); }
+.rig-light-name {
+  font: 600 13px var(--font-sans);
+  text-align: center;
+  z-index: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.rig-light-state {
+  font: 500 10px var(--font-mono); letter-spacing: 0.6px; text-transform: uppercase;
+  color: rgba(255,255,255,0.4);
+  z-index: 1;
+}
+.rig-light.on .rig-light-state { color: var(--tc-solar); }
+
+.rig-empty-tile {
+  display: flex; align-items: center; gap: 12px;
+  color: rgba(255,255,255,0.5);
+  font: 500 13px var(--font-sans);
+  padding: 16px 4px;
+}
+.rig-empty-tile ion-icon { font-size: 22px; color: rgba(255,255,255,0.4); }
+
+/* ─── Light-theme overrides ────────────────────────────────────────── */
+[data-theme="light"] .rig-tile {
+  background: linear-gradient(180deg, #ffffff, #f7f7f8);
+  border-color: rgba(0,0,0,0.08);
+  box-shadow: var(--tc-shadow-card);
+}
+[data-theme="light"] .rig-tile-hdr { color: rgba(0,0,0,0.6); }
+[data-theme="light"] .rig-stat-label { color: rgba(0,0,0,0.55); }
+[data-theme="light"] .rig-stat-num { color: var(--text-primary); }
+[data-theme="light"] .rig-tank-meter { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.08); }
+[data-theme="light"] .rig-tank-pct .rig-stat-num { color: #fff; }
+[data-theme="light"] .rig-bulk-btn { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.1); color: var(--text-primary); }
+[data-theme="light"] .rig-light { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.1); color: var(--text-primary); }
+[data-theme="light"] .rig-light-state { color: rgba(0,0,0,0.5); }
+[data-theme="light"] .rig-pill { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.08); color: rgba(0,0,0,0.7); }
+[data-theme="light"] .rig-soc-runtime { color: rgba(0,0,0,0.7); }
+[data-theme="light"] .rig-empty { background: rgba(0,0,0,0.02); border-color: rgba(0,0,0,0.1); color: rgba(0,0,0,0.55); }
+[data-theme="light"] .rig-empty .t { color: var(--text-primary); }
+[data-theme="light"] .rig-empty .b { color: rgba(0,0,0,0.55); }
 
 /* Local Media */
 .library-filter { display: flex; gap: 8px; margin-bottom: 20px; }
@@ -1102,4 +1436,135 @@ body {
   font: 500 13px/1.5 var(--font-mono, ui-monospace, monospace);
   margin: 0 0 18px 0;
   word-break: break-word;
+}
+
+/* ============ Explore (map) ============ */
+.explore-view {
+  position: absolute; inset: 0;
+  /* No padding — the map fills the entire view content area so the user
+     gets every spare pixel. The SideNav already sits to the left of
+     .tv-content, so the canvas starts flush at left:0 here. */
+}
+
+.explore-canvas-wrap {
+  position: absolute; inset: 0;
+  overflow: hidden;
+  background: #1a1a1a;
+}
+
+.explore-canvas {
+  position: absolute; inset: 0;
+  outline: none;
+}
+.explore-canvas:focus { outline: none; }
+/* Match the rest of the shell's focus ring conventions — show a soft
+   inner glow when the map is the focused element so the user knows
+   d-pad input is being captured here. */
+.explore-canvas:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--tc-primary, #52a441);
+}
+
+/* MapLibre's own controls — restyle to fit the dark shell. */
+.explore-canvas .maplibregl-ctrl-attrib {
+  font: 500 11px/1.4 var(--font-mono, ui-monospace, monospace);
+  background: rgba(0,0,0,0.45);
+  color: rgba(255,255,255,0.7);
+  border-radius: 6px;
+}
+.explore-canvas .maplibregl-ctrl-attrib a { color: rgba(255,255,255,0.85); }
+
+.explore-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(20,20,20,0.85);
+  color: rgba(255,255,255,0.85);
+  text-align: center;
+  padding: 24px;
+  pointer-events: none;
+}
+.explore-overlay ion-icon {
+  font-size: 64px;
+  color: rgba(255,255,255,0.5);
+  margin-bottom: 16px;
+}
+.explore-overlay .t { font: 700 22px var(--font-sans); margin-bottom: 6px; }
+.explore-overlay .b { font: 400 14px var(--font-sans); color: rgba(255,255,255,0.6); max-width: 420px; }
+.explore-error ion-icon { color: var(--tc-danger, #d85050); }
+
+/* Heads-up chip — top-left of the map, mirrors the chips used in the
+   Rig view so the visual vocabulary stays consistent. */
+.explore-hud-tl {
+  position: absolute; top: 24px; left: 24px;
+  display: flex; gap: 8px;
+  pointer-events: none;
+}
+.explore-hud-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.85);
+  font: 500 12px var(--font-sans);
+}
+.explore-hud-chip.active {
+  background: rgba(82,164,65,0.18);
+  border-color: rgba(82,164,65,0.55);
+  color: #c9eab9;
+}
+.explore-hud-chip ion-icon { font-size: 14px; }
+
+/* Floating control stack — buttons for mouse users. The d-pad cannot
+   focus these (the canvas absorbs all arrow keys), which is intentional
+   on a TV: arrows pan, OK cycles zoom, the rest is mouse-only. */
+.explore-tools {
+  position: absolute; top: 24px; right: 24px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.explore-tool-btn {
+  width: 44px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.85);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+.explore-tool-btn:hover { background: rgba(82,164,65,0.25); border-color: rgba(82,164,65,0.55); }
+.explore-tool-btn:active { transform: scale(0.96); }
+.explore-tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.explore-tool-btn ion-icon { font-size: 20px; }
+
+/* Remote-key hint strip — same chip vocabulary as the global RemoteHint
+   but pinned to the map's bottom-left so it reads "this screen treats
+   the d-pad specially." */
+.explore-hint-bar {
+  position: absolute; bottom: 60px; left: 24px;
+  display: flex; gap: 8px;
+  pointer-events: none;
+}
+.explore-hint-bar .chip {
+  padding: 4px 10px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.85);
+  border-radius: 6px;
+  font: 500 11px var(--font-mono, ui-monospace, monospace);
+}
+
+/* Light theme — invert the dark overlays so chips/buttons stay readable
+   on a light basemap. */
+html[data-theme="light"] .explore-canvas-wrap { background: #f3f3f0; }
+html[data-theme="light"] .explore-hud-chip,
+html[data-theme="light"] .explore-tool-btn,
+html[data-theme="light"] .explore-hint-bar .chip {
+  background: rgba(255,255,255,0.9);
+  color: rgba(0,0,0,0.78);
+  border-color: rgba(0,0,0,0.10);
+}
+html[data-theme="light"] .explore-overlay { background: rgba(245,245,245,0.92); color: rgba(0,0,0,0.85); }
+html[data-theme="light"] .explore-overlay .b { color: rgba(0,0,0,0.6); }
+html[data-theme="light"] .explore-canvas .maplibregl-ctrl-attrib {
+  background: rgba(255,255,255,0.85);
+  color: rgba(0,0,0,0.7);
 }

@@ -9,13 +9,18 @@
        per-source allowlisting. img-src file: lets the Library grid load
        locally-cached poster JPGs from ~/Videos/Playbill Library/ —
        essential for off-grid use (TrailCurrent's primary goal).
+       img-src/connect-src https: also covers the Explore screen pulling
+       vector tiles + style JSON + sprites from the Headwaters tileserver
+       (https://<headwaters-host>/{tiles,styles,fonts,data}/). worker-src
+       blob: is needed by MapLibre's CSP-safe worker bootstrap.
        The rest stays restrictive. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' https: file: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self';">
+        content="default-src 'self'; img-src 'self' https: file: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; font-src 'self' data:; connect-src 'self' https:;">
 
   <link rel="stylesheet" href="styles/colors_and_type.css">
   <link rel="stylesheet" href="styles/tv.css">
   <link rel="stylesheet" href="styles/electron-overrides.css">
+  <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
 
   <!-- Vendored Ionicons web component (loads icon SVGs lazily over file://) -->
   <script type="module" src="vendor/ionicons/ionicons/ionicons.esm.js"></script>
@@ -24,6 +29,11 @@
   <!-- Vendored React UMD -->
   <script src="vendor/react.js"></script>
   <script src="vendor/react-dom.js"></script>
+
+  <!-- Vendored MapLibre GL JS (CSP-safe build — pairs with vendor/maplibre/
+       maplibre-gl-csp-worker.js, which explore.jsx points the runtime at
+       via maplibregl.setWorkerUrl). -->
+  <script src="vendor/maplibre/maplibre-gl-csp.js"></script>
 </head>
 <body>
   <div id="tv-root"></div>
@@ -44,6 +54,7 @@
   <script src="../build/components/radio.js"></script>
   <script src="../build/components/local.js"></script>
   <script src="../build/components/rig.js"></script>
+  <script src="../build/components/explore.js"></script>
   <script src="../build/components/settings.js"></script>
   <script src="../build/components/youtube.js"></script>
   <script src="../build/components/cast.js"></script>

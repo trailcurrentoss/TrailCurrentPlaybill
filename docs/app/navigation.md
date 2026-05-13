@@ -80,6 +80,8 @@ ROOT (axis: horizontal)
     ├── Rig                          (axis: horizontal)
     │   ├── Cameras                  (axis: grid)
     │   └── Info panel               (axis: vertical)
+    ├── Explore                      (bespoke d-pad mode — see special-case section)
+    │   └── Map canvas               (leaf — captures all arrows + OK locally)
     ├── YouTube                      (axis: vertical)
     │   ├── Search bar               (axis: horizontal)
     │   └── Results                  (axis: vertical or grid)
@@ -176,6 +178,24 @@ The d-pad changes meaning:
 This is the Roku convention. Implement it at the player view, not in the
 zone engine.
 
+### Explore (map)
+
+The map canvas captures all directional input locally, the same way the
+fullscreen video player does. The toolbar buttons (Recenter / Zoom + / −)
+on the map are mouse-only — they are NOT in the zone path, so an arrow
+press never wanders into them.
+
+- Up / Down / Left / Right → Pan map
+- OK → Cycle through zoom presets (overview → regional → street → loop)
+- Back → Exit to Home (handled globally by app.jsx, unchanged)
+- `+` / `=` / `-` / `_` → Zoom by one level (keyboard convenience)
+- `r` / `R` → Recenter on the rig's GPS fix (keyboard convenience)
+
+Implemented in `app/renderer/components/explore.jsx` with a native
+`keydown` listener bound to the canvas DOM node (NOT a window listener).
+`e.stopPropagation()` keeps the event from bubbling to the central
+handler, so arrows on the map never escape to the side nav.
+
 ---
 
 ## Global keys (override all zones)
@@ -184,11 +204,24 @@ These ALWAYS work, regardless of focus, screen, or modal state:
 
 | Key | Action |
 |---|---|
-| **Home** | `goHome()` — reset to home screen, focus top-left card |
-| **Back** | `goBack()` — exit current screen to parent (Settings/YouTube/Cast → Apps; rest → Home; modal → close modal) |
+| **Home** (`h` / `H` / `KEY_HOMEPAGE`)         | `goHome()` — reset to home screen, focus top-left card |
+| **Back**  (`Escape` / `Backspace` / `KEY_ESC`) | `goBack()` — exit current screen to parent (Settings/YouTube/Cast → Apps; rest → Home; modal → close modal) |
+
+`Escape` and `Backspace` are **identical**. The Argon remote's Back button
+arrives as `KEY_ESC` via the IR keymap; a USB keyboard's `Backspace` does
+the same. Inside `<input>`/`<textarea>` `Backspace` keeps its normal
+delete-a-character meaning — the handler skips Back when a text field has
+focus.
 
 They're handled in `app/renderer/components/app.jsx` before the zone
 engine sees the event.
+
+> **Rule of thumb for new screens:** if you find yourself adding *any*
+> `onKeyDown` / `window.addEventListener('keydown', …)` in a screen file,
+> you've left the contract. Stop, mark the regions with `data-zone*`, and
+> let the central handler in app.jsx do its job. The single exception
+> is the fullscreen video player, which redefines the d-pad as media
+> transport (see the special-case section above).
 
 ---
 
@@ -264,9 +297,32 @@ since the remote has no number/letter keys.
    No `<div onClick>`.
 5. Add the screen to the side-nav router (`SIDE_IDS` in app.jsx) and
    `initialFocusFor()` if it should be reachable from the menu.
-6. Test with: keyboard arrows, the GUI virtual remote, the physical
-   Argon remote. All three must produce identical behavior.
+6. Add the screen's name to the auto-focus-on-entry effect in app.jsx so
+   the first remote press after navigation lands inside the zone tree:
+   ```js
+   if (screen !== 'settings' && screen !== 'youtube' && screen !== 'rig'
+        && screen !== 'explore' && screen !== '<your-new-screen>') return;
+   ```
+7. Test with: keyboard arrows, the GUI virtual remote, the physical
+   Argon remote. All three must produce identical behavior. Specifically:
+   - Pressing Left from the leftmost focusable element opens the SideNav.
+   - Pressing Escape OR Backspace returns to the parent screen.
+   - Pressing `H` returns home.
 
 If a screen needs anything beyond zones — bespoke arrow logic, custom
 selection state, etc. — that's a smell. Push back and reshape the
 layout instead.
+
+## What NOT to do (anti-patterns we keep regressing on)
+
+- ❌ Don't add `window.addEventListener('keydown', …)` inside a screen
+  component. The central handler in app.jsx already exists and already
+  handles every key in the vocabulary. Duplicating it is the source of
+  every "Back doesn't work" report we've ever filed.
+- ❌ Don't extend the legacy `ROWS` schema in app.jsx for new screens.
+  It's there for backward compatibility with pre-zone screens only.
+  New screens use `data-zone-root` and inherit everything for free.
+- ❌ Don't bind the Menu key (≡) to "open SideNav" or anything else.
+  Reserved per the table above; binding it now would conflict with the
+  future contextual-menu work.
+- ❌ Don't bind Backspace differently from Escape. They're the same Back.

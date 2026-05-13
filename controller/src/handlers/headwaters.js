@@ -93,14 +93,26 @@ function register({ bus, state }) {
       throw new Error('headwaters.setSettings: apiKey must be a non-empty string');
     }
     const s = await ensureStore();
-    await s.replace({ apiKey: v.apiKey.trim() });
+    // Merge into existing file so sibling credentials (e.g. omdbApiKey
+    // written by the DVD handler) survive a key rotation here.
+    const cur = s.get() || {};
+    await s.replace({ ...cur, apiKey: v.apiKey.trim() });
     state.patch({ headwaters: { apiKeySet: true } });
     return { ok: true };
   });
 
   bus.register('headwaters.clear', async () => {
     const s = await ensureStore();
-    await s.clear();
+    // Remove apiKey but keep other fields. If nothing is left, drop the
+    // whole file — matches the "Forget credentials" intent without
+    // collateral damage to omdbApiKey.
+    const cur = s.get() || {};
+    const { apiKey: _drop, ...rest } = cur;
+    if (Object.keys(rest).length === 0) {
+      await s.clear();
+    } else {
+      await s.replace(rest);
+    }
     state.patch({ headwaters: { apiKeySet: false } });
     return { ok: true };
   });

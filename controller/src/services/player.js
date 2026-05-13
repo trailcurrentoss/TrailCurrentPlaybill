@@ -56,7 +56,12 @@ function getMetadata() { return session ? session.metadata || null : null; }
  * @param {object} [opts.metadata]          title/subtitle/artworkUrl/sourceItemId
  * @param {boolean} [opts.fullscreen=true]
  */
-function play({ url, audioUrl, hwdec = 'auto-safe', headers, mediaType = 'video', metadata, fullscreen = true } = {}) {
+// Q6A's V4L2 H.264 path produces green/fuzzy frames (see
+// docs/RADXA_LESSONS_LEARNED.md and the Iris-driver pending note). Until the
+// kernel ships a working hwdec backend, force software decode — 1080p MKVs
+// play fine on the CPU. Callers that want to opt back in can pass an explicit
+// hwdec value (e.g. on non-Q6A hardware).
+function play({ url, audioUrl, hwdec = 'no', headers, mediaType = 'video', metadata, fullscreen = true } = {}) {
   if (!url) return Promise.reject(new Error('player.play: url required'));
   ensureDirs();
   return stop().then(() => new Promise((resolve, reject) => {

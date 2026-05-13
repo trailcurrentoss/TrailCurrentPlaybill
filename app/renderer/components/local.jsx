@@ -56,6 +56,7 @@ function LocalView({ focus }) {
     const url = 'file://' + encodeURI(item.path);
     window.playbill.controller.command({
       action: 'transport.play',
+      sourceId: 'local',
       url,
       mediaType: 'video',
       metadata: {
@@ -138,7 +139,17 @@ function LocalView({ focus }) {
               onClick={() => playItem(m)}
               role={m.path ? 'button' : undefined}
             >
-              <div className="thumb" style={{ backgroundImage: m.img ? `url(${m.img})` : 'none', aspectRatio: '2/3' }}></div>
+              <div
+                className={'thumb' + (m.img ? '' : ' no-poster')}
+                style={{ backgroundImage: m.img ? `url(${m.img})` : 'none', aspectRatio: '2/3' }}
+              >
+                {!m.img && (
+                  <div className="no-poster-inner">
+                    <ion-icon name="film-outline"></ion-icon>
+                    <div className="no-poster-title">{m.title}</div>
+                  </div>
+                )}
+              </div>
               <div style={{padding: '8px 10px 10px'}}>
                 <div className="title">{m.title}</div>
                 <div className="meta">{m.meta}</div>

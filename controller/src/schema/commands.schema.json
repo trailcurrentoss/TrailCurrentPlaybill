@@ -93,7 +93,13 @@
     { "$ref": "#/$defs/DvdLibraryList" },
     { "$ref": "#/$defs/DvdSetOmdbKey" },
     { "$ref": "#/$defs/DvdValidateOmdbKey" },
-    { "$ref": "#/$defs/DvdRefreshPosters" }
+    { "$ref": "#/$defs/DvdRefreshPosters" },
+
+    { "$ref": "#/$defs/TelemetryGet" },
+    { "$ref": "#/$defs/TelemetryLightsRefresh" },
+    { "$ref": "#/$defs/TelemetryLightsSet" },
+    { "$ref": "#/$defs/TelemetryLightsSetAll" },
+    { "$ref": "#/$defs/TimeSyncStatus" }
   ],
 
   "$defs": {
@@ -725,6 +731,53 @@
       "description": "Walk the on-disk library and download any missing poster .jpg files using the remote URL stored in each title's JSON sidecar. Used to backfill posters for rips made before poster-caching landed, and to retry titles where the original download failed (no internet at rip time).",
       "type": "object", "additionalProperties": false, "required": ["action"],
       "properties": { "action": { "const": "dvd.refreshPosters" } }
+    },
+
+    "TelemetryGet": {
+      "x-class": "B",
+      "description": "Return the current state.telemetry snapshot. Used by the Rig view and the live top-bar sysinfo strip.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "telemetry.get" } }
+    },
+    "TelemetryLightsRefresh": {
+      "x-class": "B",
+      "description": "Force a fresh fetch of the lights list from Headwaters (HTTP fallback). Normally not needed — retained MQTT config snapshots arrive on connect.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "telemetry.lights.refresh" } }
+    },
+    "TelemetryLightsSet": {
+      "x-class": "B",
+      "description": "Toggle / set a single light. Publishes to local/lights/<id>/command which both Headwaters' MQTT bridge and PDM modules listen on. brightness is optional.",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "telemetry.lights.set" },
+        "value": {
+          "type": "object", "additionalProperties": false, "required": ["id"],
+          "properties": {
+            "id":         { "type": "integer", "minimum": 0 },
+            "state":      { "type": "integer", "enum": [0, 1] },
+            "brightness": { "type": "integer", "minimum": 0, "maximum": 255 }
+          }
+        }
+      }
+    },
+    "TelemetryLightsSetAll": {
+      "x-class": "B",
+      "description": "All-on / all-off bulk light command. Publishes to local/lights/all/command.",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "telemetry.lights.setAll" },
+        "value": {
+          "type": "object", "additionalProperties": false, "required": ["state"],
+          "properties": { "state": { "type": "integer", "enum": [0, 1] } }
+        }
+      }
+    },
+    "TimeSyncStatus": {
+      "x-class": "B",
+      "description": "Introspection for the GNSS time-sync handler. Returns whether NTP was disabled, the last time we set the clock, and the remaining cooldown window.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "time-sync.status" } }
     }
   }
 }

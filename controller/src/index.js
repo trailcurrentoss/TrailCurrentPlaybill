@@ -33,6 +33,8 @@ const sourceHandlers    = require('./handlers/source');
 const transportHandlers = require('./handlers/transport');
 const youtubeHandlers    = require('./handlers/youtube');
 const headwatersHandlers = require('./handlers/headwaters');
+const telemetryHandlers  = require('./handlers/telemetry');
+const timeSyncHandlers   = require('./handlers/time-sync');
 const navHandlers        = require('./handlers/nav');
 const castHandlers       = require('./handlers/cast');
 const netflixHandlers    = require('./handlers/netflix');
@@ -147,6 +149,7 @@ async function main() {
     cast: null,         // populated by castHandlers.register's initial publish()
     netflix: null,      // populated by netflixHandlers.register's initial publish()
     dvd:  null,         // populated by dvdHandlers.register's initial state.patch
+    telemetry: null,    // populated by telemetryHandlers.register (Headwaters mirror)
     ui: null,
   });
 
@@ -183,6 +186,8 @@ async function main() {
   sourceHandlers.register({ bus, state, sources: [youtubeSource, castSource, netflixSource] });
   youtubeHandlers.register({ bus, state });
   headwatersHandlers.register({ bus, state });
+  telemetryHandlers.register({ bus, state, mqtt });
+  timeSyncHandlers.register({ bus, state, mqtt });
   castHandlers.register({ bus, state, settings });
   netflixHandlers.register({ bus, state });
   // systemHandlers wants `ipc` so system.focus can publish a focus-request

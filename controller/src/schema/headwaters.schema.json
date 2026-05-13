@@ -5,12 +5,16 @@
   "description": "Stored separately from settings.json because it contains a secret. The Settings → Headwaters screen in the GUI is the only thing that writes to it.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiKey"],
   "properties": {
     "apiKey": {
       "type": "string",
       "minLength": 1,
       "description": "API key used to authenticate calls to the Headwaters HTTP APIs. Persisted at file mode 0600. Never published over MQTT or written to logs."
+    },
+    "omdbApiKey": {
+      "type": "string",
+      "minLength": 1,
+      "description": "OMDb API key used by the DVD-library lookup flow. Shares this file with apiKey because both are user-pasted credentials; the DVD handler reads/writes it via a permissive view of the same store."
     }
   }
 }
