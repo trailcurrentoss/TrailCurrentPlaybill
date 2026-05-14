@@ -1090,18 +1090,33 @@ function(
                 CTRL_SIZE=$(du -sh "$CTRL_DIR" | cut -f1)
                 echo "  staged $CTRL_SIZE controller (incl. node_modules)"
 
-                # 2. Install systemd user unit + image-baked auto-enable.
-                mkdir -p "$1/usr/lib/systemd/user"
+                # 2. Install systemd user units + image-baked auto-enable.
+                #    Both units land in /usr/lib/systemd/user/ and get a
+                #    symlink under default.target.wants/. Per-user enable
+                #    at first systemd-user manager start, no first-boot
+                #    logic needed.
+                mkdir -p "$1/usr/lib/systemd/user" "$1/usr/lib/systemd/user/default.target.wants"
+
+                # playbill-controller.service: the MQTT/IPC daemon.
                 install -m 644 "$STAGING/files/systemd-user/playbill-controller.service" \
                     "$1/usr/lib/systemd/user/playbill-controller.service"
-                # Symlink into default.target.wants so it auto-enables on
-                # every user's first systemd-user manager start. Equivalent
-                # to `systemctl --user enable` per-user but baked at image
-                # time — no first-boot logic needed.
-                mkdir -p "$1/usr/lib/systemd/user/default.target.wants"
                 ln -sf ../playbill-controller.service \
                     "$1/usr/lib/systemd/user/default.target.wants/playbill-controller.service"
-                echo "  installed playbill-controller.service (auto-enabled via default.target.wants)"
+                echo "  installed playbill-controller.service (auto-enabled)"
+
+                # playbill-audio-fix.service: one-shot kick that restarts
+                # wireplumber 6 seconds into the user session, working
+                # around a recurring race where wireplumber's initial
+                # sound-card scan misses the WCD938x codec attach and
+                # the rig ends up in "Dummy Output". Removing this unit
+                # is safe once upstream pipewire/wireplumber reliably
+                # reacts to the codec udev event on this hardware. See
+                # the unit file for the full rationale.
+                install -m 644 "$STAGING/files/systemd-user/playbill-audio-fix.service" \
+                    "$1/usr/lib/systemd/user/playbill-audio-fix.service"
+                ln -sf ../playbill-audio-fix.service \
+                    "$1/usr/lib/systemd/user/default.target.wants/playbill-audio-fix.service"
+                echo "  installed playbill-audio-fix.service (auto-enabled)"
 
                 # 3. setcap on the node binary so the controller's onboarding
                 #    HTTP listener can bind port 80 (the privileged-port

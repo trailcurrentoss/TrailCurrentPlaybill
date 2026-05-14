@@ -176,11 +176,17 @@ rsync -a --exclude='.git' --exclude='*.log' --exclude='.env*' \
 CONTROLLER_SIZE=$(du -sh "$STAGING_DIR/controller" | cut -f1)
 log "  staged $CONTROLLER_SIZE controller (incl. node_modules)"
 
-# systemd user unit for the controller daemon. Hook 5a installs it into
-# /usr/lib/systemd/user/ + symlinks default.target.wants/ for auto-start.
+# systemd user units. Hook 5a installs each into /usr/lib/systemd/user/
+# and symlinks default.target.wants/ for auto-start.
+#  - playbill-controller.service: the MQTT daemon (template lives next to
+#    the source it owns, so it's read from controller/systemd/).
+#  - playbill-audio-fix.service:  one-shot wireplumber-rescan kick to
+#    work around the boot-time codec-attach race on the Q6A.
 mkdir -p "$STAGING_DIR/files/systemd-user"
 install -m 644 "$CONTROLLER_DIR/systemd/playbill-controller.service" \
     "$STAGING_DIR/files/systemd-user/playbill-controller.service"
+install -m 644 "$REPO_ROOT/image/files/systemd-user/playbill-audio-fix.service" \
+    "$STAGING_DIR/files/systemd-user/playbill-audio-fix.service"
 
 # ── Fetch the latest yt-dlp release ───────────────────────────────────────
 # The apt-shipped yt-dlp lags YouTube's extractor changes by months, which

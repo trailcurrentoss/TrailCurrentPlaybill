@@ -378,11 +378,16 @@ body {
   cursor: pointer;
 }
 .radio-band.active { background: var(--tc-primary); color: #000; border-color: var(--tc-primary); }
-.radio-band.focused {
+.radio-band.focused,
+.radio-band:focus-visible {
   outline: 3px solid var(--tc-primary); outline-offset: 3px;
   transform: scale(1.05);
 }
 .radio-band-spacer { flex: 1; }
+
+/* Dial row wrapper — zone-root container for the dial button. Layout-only,
+   no chrome (the dial button itself provides the panel look). */
+.radio-dial-row { display: block; margin-bottom: 28px; }
 
 .radio-dial {
   background: linear-gradient(180deg, #0e1410, #050807);
@@ -393,10 +398,25 @@ body {
   position: relative;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.radio-dial.focused {
+.radio-dial.focused,
+.radio-dial:focus-visible {
   border-color: var(--tc-primary);
   box-shadow: 0 0 0 3px rgba(82,164,65,0.25);
 }
+/* When .radio-dial is a <button> (the FM/AM dial in zone-root mode), reset
+   native button chrome so the existing .radio-dial styling shows through. */
+button.radio-dial {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;            /* the :focus-visible rule above replaces this */
+  margin-bottom: 0;         /* spacing handled by the surrounding radio-dial-row */
+}
+button.radio-dial:focus { outline: none; }
 .radio-dial-freq {
   display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px;
 }
@@ -494,7 +514,8 @@ body {
   min-height: 78px;
 }
 .radio-preset:hover { border-color: rgba(255,255,255,0.16); }
-.radio-preset.focused {
+.radio-preset.focused,
+.radio-preset:focus-visible {
   outline: 3px solid var(--tc-primary); outline-offset: 3px;
   transform: scale(1.05); z-index: 5;
 }
@@ -554,6 +575,40 @@ body {
   box-shadow: 0 0 0 3px rgba(82,164,65,0.18);
 }
 
+/* Wrapping <label> around the hidden input + the visible 5-slot display.
+   Clicking anywhere on the slots focuses the input. focus-within drives
+   the same cursor highlight as the legacy .cursor class so the user sees
+   where their next digit will land. */
+.radio-zip-slots-label {
+  display: inline-block;
+  position: relative;
+  cursor: text;
+}
+/* Visually-hidden input. Sits behind the slot display, takes keystrokes,
+   carries focus for the FocusZones engine. */
+.radio-zip-input-hidden {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;   /* Prevent iOS-style zoom on focus if anyone touches this */
+  outline: none;
+  cursor: text;
+}
+/* When the hidden input has focus, light up the cursor slot so the user
+   can see where typing will land. */
+.radio-zip-slots-label:focus-within .radio-zip-slot.cursor {
+  border-color: var(--tc-primary);
+  box-shadow: 0 0 0 3px rgba(82,164,65,0.35);
+}
+
 /* Compact scanner-station tile: same shape as scan results, just denser */
 .radio-scanner-tile .freq    { font-size: 15px; }
 .radio-scanner-tile .signal  { font-size: 11px; color: rgba(255,255,255,0.7); }
@@ -586,7 +641,8 @@ body {
   font-family: var(--font-sans);
 }
 .radio-scan-result:hover { border-color: var(--tc-primary); }
-.radio-scan-result.focused {
+.radio-scan-result.focused,
+.radio-scan-result:focus-visible {
   outline: 3px solid var(--tc-primary); outline-offset: 3px;
   transform: scale(1.05); z-index: 5;
 }

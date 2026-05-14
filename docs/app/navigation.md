@@ -147,16 +147,34 @@ short — every entry is a tax.
 
 ### Text fields and the remote
 
-- **Real keyboard inside `<input>`/`<textarea>`**: Left/Right move the
-  cursor. Up/Down/Enter escape to zone navigation. Escape escapes the
-  field.
-- **Remote inside `<input>`/`<textarea>`**: ALL d-pad keys escape the
-  field. Text input from the remote always arrives via the separate
-  `nav.text` channel (PWA soft keyboard) — the user never types via
-  d-pad, so d-pad always means "navigate me out of here."
+The d-pad keys cooperate with the input caret rather than fighting it.
+Rules (applied by `focus-zones.js handleKeydown`):
 
-The zone engine distinguishes the two by checking `e.isTrusted`
-(`false` for synthetic events dispatched from the IPC remote bus).
+- **ArrowUp / ArrowDown**: **always escape the field.** Single-line
+  `<input>` has no meaningful vertical motion; in a `<textarea>` we
+  defer to native cursor movement until the caret can't move further
+  in that direction, then we escape.
+- **ArrowLeft**: cursor passthrough until the caret is at position 0,
+  then escape. ArrowLeft at the start of a leftmost-zone input falls
+  through to app.jsx's "left at root → open SideNav" fallback, matching
+  the rest of the contract.
+- **ArrowRight**: cursor passthrough until the caret is at the end,
+  then escape.
+- **Enter** in a single-line `<input>`: submits the form if one is
+  present, otherwise clicks the input (zone-engine `activate()`).
+- **Enter** in a `<textarea>`: inserts a newline. The contract has no
+  way to "submit" a textarea via d-pad; provide a Submit button.
+- **Escape**: blurs the input. The blurred state is then picked up by
+  the central handler the next dispatch and routed as Back per the
+  global contract.
+
+> **What we tried and discarded:** an earlier draft of the contract
+> proposed distinguishing "real keyboard" from "remote" via `e.isTrusted`.
+> This does not work. IR-remote keys reach the renderer through the
+> kernel input layer (`gpio-ir-receiver` → evdev → libinput → Wayland →
+> DOM), so they arrive with `isTrusted === true`, indistinguishable from
+> a USB keyboard. The caret-position policy above is independent of the
+> event source and works for both.
 
 ### Modal overlays (DVD prompt, future dialogs)
 

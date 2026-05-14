@@ -270,13 +270,79 @@
     const synthetic = !e.isTrusted;
     const inText = isTextField(active);
 
-    // Real-keyboard cursor passthrough for Left/Right inside a text field.
-    // Up/Down still escape the field — they're not text-edit shortcuts.
-    if (inText && !synthetic && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // Text-field escape policy.
+    //
+    // We CAN NOT use isTrusted to discriminate "remote" from "real keyboard"
+    // events as the contract docs originally proposed. IR-remote keys reach
+    // Electron through the kernel input layer (gpio-ir-receiver → evdev →
+    // libinput → Wayland → DOM) and arrive with isTrusted === true,
+    // indistinguishable from a USB keyboard. So we rely purely on caret
+    // position + key semantics:
+    //
+    //   ArrowUp / ArrowDown  → ALWAYS escape the field (single-line inputs
+    //                          have no vertical motion; in a textarea this
+    //                          escapes when the caret can't move further
+    //                          up/down — see below)
+    //   ArrowLeft            → cursor moves left until caret is at the
+    //                          start, then escape
+    //   ArrowRight           → cursor moves right until caret is at the
+    //                          end, then escape
+    //   Escape               → blur the field and let the central handler
+    //                          process Esc as Back on the next dispatch
+    //
+    // "Escape" here means: try to move focus out of the input via the
+    // zone engine (moveFromElement). If the engine can't find a target,
+    // blur the input — that pushes activeElement back to <body> and the
+    // next press will trigger enterZone(root) at the top of this function.
+    if (inText && e.key === 'ArrowUp') {
+      // Textareas allow vertical motion within the field; defer to native
+      // unless the caret is already at the top.
+      if (active.tagName === 'TEXTAREA') {
+        const beforeNewline = active.value.lastIndexOf('\n', Math.max(0, (active.selectionStart || 0) - 1));
+        if (beforeNewline >= 0) return false;
+      }
+      if (moveFromElement(active, 'up')) { e.preventDefault(); return true; }
+      try { active.blur(); } catch (_) {}
+      e.preventDefault();
+      return true;
+    }
+    if (inText && e.key === 'ArrowDown') {
+      if (active.tagName === 'TEXTAREA') {
+        const v = active.value || '';
+        const idx = (active.selectionStart || 0);
+        if (v.indexOf('\n', idx) >= 0) return false;
+      }
+      if (moveFromElement(active, 'down')) { e.preventDefault(); return true; }
+      try { active.blur(); } catch (_) {}
+      e.preventDefault();
+      return true;
+    }
+    if (inText && e.key === 'ArrowLeft') {
+      // Caret at very start → escape; otherwise cursor passthrough.
+      const atStart = (active.selectionStart || 0) === 0 && (active.selectionEnd || 0) === 0;
+      if (!atStart) return false;
+      if (moveFromElement(active, 'left')) { e.preventDefault(); return true; }
+      try { active.blur(); } catch (_) {}
+      // Return false here so app.jsx's "left at root → SideNav" fallback
+      // gets a chance to run (the blur happened, activeElement is now body,
+      // and the central handler treats body-left as "open side nav").
       return false;
     }
+    if (inText && e.key === 'ArrowRight') {
+      const len = (active.value || '').length;
+      const atEnd = (active.selectionStart || 0) === len && (active.selectionEnd || 0) === len;
+      if (!atEnd) return false;
+      if (moveFromElement(active, 'right')) { e.preventDefault(); return true; }
+      try { active.blur(); } catch (_) {}
+      return true;
+    }
+    if (inText && e.key === 'Escape') {
+      try { active.blur(); } catch (_) {}
+      e.preventDefault();
+      return true;
+    }
 
-    // Map keys to directions.
+    // Map keys to directions (non-text-field path).
     const dirMap = {
       ArrowUp:    'up',
       ArrowDown:  'down',

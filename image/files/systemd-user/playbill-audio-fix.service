@@ -1,0 +1,38 @@
+# TrailCurrent Playbill — wireplumber sound-card rescan kick
+#
+# Workaround for a recurring startup race on the Q6A: the WCD938x codec
+# attaches AFTER wireplumber has finished its initial sound-card scan at
+# user-session start. Wireplumber therefore only sees the `auto_null`
+# fallback sink, every audio output lands on "Dummy Output", and the
+# user has no sound until something restarts wireplumber.
+#
+# A `systemctl --user restart wireplumber` after the codec has settled
+# fixes it instantly. This unit schedules exactly that, once per user
+# session, gated on a 6-second pause so the kernel sound stack has time
+# to finish ALSA card enumeration before wireplumber's second-attempt
+# scan runs.
+#
+# This is a workaround — the proper fix is for wireplumber to react to
+# udev `add` events on the new sound card, which it intermittently
+# misses on this hardware. When the upstream pipewire/wireplumber bug
+# is resolved on the shipped version, this kick can be removed (search
+# for `playbill-audio-fix` in the rsdk hooks to find the install site).
+#
+# Installed by image build hook 5a at:
+#   /usr/lib/systemd/user/playbill-audio-fix.service
+# Auto-enabled via /usr/lib/systemd/user/default.target.wants/.
+
+[Unit]
+Description=TrailCurrent Playbill — kick wireplumber once after sound stack settles
+Documentation=https://github.com/trailcurrent/TrailCurrentPlaybill/blob/main/docs/app/architecture.md
+After=wireplumber.service pipewire.service
+Wants=wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/sleep 6
+ExecStart=/usr/bin/systemctl --user restart wireplumber.service
+RemainAfterExit=no
+
+[Install]
+WantedBy=default.target

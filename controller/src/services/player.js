@@ -29,6 +29,10 @@ const { RUNTIME_DIR, ensureDirs } = require('../paths');
 
 const SOCK_PATH = path.join(RUNTIME_DIR, 'mpv.sock');
 
+// Override file for two of mpv's default key bindings (ESC, BS → quit).
+// See mpv-input.conf in this directory for the rationale.
+const INPUT_CONF = path.join(__dirname, 'mpv-input.conf');
+
 // Single global session — only one playback at a time. Spec'd that way
 // in architecture-v2 §6: switching from radio to YouTube stops the radio.
 let session = null;
@@ -76,11 +80,17 @@ function play({ url, audioUrl, hwdec = 'no', headers, mediaType = 'video', metad
       ...(fullscreen ? ['--fs'] : []),
       '--no-border', '--ontop', '--no-osc',
       // KEEP mpv's default key bindings — they're exactly the 10-foot
-      // keyboard map we want: Esc/q quits (only way for the user to get
-      // back to Playbill once playback starts in fullscreen), Space
-      // toggles pause, LEFT/RIGHT seek, UP/DOWN volume, m mute, f
-      // fullscreen toggle. Earlier we passed --no-input-default-bindings
-      // and inadvertently locked the user inside mpv with no escape.
+      // keyboard map we want: q quits, Space toggles pause, LEFT/RIGHT
+      // seek, UP/DOWN volume, m mute, f fullscreen toggle. Earlier we
+      // passed --no-input-default-bindings and inadvertently locked the
+      // user inside mpv with no escape.
+      //
+      // The one override we ship (via --input-conf): ESC and BS quit
+      // instead of toggling fullscreen off. The remote's Back delivers
+      // KEY_ESC; mpv's default ESC handler (set fullscreen no) would
+      // otherwise leave mpv windowed-and-playing while still holding
+      // focus, stranding the user away from the GUI.
+      `--input-conf=${INPUT_CONF}`,
       '--keep-open=no',
       `--hwdec=${hwdec}`,
       '--vo=' + (mediaType === 'audio' ? 'null' : 'gpu-next'),

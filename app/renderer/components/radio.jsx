@@ -1,6 +1,17 @@
 /* AM/FM radio view — driven by an RTL-SDR USB dongle. The actual demod /
    audio path lives in the main-process radio service; this view is purely
-   focus-driven UI for tuning, presets, and band selection. */
+   focus-driven UI for tuning, presets, and band selection.
+
+   NAV CONTRACT: this screen uses `data-zone-root` + `data-zone-axis`
+   per docs/app/navigation.md. There are zero `window.addEventListener`
+   calls. Activation (Enter on a focused element) goes through the
+   FocusZones engine which clicks the focused element; that maps to the
+   button's onClick handler. The only screen-specific keyboard work is on
+   the dial control, where ArrowLeft/Right step the frequency rather than
+   moving focus — that's bound as an element-level onKeyDown on the dial
+   button, which only fires when the dial actually has focus and which
+   cooperates with the zone engine (it preventDefaults Left/Right and
+   leaves Up/Down/Enter to bubble up to the engine). */
 
 const FM_MIN_HZ = 87_500_000;   // North-American FM band: 87.5–108 MHz
 const FM_MAX_HZ = 108_000_000;
@@ -10,7 +21,7 @@ const AM_MIN_HZ =   530_000;    // North-American AM band: 530–1700 kHz
 const AM_MAX_HZ = 1_700_000;
 const AM_STEP_HZ = 10_000;      // 10 kHz channel spacing in NA
 
-function RadioView({ focus, setFocus }) {
+function RadioView() {
   const [adapters, setAdapters]   = useState(null);
   const [tools, setTools]         = useState(null);
   const [presets, setPresets]     = useState([]);
@@ -100,7 +111,8 @@ function RadioView({ focus, setFocus }) {
     }
   }
 
-  async function submitZip() {
+  async function submitZip(e) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
     if (zipDraft.length !== 5) {
       setError('Enter a 5-digit ZIP code first.');
       return;
@@ -155,156 +167,44 @@ function RadioView({ focus, setFocus }) {
     await tune(p.frequencyHz);
   }
 
-  // Keyboard for the centre row.
-  //  FM/AM: ←/→ steps frequency, Enter tunes, B toggles band.
-  //  Scanner: digits append to the ZIP draft, Backspace removes one, Enter
-  //           submits, B cycles bands. The ZIP entry path doesn't depend on
-  //           a separate input element — typing while focus.row === 'radio-dial'
-  //           is captured here so a TV remote / IR keypad just works.
-  useEffect(() => {
-    function onKey(e) {
-      if (focus.row !== 'radio-dial') return;
-      if (band === 'scanner') {
-        if (/^[0-9]$/.test(e.key)) {
-          setZipDraft((d) => (d + e.key).slice(0, 5));
-          e.preventDefault(); e.stopPropagation();
-        } else if (e.key === 'Backspace' || e.key === 'Delete') {
-          setZipDraft((d) => d.slice(0, -1));
-          e.preventDefault(); e.stopPropagation();
-        } else if (e.key === 'Enter' || e.key === ' ') {
-          submitZip();
-          e.preventDefault(); e.stopPropagation();
-        } else if (e.key === 'b' || e.key === 'B') {
-          switchBand('fm');
-        }
-        return;
-      }
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        const dir = e.key === 'ArrowLeft' ? -1 : 1;
-        setFreq(f => clampToBand(f + dir * stepHz));
-        e.preventDefault(); e.stopPropagation();
-      } else if (e.key === 'Enter' || e.key === ' ') {
-        tune(freq);
-      } else if (e.key === 'b' || e.key === 'B') {
-        switchBand(band === 'fm' ? 'am' : 'fm');
-      }
+  // Dial keyboard. Only Left/Right (step frequency) is screen-specific —
+  // those would otherwise be consumed by the zone engine as horizontal
+  // motion through the dial-row siblings (there is only one focusable
+  // button in this row, so the engine would just bounce). Up/Down/Enter
+  // bubble up to the zone engine which routes them properly.
+  function onDialKey(e) {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const dir = e.key === 'ArrowLeft' ? -1 : 1;
+      setFreq(f => clampToBand(f + dir * stepHz));
+      e.preventDefault();
+      e.stopPropagation();
     }
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [focus, freq, band, stepHz, minHz, maxHz, zipDraft]);
+    // Enter / Space → bubble to onClick (tune)
+    // ArrowUp / ArrowDown → bubble to zone engine (escape to band / scan / presets row)
+  }
 
-  // Keyboard: Enter on the band-selector row activates whichever button is
-  // focused. Without this, the focus ring lands on a button but Enter is a
-  // noop because the global key handler in app.jsx doesn't dispatch click
-  // events. Cols: 0=FM, 1=AM, 2=Scanner, 3=Scan.
-  useEffect(() => {
-    function onKey(e) {
-      if (focus.row !== 'radio-band') return;
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      if (focus.col === 0) switchBand('fm');
-      else if (focus.col === 1) switchBand('am');
-      else if (focus.col === 2) switchBand('scanner');
-      else if (focus.col === 3) scan();
-      e.preventDefault(); e.stopPropagation();
-    }
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [focus, band]);
-
-  // Enter on a preset → recall.
-  useEffect(() => {
-    function onKey(e) {
-      if (focus.row !== 'radio-presets') return;
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      const p = presets[focus.col];
-      if (p) recallPreset(p);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [focus, presets]);
-
-  // Enter on the station-list row → tune. The list holds either FM/AM
-  // rtl_power results or scanner-mode stations from the offline DB; both
-  // have a frequencyHz field. Scanner items also carry an explicit
-  // modulation so the tune call uses the right demod (NBFM for weather/
-  // marine/ham, AM for aviation, etc.).
-  useEffect(() => {
-    function onKey(e) {
-      if (focus.row !== 'radio-scan') return;
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      const list = (band === 'scanner' && scanner) ? scanner.stations : scanResults;
-      const r = list && list[focus.col];
-      if (!r) return;
-      setFreq(r.frequencyHz);
-      tune(r.frequencyHz, r.modulation);
-      e.preventDefault(); e.stopPropagation();
-    }
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [focus, scanResults, scanner, band]);
-
-  // Station-list row is a wrapped CSS grid — visually it has multiple rows of
-  // tiles, but the focus engine sees a 1D `col` index. We measure the actual
-  // tiles-per-visual-row from the DOM, then translate ArrowUp/Down into
-  // ±tilesPerRow column jumps so keyboard nav reaches every tile, not just
-  // the first row.
-  const scanGridRef = useRef(null);
-  const [tilesPerRow, setTilesPerRow] = useState(1);
-  useEffect(() => {
-    if (!scanGridRef.current) return;
-    const measure = () => {
-      const tiles = scanGridRef.current && scanGridRef.current.children;
-      if (!tiles || tiles.length === 0) return;
-      const firstTop = tiles[0].offsetTop;
-      let n = 0;
-      for (const t of tiles) {
-        if (t.offsetTop !== firstTop) break;
-        n++;
-      }
-      if (n > 0) setTilesPerRow(n);
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [scanResults, scanner, band]);
-
-  // 2D nav across the wrapped tile grid. Without this, ArrowDown from the
-  // first visual tile row jumps straight to the presets row, skipping every
-  // tile after column N. ArrowRight is also clamped to the actual list
-  // length so the focus ring doesn't disappear into empty schema columns.
-  useEffect(() => {
-    function onKey(e) {
-      if (focus.row !== 'radio-scan') return;
-      const list = (band === 'scanner' && scanner) ? scanner.stations : scanResults;
-      if (!list || list.length === 0) return;
-      let next = focus.col;
-      let consumed = false;
-      if (e.key === 'ArrowRight') {
-        if (focus.col + 1 < list.length) { next = focus.col + 1; consumed = true; }
-      } else if (e.key === 'ArrowLeft') {
-        if (focus.col > 0) { next = focus.col - 1; consumed = true; }
-        // col === 0 — let app.jsx open the side nav.
-      } else if (e.key === 'ArrowDown') {
-        const tryCol = focus.col + tilesPerRow;
-        if (tryCol < list.length) { next = tryCol; consumed = true; }
-        // No further tiles below — fall through to presets row.
-      } else if (e.key === 'ArrowUp') {
-        if (focus.col >= tilesPerRow) { next = focus.col - tilesPerRow; consumed = true; }
-        // No tiles above — fall through to dial / zip row.
-      }
-      if (consumed && setFocus) {
-        setFocus((f) => ({ ...f, col: next }));
-        e.preventDefault(); e.stopPropagation();
-      }
-    }
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [focus, scanResults, scanner, band, tilesPerRow, setFocus]);
+  // ZIP input: the IR remote can't deliver digits, so this is only useful
+  // with a USB keyboard, the PWA soft keyboard, or a touch-keyboard pop-up.
+  // For all three input mechanisms, native <input value=...> handling works
+  // correctly. We don't synthesize key handling here; the controlled value
+  // syncs to `zipDraft` via onChange. Submission is via a real <form>, so
+  // Enter on the input triggers requestSubmit() (which the FocusZones
+  // activate() shim already understands).
+  function onZipChange(e) {
+    // Strip non-digits, cap at 5.
+    const v = (e.target.value || '').replace(/\D/g, '').slice(0, 5);
+    setZipDraft(v);
+  }
 
   const ready = adapters && tools;
 
   return (
-    <div className="radio-view">
+    <div
+      data-zone-root
+      data-zone="radio"
+      data-zone-axis="vertical"
+      className="radio-view"
+    >
       <div className="view-hdr">
         <h2>Radio</h2>
         <p>{radioStatus({ tools, adapters, state })}</p>
@@ -323,26 +223,28 @@ function RadioView({ focus, setFocus }) {
 
       {ready && tools.rtl_fm && adapters.length > 0 && (
         <>
-          <div className="radio-band-row">
+          {/* Band selector row */}
+          <div
+            data-zone="radio.band"
+            data-zone-axis="horizontal"
+            className="radio-band-row"
+          >
             <button
-              className={'radio-band' + (band === 'fm' ? ' active' : '') +
-                         (focus.row === 'radio-band' && focus.col === 0 ? ' focused' : '')}
+              data-zone-default={band === 'fm' ? 'true' : undefined}
+              className={'radio-band' + (band === 'fm' ? ' active' : '')}
               onClick={() => switchBand('fm')}
             >FM</button>
             <button
-              className={'radio-band' + (band === 'am' ? ' active' : '') +
-                         (focus.row === 'radio-band' && focus.col === 1 ? ' focused' : '')}
+              className={'radio-band' + (band === 'am' ? ' active' : '')}
               onClick={() => switchBand('am')}
             >AM</button>
             <button
-              className={'radio-band' + (band === 'scanner' ? ' active' : '') +
-                         (focus.row === 'radio-band' && focus.col === 2 ? ' focused' : '')}
+              className={'radio-band' + (band === 'scanner' ? ' active' : '')}
               onClick={() => switchBand('scanner')}
               title="Scanner: weather, aviation, marine, ham, more"
             >Scanner</button>
             <button
-              className={'tv-btn' +
-                         (focus.row === 'radio-band' && focus.col === 3 ? ' focused' : '')}
+              className="tv-btn"
               onClick={scan}
               disabled={scanning || band === 'scanner'}
               title={band === 'scanner'
@@ -354,72 +256,117 @@ function RadioView({ focus, setFocus }) {
             </button>
             <div className="radio-band-spacer" />
             {state.running ? (
-              <button className="tv-btn"
-                onClick={stop}
-              ><ion-icon name="stop-outline"></ion-icon> Stop</button>
+              <button className="tv-btn" onClick={stop}>
+                <ion-icon name="stop-outline"></ion-icon> Stop
+              </button>
             ) : null}
           </div>
 
+          {/* FM/AM dial row.
+              The dial is a single <button> (so the FocusZones activate()
+              shim can click it on Enter); className kept as `radio-dial`
+              so the existing CSS applies, with a small button-reset block
+              in tv.css (`button.radio-dial`) defeating native button chrome. */}
           {band !== 'scanner' && (
-            <div className={'radio-dial' + (focus.row === 'radio-dial' ? ' focused' : '')}>
-              <div className="radio-dial-freq">
-                <span className="num">{formatFreq(freq, band)}</span>
-                <span className="unit">{band === 'fm' ? 'MHz' : 'kHz'}</span>
-              </div>
-              <div className="radio-dial-hint">
-                ← step down · → step up · Enter to tune · B to switch band
-              </div>
-              <RadioStrip
-                band={band}
-                freq={freq}
-                minHz={minHz}
-                maxHz={maxHz}
-                stepHz={stepHz}
-                onPick={(hz) => { setFreq(hz); tune(hz); }}
-              />
-              <div className="radio-now">
-                {busy ? 'Tuning…' :
-                 state.running ? `On air · ${formatFreq(state.frequencyHz, state.band)} ${state.band.toUpperCase()}` :
-                 'Press Enter to tune'}
-              </div>
+            <div
+              data-zone="radio.dial"
+              data-zone-axis="horizontal"
+              className="radio-dial-row"
+            >
+              <button
+                type="button"
+                className="radio-dial"
+                onClick={() => tune(freq)}
+                onKeyDown={onDialKey}
+                title="Enter to tune · ← → step frequency"
+              >
+                <div className="radio-dial-freq">
+                  <span className="num">{formatFreq(freq, band)}</span>
+                  <span className="unit">{band === 'fm' ? 'MHz' : 'kHz'}</span>
+                </div>
+                <div className="radio-dial-hint">
+                  ← step down · → step up · Enter to tune
+                </div>
+                <RadioStrip
+                  band={band}
+                  freq={freq}
+                  minHz={minHz}
+                  maxHz={maxHz}
+                  stepHz={stepHz}
+                />
+                <div className="radio-now">
+                  {busy ? 'Tuning…' :
+                   state.running ? `On air · ${formatFreq(state.frequencyHz, state.band)} ${state.band.toUpperCase()}` :
+                   'Press Enter to tune'}
+                </div>
+              </button>
             </div>
           )}
 
+          {/* Scanner ZIP row.
+              The visible 5-slot digit display is unchanged from the original;
+              a visually-hidden <input> sits behind it and is what actually
+              receives focus + keystrokes. The <label> wrap means focus-within
+              applies the same focus-ring styling the rest of the screen uses. */}
           {band === 'scanner' && (
-            <div className={'radio-dial radio-zip' + (focus.row === 'radio-dial' ? ' focused' : '')}>
-              <div className="radio-zip-prompt">Enter your US ZIP code</div>
-              <div className="radio-zip-digits">
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <span
-                    key={i}
-                    className={'radio-zip-slot' +
-                      (i < zipDraft.length ? ' filled' : '') +
-                      (i === zipDraft.length ? ' cursor' : '')}
-                  >{zipDraft[i] || '·'}</span>
-                ))}
-              </div>
-              <div className="radio-dial-hint">
-                Type 5 digits · Backspace deletes · Enter loads stations · B back to FM
-              </div>
-              <div className="radio-now">
-                {busy ? 'Loading stations…' :
-                 scanner ? `Stations near ${scanner.place} · ZIP ${scanner.zip}` :
-                 'Submit a ZIP to populate the local list'}
-              </div>
+            <div
+              data-zone="radio.zip"
+              data-zone-axis="horizontal"
+              className="radio-dial radio-zip"
+            >
+              <form className="radio-zip-form" onSubmit={submitZip}>
+                <div className="radio-zip-prompt">Enter your US ZIP code</div>
+                <label className="radio-zip-slots-label">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]{5}"
+                    maxLength={5}
+                    autoComplete="off"
+                    spellCheck="false"
+                    value={zipDraft}
+                    onChange={onZipChange}
+                    className="radio-zip-input-hidden"
+                    aria-label="ZIP code"
+                  />
+                  <div className="radio-zip-digits" aria-hidden="true">
+                    {[0, 1, 2, 3, 4].map((i) => (
+                      <span
+                        key={i}
+                        className={'radio-zip-slot' +
+                          (i < zipDraft.length ? ' filled' : '') +
+                          (i === zipDraft.length ? ' cursor' : '')}
+                      >{zipDraft[i] || '·'}</span>
+                    ))}
+                  </div>
+                </label>
+                <div className="radio-dial-hint">
+                  Type 5 digits · Enter loads stations
+                </div>
+                <div className="radio-now">
+                  {busy ? 'Loading stations…' :
+                   scanner ? `Stations near ${scanner.place} · ZIP ${scanner.zip}` :
+                   'Submit a ZIP to populate the local list'}
+                </div>
+              </form>
             </div>
           )}
 
+          {/* Scan results grid (FM/AM rtl_power output) */}
           {scanResults && scanResults.length > 0 && band !== 'scanner' && (
             <div className="radio-scan-results">
               <div className="radio-scan-hdr">
                 Scan: {scanResults.length} station{scanResults.length === 1 ? '' : 's'} found
               </div>
-              <div className="radio-scan-grid" ref={scanGridRef}>
-                {scanResults.map((s, i) => (
+              <div
+                data-zone="radio.scan"
+                data-zone-axis="grid"
+                className="radio-scan-grid"
+              >
+                {scanResults.map((s) => (
                   <button
                     key={s.frequencyHz}
-                    className={'radio-scan-result' +
-                      (focus.row === 'radio-scan' && focus.col === i ? ' focused' : '')}
+                    className="radio-scan-result"
                     onClick={() => { setFreq(s.frequencyHz); tune(s.frequencyHz); }}
                     title={`Tune ${formatFreq(s.frequencyHz, band)} ${band.toUpperCase()}`}
                   >
@@ -439,17 +386,21 @@ function RadioView({ focus, setFocus }) {
             </div>
           )}
 
+          {/* Scanner band station list */}
           {band === 'scanner' && scanner && scanner.stations.length > 0 && (
             <div className="radio-scan-results">
               <div className="radio-scan-hdr">
                 {scanner.stations.length} stations · {scanner.place}
               </div>
-              <div className="radio-scan-grid" ref={scanGridRef}>
-                {scanner.stations.map((s, i) => (
+              <div
+                data-zone="radio.scan"
+                data-zone-axis="grid"
+                className="radio-scan-grid"
+              >
+                {scanner.stations.map((s) => (
                   <button
                     key={s.frequencyHz + (s.label || '')}
-                    className={'radio-scan-result radio-scanner-tile' +
-                      (focus.row === 'radio-scan' && focus.col === i ? ' focused' : '')}
+                    className="radio-scan-result radio-scanner-tile"
                     onClick={() => tuneScannerStation(s)}
                     title={`Tune ${(s.frequencyHz / 1e6).toFixed(3)} MHz · ${s.modulation.toUpperCase()} · ${s.label}`}
                   >
@@ -462,15 +413,18 @@ function RadioView({ focus, setFocus }) {
             </div>
           )}
 
+          {/* Presets row */}
           <div className="radio-presets">
             <div className="radio-presets-hdr">Presets</div>
-            <div className="radio-presets-grid">
+            <div
+              data-zone="radio.presets"
+              data-zone-axis="horizontal"
+              className="radio-presets-grid"
+            >
               {presets.map((p, i) => (
                 <button
                   key={p.slot}
-                  className={'radio-preset' +
-                             (p.frequencyHz ? '' : ' empty') +
-                             (focus.row === 'radio-presets' && focus.col === i ? ' focused' : '')}
+                  className={'radio-preset' + (p.frequencyHz ? '' : ' empty')}
                   onClick={() => p.frequencyHz ? recallPreset(p) : savePreset(i)}
                   onContextMenu={(e) => { e.preventDefault(); savePreset(i); }}
                   title={p.frequencyHz ? 'Click to recall · right-click to overwrite' : 'Click to save current frequency here'}
@@ -492,10 +446,14 @@ function RadioView({ focus, setFocus }) {
   );
 }
 
-function RadioStrip({ band, freq, minHz, maxHz, stepHz, onPick }) {
+function RadioStrip({ band, freq, minHz, maxHz, stepHz }) {
+  // Read-only visualization of the dial position. The whole dial control
+  // is a single <button> at the zone level, so individual tick clicks
+  // would compete with the button's onClick; tick-tap is left to the
+  // mouse-driven onClick on the parent button (which tunes the current
+  // freq). Keyboard / IR users use ← → on the focused dial to step.
   const total = (maxHz - minHz) / stepHz;
   const pos = (freq - minHz) / (maxHz - minHz);
-  // Show a few neighboring channels around the cursor for the dial feel.
   const span = band === 'fm' ? 12 : 20;
   const cursor = Math.round((freq - minHz) / stepHz);
   const tickStart = Math.max(0, cursor - Math.floor(span / 2));
@@ -513,7 +471,6 @@ function RadioStrip({ band, freq, minHz, maxHz, stepHz, onPick }) {
           <div
             key={t.i}
             className={'tick' + (t.isCursor ? ' cursor' : '')}
-            onClick={() => onPick(t.hz)}
           >
             {t.isCursor ? <span className="lbl">{formatFreq(t.hz, band)}</span> : null}
           </div>
