@@ -55,13 +55,18 @@ function getMetadata() { return session ? session.metadata || null : null; }
  * @param {string} [opts.mediaType='video'] 'video' or 'audio'
  * @param {object} [opts.metadata]          title/subtitle/artworkUrl/sourceItemId
  * @param {boolean} [opts.fullscreen=true]
+ * @param {string[]} [opts.audioFxArgs]     extra mpv args from audio-fx
+ *                                          (e.g. ['--af=...', '--volume=70']).
+ *                                          Per-source loudness trim + dynaudnorm
+ *                                          live here so all callers route through
+ *                                          one balancing layer.
  */
 // Q6A's V4L2 H.264 path produces green/fuzzy frames (see
 // docs/RADXA_LESSONS_LEARNED.md and the Iris-driver pending note). Until the
 // kernel ships a working hwdec backend, force software decode — 1080p MKVs
 // play fine on the CPU. Callers that want to opt back in can pass an explicit
 // hwdec value (e.g. on non-Q6A hardware).
-function play({ url, audioUrl, hwdec = 'no', headers, mediaType = 'video', metadata, fullscreen = true } = {}) {
+function play({ url, audioUrl, hwdec = 'no', headers, mediaType = 'video', metadata, fullscreen = true, audioFxArgs } = {}) {
   if (!url) return Promise.reject(new Error('player.play: url required'));
   ensureDirs();
   return stop().then(() => new Promise((resolve, reject) => {
@@ -104,6 +109,13 @@ function play({ url, audioUrl, hwdec = 'no', headers, mediaType = 'video', metad
     if (audioUrl) {
       args.push(`--audio-file=${audioUrl}`);
       args.push('--audio-file-auto=no');
+    }
+
+    // Audio normalization + per-source trim from audio-fx. Pushed AFTER the
+    // base args so user-configured trim overrides any default we set above
+    // (mpv resolves later --volume= flags as authoritative).
+    if (Array.isArray(audioFxArgs) && audioFxArgs.length) {
+      args.push(...audioFxArgs);
     }
 
     args.push(url);

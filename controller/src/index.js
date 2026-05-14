@@ -86,6 +86,13 @@ function seedDefaultSettings() {
     display:  { theme: 'auto', idleTimeoutSeconds: 0 },
     behavior: { resumeLastSessionOnLaunch: true },
     hardware: { dvbAdapterIndex: null, rtlSdrAdapterIndex: null },
+    audio: {
+      normalize: true,
+      perSourceTrimDb: {
+        library: 0, livetv: -3, youtube: -2,
+        radioFm: -8, radioAm: 0, cast: 0,
+      },
+    },
   };
 }
 
@@ -178,11 +185,11 @@ async function main() {
   });
 
   registerSystemHandlers({ bus, state, settings, connection, mqtt });
-  radioHandlers.register({ bus, state });
+  radioHandlers.register({ bus, state, settings });
   volumeHandlers.register({ bus, state });
   livetvHandlers.register({ bus, state });
   deviceHandlers.register({ bus, state, settings });
-  transportHandlers.register({ bus, state });
+  transportHandlers.register({ bus, state, settings });
   sourceHandlers.register({ bus, state, sources: [youtubeSource, castSource, netflixSource] });
   youtubeHandlers.register({ bus, state });
   headwatersHandlers.register({ bus, state });

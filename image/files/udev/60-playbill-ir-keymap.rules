@@ -1,0 +1,19 @@
+# /etc/udev/rules.d/60-playbill-ir-keymap.rules
+#
+# Load Playbill's IR keymap into the kernel rc-core whenever an rc-core
+# device appears. Required because Ubuntu Noble's `ir-keytable` deb package
+# does NOT ship its own /lib/udev/rules.d/60-ir-keytable.rules — the dpkg
+# manifest contains the binary, /etc/rc_maps.cfg, and the bundled toml
+# library, but no udev integration. Without this rule, the kernel boots
+# with only the `lirc` protocol enabled and the rc-empty placeholder
+# keymap loaded, and every IR button press is silently dropped.
+#
+# Action: on each `rc` subsystem add event (one per rc-core device, e.g.
+# rc0 from gpio_ir_recv on the Q6A 40-pin header), enable the NEC decoder
+# and write the Playbill keymap onto that specific device.
+#
+# `-s $name` scopes the apply to the specific rc-core device that just
+# appeared (rc0, rc1, etc.). `-c` clears any pre-existing entries before
+# the write so a re-plug doesn't accumulate duplicate scancodes.
+
+ACTION=="add", SUBSYSTEM=="rc", RUN+="/usr/bin/ir-keytable -s $name -c -p nec -w /etc/rc_keymaps/playbill.toml"

@@ -154,6 +154,7 @@ function(
             "gstreamer1.0-libav",
             "gstreamer1.0-tools",
             "v4l-utils",                        // v4l2-ctl --list-devices
+            "ir-keytable",                      // loads /etc/rc_keymaps/playbill.toml for the gpio-ir-receiver
             "libva2",                           // VA-API surface (some apps probe)
             "vainfo",
 
@@ -602,6 +603,7 @@ function(
                         avahi-daemon \
                         avahi-utils \
                         libcap2-bin \
+                        sox \
                         uxplay \
                         brave-browser
                 # Note on yt-dlp: apt's package can lag YouTube's extractor
@@ -639,6 +641,17 @@ function(
                 # board where iPhone connect succeeded but the screen
                 # stayed black; installing gstreamer1.0-gl + switching to
                 # explicit `-vs glimagesink` fixed it.
+                #
+                # Note on sox: per-band loudness trim for the radio pipeline.
+                # rtl_fm has no audio-level control and aplay is a pass-through;
+                # without sox in the middle, FM stations land ~8 dB hotter than
+                # AM and ~12 dB hotter than DVD playback, which is jarring when
+                # the user switches sources. controller/src/services/radio.js
+                # detects sox at runtime and slots a `vol N dB` + light
+                # `compand` filter between rtl_fm and aplay when present; if
+                # sox is missing the chain degrades gracefully to the legacy
+                # untrimmed two-process pipeline. The trim values are
+                # user-tunable via Settings → Audio.
 
                 # Fail-fast verification: hook 8c expects flatpak; hook 5
                 # expects libnss3/libxss1/libxtst6/libatspi2.0-0; the
@@ -663,7 +676,7 @@ function(
                            gstreamer1.0-gl \
                            ffmpeg lame flac libdvdread8 libdvdnav4 \
                            nodejs yt-dlp avahi-daemon libcap2-bin \
-                           uxplay brave-browser; do
+                           sox uxplay brave-browser; do
                     if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
                         MISSING="$MISSING $pkg"
                     fi
@@ -1836,10 +1849,26 @@ function(
                 chroot "$1" systemctl mask    ssh.socket 2>/dev/null || true
                 rm -f "$1/etc/systemd/system/ssh.service.requires/ssh.socket"
 
+                # systemd-timesyncd config drop-in. The Q6A's DS1307 RTC chip is
+                # populated but the carrier ships without a CR2032 battery, so
+                # cold boot starts the clock at a firmware-default in the past.
+                # Without timesyncd enabled, the MQTT bridge then fails its
+                # Headwaters TLS handshake with "certificate is not yet valid"
+                # (logged by mqtt.js as the generic "self-signed certificate in
+                # certificate chain" — see memory feedback_q6a_clock_skew_blocks_mqtt.md).
+                # The drop-in below points to Headwaters first (for rigs that
+                # run NTP there) and falls back to public pools.
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                FILES="$STAGING/files"
+                mkdir -p "$1/etc/systemd/timesyncd.conf.d"
+                install -m 644 "$FILES/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf" \
+                    "$1/etc/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf"
+
                 chroot "$1" systemctl enable \
                     ssh.service \
                     avahi-daemon.service \
                     NetworkManager.service \
+                    systemd-timesyncd.service \
                     gdm.service \
                     trailcurrent-playbill-firstboot.service \
                     cdsprpcd.service
@@ -1869,20 +1898,24 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 21: Install device-tree overlay (unused-pins disable)
+            // Hook 21: Install device-tree overlays (unused-pins disable + IR receiver)
             //
-            // Defense-in-depth against EMI / floating-pin issues. The unused-pins
-            // overlay claims every 40-pin header GPIO we do not bind so they sit
-            // in a defined state instead of being susceptible to capacitive
-            // coupling from adjacent SPI clocks etc. Compiled by build.sh from
-            // image/overlays/*.dts before this hook runs.
+            // - unused-pins-disable: defense-in-depth against EMI / floating-pin issues.
+            //   Claims every 40-pin header GPIO we do not bind so they sit in a defined
+            //   state instead of being susceptible to capacitive coupling from adjacent
+            //   SPI clocks etc.
+            // - ir-recv: binds gpio-ir-receiver to GPIO_1 (header PIN_15) for the
+            //   KY-022 / VS1838B IR demodulator; partners with /etc/rc_keymaps/playbill.toml
+            //   to map remote scancodes to KeyboardEvent keycodes.
+            //
+            // Both compiled by build.sh from image/overlays/*.dts before this hook runs.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
-                echo "[hook 21] installing device-tree overlay (unused-pins)"
+                echo "[hook 21] installing device-tree overlays (unused-pins + ir-recv)"
 
                 STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
-                OVERLAYS="qcs6490-radxa-dragon-q6a-playbill-unused-pins-disable.dtbo"
+                OVERLAYS="qcs6490-radxa-dragon-q6a-playbill-unused-pins-disable.dtbo qcs6490-radxa-dragon-q6a-playbill-ir-recv.dtbo"
                 for OVR in $OVERLAYS; do
                     if [ ! -f "$STAGING/files/dtbo/$OVR" ]; then
                         echo "  ERROR: overlay $OVR missing from staging" >&2
@@ -1937,6 +1970,36 @@ function(
                     done
                 } >> "$LOADER"
                 echo "  enabled overlays for $KVER"
+
+                # IR keymap + rc_maps registration (paired with ir-recv overlay).
+                #
+                # IMPORTANT: Ubuntu Noble's `ir-keytable` deb does NOT ship a
+                # /lib/udev/rules.d/60-ir-keytable.rules — the package contains
+                # the binary, /etc/rc_maps.cfg, and the bundled toml table, but
+                # no udev integration (verified via dpkg -L ir-keytable on a
+                # live Q6A install). Without our own udev rule the kernel boots
+                # with only `lirc` enabled and the rc-empty placeholder loaded,
+                # so every button press is silently dropped. We ship our own
+                # rule below to fill that gap.
+                #
+                # We also explicitly pass `-c -p nec -w` rather than the
+                # rc_maps.cfg-driven `-a` so we are not depending on the
+                # rc-map-name lookup matching (the kernel logs
+                # "rc_core: IR keymap rc-playbill not found" at boot because
+                # rc-playbill is a userspace name, not a built-in rc_map —
+                # cosmetic, but it means `-a` can be fragile here).
+                FILES="$STAGING/files"
+                if [ -f "$FILES/rc_keymaps/playbill.toml" ]; then
+                    mkdir -p "$1/etc/rc_keymaps"
+                    install -m 644 "$FILES/rc_keymaps/playbill.toml" \
+                        "$1/etc/rc_keymaps/playbill.toml"
+                    install -m 644 "$FILES/rc_keymaps/rc_maps.cfg" \
+                        "$1/etc/rc_maps.cfg"
+                    mkdir -p "$1/etc/udev/rules.d"
+                    install -m 644 "$FILES/udev/60-playbill-ir-keymap.rules" \
+                        "$1/etc/udev/rules.d/60-playbill-ir-keymap.rules"
+                    echo "  installed IR keymap (rc-playbill → Argon-style NEC table) + udev loader"
+                fi
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -2333,19 +2396,37 @@ function(
                     FAIL=$((FAIL+1))
                 fi
 
-                # DT overlay staged + referenced by loader entry
-                OVR="qcs6490-radxa-dragon-q6a-playbill-unused-pins-disable.dtbo"
-                if ls "$1"/boot/efi/*/[0-9]*/dtbo/"$OVR" 1>/dev/null 2>&1; then
-                    echo "  ✓ DT overlay staged: $OVR"
+                # DT overlays staged + referenced by loader entry
+                for OVR in \
+                    qcs6490-radxa-dragon-q6a-playbill-unused-pins-disable.dtbo \
+                    qcs6490-radxa-dragon-q6a-playbill-ir-recv.dtbo
+                do
+                    if ls "$1"/boot/efi/*/[0-9]*/dtbo/"$OVR" 1>/dev/null 2>&1; then
+                        echo "  ✓ DT overlay staged: $OVR"
+                    else
+                        echo "  ✗ DT overlay NOT staged: $OVR"
+                        FAIL=$((FAIL+1))
+                    fi
+                    if grep -r --include='*.conf' -l "devicetree-overlay .*$OVR" \
+                       "$1/boot/efi/loader/entries/" >/dev/null 2>&1; then
+                        echo "  ✓ loader entry references $OVR"
+                    else
+                        echo "  ✗ no loader entry references $OVR"
+                        FAIL=$((FAIL+1))
+                    fi
+                done
+
+                # IR keymap installed + registered
+                if [ -f "$1/etc/rc_keymaps/playbill.toml" ]; then
+                    echo "  ✓ IR keymap present: /etc/rc_keymaps/playbill.toml"
                 else
-                    echo "  ✗ DT overlay NOT staged: $OVR"
+                    echo "  ✗ IR keymap missing: /etc/rc_keymaps/playbill.toml"
                     FAIL=$((FAIL+1))
                 fi
-                if grep -r --include='*.conf' -l "devicetree-overlay .*$OVR" \
-                   "$1/boot/efi/loader/entries/" >/dev/null 2>&1; then
-                    echo "  ✓ loader entry references $OVR"
+                if grep -q '^\*[[:space:]]\+rc-playbill' "$1/etc/rc_maps.cfg" 2>/dev/null; then
+                    echo "  ✓ rc_maps.cfg registers rc-playbill"
                 else
-                    echo "  ✗ no loader entry references $OVR"
+                    echo "  ✗ rc_maps.cfg missing rc-playbill entry"
                     FAIL=$((FAIL+1))
                 fi
 

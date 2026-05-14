@@ -29,16 +29,30 @@
 //   by the MCP2515 / SPI12 / SC16IS752 bindings in the OS DT and the CAN
 //   overlay; touching them here would conflict.
 //
+//   gpio1 (PIN_15) — owned by the playbill-ir-recv overlay (gpio-ir-receiver
+//   on the 40-pin header, PIN_15 signal + PIN_1 3V3 + PIN_9 GND).
+//
+//   gpio24 (PIN_3) — left HOGGED here even though it is unused for I/O, to
+//   prevent any future driver from rebinding I2C7_SDA. Do NOT move the IR
+//   signal back to gpio24: the pre-kernel firmware probes I2C7 for HAT-EEPROM
+//   and hangs the boot if SDA is held by a non-I2C device. (Confirmed
+//   empirically 2026-05-13: PIN_3 hung boot.)
+//
+//   gpio25 (PIN_5) — also left HOGGED here, even though we briefly used it
+//   for the IR signal. Empirically the IR was unreliable on PIN_5 (decoder
+//   drops frames after a few presses) because the pad's primary alt-function
+//   is I2C7_SCL and the muxed-out state interacts badly with bias settings.
+//   IR moved to PIN_15 (gpio1) 2026-05-14.
+//
 // Header→GPIO mapping (from /sys/firmware/devicetree/base/.../gpio-line-names
 // at runtime — gpio-line-names property of the tlmm pinctrl node):
 //   gpio0  → PIN_13       gpio26 → PIN_16       gpio55 → PIN_26
-//   gpio1  → PIN_15       gpio27 → PIN_18       gpio56 → PIN_33
+//   gpio24 → PIN_3        gpio27 → PIN_18       gpio56 → PIN_33
 //   gpio8  → PIN_27       gpio28 → PIN_31       gpio58 → PIN_37
 //   gpio9  → PIN_28       gpio30 → PIN_32       gpio59 → PIN_36
-//   gpio24 → PIN_3        gpio31 → PIN_29       gpio96 → PIN_7
-//   gpio25 → PIN_5
+//   gpio25 → PIN_5        gpio31 → PIN_29       gpio96 → PIN_7
 //
-// All 16 of those are claimed by gpio-hog entries below.
+// All 15 of those are claimed by gpio-hog entries below.
 
 /dts-v1/;
 /plugin/;
@@ -48,11 +62,11 @@
 		title = "Disable unused 40-pin header GPIOs (Playbill Q6A)";
 		compatible = "radxa,dragon-q6a";
 		category = "misc";
-		exclusive = "gpio0", "gpio1", "gpio8", "gpio9",
-			    "gpio24", "gpio25", "gpio26", "gpio27",
-			    "gpio28", "gpio30", "gpio31",
-			    "gpio55", "gpio56", "gpio58", "gpio59",
-			    "gpio96";
+		exclusive = "gpio0", "gpio8", "gpio9",
+			    "gpio24", "gpio25", "gpio26",
+			    "gpio27", "gpio28", "gpio30",
+			    "gpio31", "gpio55", "gpio56",
+			    "gpio58", "gpio59", "gpio96";
 		description = "Lock unused 40-pin header GPIOs as kernel-claimed input pins so no
 peripheral driver can rebind them and so they're explicitly owned in
 the kernel's pinmux state. Playbill defense-in-depth against
@@ -68,11 +82,11 @@ floating-pin EMI issues.";
 		line-name = "playbill-unused-PIN_13";
 	};
 
-	playbill-unused-pin15 {
+	playbill-unused-pin5 {
 		gpio-hog;
-		gpios = <1 0>;
+		gpios = <25 0>;
 		input;
-		line-name = "playbill-unused-PIN_15";
+		line-name = "playbill-unused-PIN_5";
 	};
 
 	playbill-unused-pin27 {
@@ -94,13 +108,6 @@ floating-pin EMI issues.";
 		gpios = <24 0>;
 		input;
 		line-name = "playbill-unused-PIN_3";
-	};
-
-	playbill-unused-pin5 {
-		gpio-hog;
-		gpios = <25 0>;
-		input;
-		line-name = "playbill-unused-PIN_5";
 	};
 
 	playbill-unused-pin16 {

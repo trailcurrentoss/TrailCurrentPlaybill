@@ -82,8 +82,15 @@ function getStatus() {
  *
  * Idempotent — calling start() while already running returns the existing
  * session's status instead of stacking processes.
+ *
+ * @param {object} opts
+ * @param {string} [opts.receiverName='Playbill']
+ * @param {string} [opts.audioSink='pulsesink'] gstreamer audio pipeline tail;
+ *   may include preceding elements (e.g.
+ *   `audioconvert ! volume volume=0.5 ! pulsesink`) for per-source loudness
+ *   trim. UxPlay's `-as` accepts a single token OR a pipeline string.
  */
-function start({ receiverName = 'Playbill' } = {}) {
+function start({ receiverName = 'Playbill', audioSink = 'pulsesink' } = {}) {
   if (session) {
     return Promise.resolve({ ok: true, alreadyRunning: true, ...getStatus() });
   }
@@ -101,7 +108,11 @@ function start({ receiverName = 'Playbill' } = {}) {
       // both and routes through XWayland, where the handshake succeeds
       // but no frames reach the compositor.
       '-vs', 'waylandsink',
-      '-as', 'pulsesink',             // PipeWire's pulse-shim — keeps the volume bar live
+      // PipeWire's pulse-shim — keeps the system volume bar live. When the
+      // user has configured a non-zero cast trim, audio-fx prepends an
+      // `audioconvert ! volume volume=N ! ` stage so we can attenuate
+      // hot iPhone senders without touching the master sink.
+      '-as', audioSink,
       // Force the libav software H.264 decoder. On the Q6A's current kernel,
       // `decodebin`'s rank-based picker selects `v4l2h264dec` (Qualcomm
       // Venus driver) which fails caps negotiation for iPhone streams —

@@ -11,11 +11,12 @@
 
 'use strict';
 
-const player = require('../services/player');
-const radio  = require('../services/radio');
-const livetv = require('../services/livetv');
+const player  = require('../services/player');
+const radio   = require('../services/radio');
+const livetv  = require('../services/livetv');
+const audioFx = require('../services/audio-fx');
 
-function register({ bus, state }) {
+function register({ bus, state, settings }) {
 
   // Mirror mpv property events into state.nowPlaying so subscribers (the
   // GUI, the MQTT fan-out, the eventual CAN-bridge for TransportStatus)
@@ -94,7 +95,14 @@ function register({ bus, state }) {
     // so we don't need to call player.stop() here.
 
     state.patch({ source: newSource || (state.get().source) || null });
-    return player.play(playable);
+
+    // Inject per-source loudness trim + (optionally) dynaudnorm before
+    // handing off to mpv. The sourceId tells us which trim to apply; if
+    // none was given (raw URL play), audio-fx falls back to the 'library'
+    // bucket which is 0 dB by default — same as legacy behavior.
+    const settingsSnap = settings ? settings.get() : null;
+    const audioFxArgs = audioFx.mpvArgsForSource(settingsSnap, newSource);
+    return player.play({ ...playable, audioFxArgs });
   });
 
   bus.register('transport.pause',   async () => player.pause());

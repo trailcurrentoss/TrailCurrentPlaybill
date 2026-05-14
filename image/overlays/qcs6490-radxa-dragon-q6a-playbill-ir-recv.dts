@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// Playbill Q6A — gpio-ir-receiver on the 40-pin header.
+//
+// Hardware:
+//   KY-022 module (TL1838 / VS1838B IR demodulator), 38 kHz.
+//   The KY-022 has three pins, viewed from the back of the board where the
+//   header is:  -  +  S  (left → right).
+//
+// Header wiring (Radxa Dragon Q6A 40-pin):
+//   Header pin 1   (3.3V)      ← module pin  +   (red wire)
+//   Header pin 9   (GND)       ← module pin  -   (black wire)
+//   Header pin 15  (GPIO_1)    ← module pin  S   (yellow wire)
+//
+// Pin history / why PIN_15 instead of something else:
+//   - PIN_3 (gpio24 / I2C7_SDA): HANGS BOOT. The Q6A's pre-kernel firmware
+//     probes I2C7 for HAT-EEPROM; a non-I2C device on SDA never ACKs and
+//     hangs the bootloader. The DT `exclusive` claim is honored after the
+//     kernel starts, far too late. Confirmed empirically 2026-05-13.
+//   - PIN_5 (gpio25 / I2C7_SCL): boots OK but IR was UNRELIABLE — a few
+//     successful presses followed by silence. Pad's primary alt-function
+//     is the I2C7 clock line; even when re-muxed to plain GPIO, the
+//     I2C-block-shaped pad behaviour around bias settings produced
+//     marginal idle-high voltage. Adding `bias-pull-up` made it worse,
+//     not better, on this hardware. Abandoned 2026-05-14.
+//   - PIN_15 (gpio1): primary TLMM function is plain GPIO (no I2C / UART /
+//     SPI default), so the pad has no muxed-function side effects. Clean
+//     reliable input mode with the VS1838B's internal pull-up.
+//
+// The QCS6490 GPIO pins are 1.8 V at the SoC, but the 40-pin header is
+// already level-shifted to 3.3 V — see radxa_dragon_q6a_schematic_v1.21.pdf.
+// The VS1838B output is open-collector with an internal pull-up, idle HIGH,
+// active LOW on a demodulated IR pulse. Wire it directly to GPIO_1; no
+// external bias or level shifter required.
+//
+// gpio1 is released from the playbill-unused-pins-disable overlay (see the
+// comment block in that file) so this overlay can claim it cleanly. The
+// previously-IR pad gpio25 is hogged back into that overlay as an unused
+// input now that this overlay has moved off it.
+//
+// Userspace:
+//   /etc/rc_keymaps/playbill.toml         keymap (NEC, captured scancodes)
+//   /etc/rc_maps.cfg                      registers it against rc-playbill
+//   /etc/udev/rules.d/60-playbill-ir-keymap.rules   loads at boot
+//
+// The kernel exposes the receiver as /dev/input/eventN; mapped keycodes
+// (KEY_UP, KEY_ENTER, KEY_ESC, KEY_HOMEPAGE, KEY_VOLUMEUP, …) arrive in
+// the Electron renderer as standard KeyboardEvents.
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	metadata {
+		title = "Enable gpio-ir-receiver on 40-pin header (Playbill Q6A)";
+		compatible = "radxa,dragon-q6a";
+		category = "misc";
+		exclusive = "gpio1";
+		description = "gpio-ir-receiver bound to GPIO_1 (header PIN_15, active-low) for a VS1838B IR
+demodulator. rc-map-name = rc-playbill; keymap is loaded by ir-keytable from
+/etc/rc_keymaps/playbill.toml via the project's 60-playbill-ir-keymap.rules
+udev rule (Noble's ir-keytable deb ships no udev rule of its own).";
+	};
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			ir-receiver {
+				compatible = "gpio-ir-receiver";
+				gpios = <&tlmm 1 1>;     /* GPIO_ACTIVE_LOW */
+				linux,rc-map-name = "rc-playbill";
+				pinctrl-names = "default";
+				pinctrl-0 = <&playbill_ir_recv_pins>;
+				/*
+				 * wakeup-source is REQUIRED for reliable IR on Qualcomm SoCs.
+				 * Per mainline commit "media: rc: gpio-ir-recv: Fix support for
+				 * wake-up" (f.fainelli, 2023), the driver only flags the IRQ
+				 * as wake-capable when this property is present. Without it,
+				 * runtime PM is allowed to put the tlmm bank in a low-power
+				 * state at idle and the IR-recv interrupt can be masked
+				 * between bursts.
+				 */
+				wakeup-source;
+				status = "okay";
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&tlmm>;
+		__overlay__ {
+			playbill_ir_recv_pins: playbill-ir-recv-pins {
+				pins = "gpio1";
+				function = "gpio";
+				input-enable;
+				/*
+				 * bias-disable on this pad. gpio1's primary alt-function
+				 * is plain GPIO (not an I2C / UART / SPI line), so the pad
+				 * has no shared-state weirdness with another peripheral
+				 * block. The VS1838B's internal pull-up alone is enough to
+				 * hold idle HIGH cleanly on a non-muxed pad.
+				 *
+				 * NOTE on history: we tried `bias-pull-up` on the previous
+				 * pad (gpio25 / PIN_5) and it made reliability WORSE, not
+				 * better. The most likely cause is the QCS6490 "pull-up"
+				 * strength being stronger than the ~14 kΩ assumed in the
+				 * mainline pinctrl-qcom docs (some Qualcomm pads pull at
+				 * ≈1–3 kΩ), which fights the VS1838B's NPN sink during
+				 * pulse bursts and slows the LOW transition enough to push
+				 * NEC pulse widths out of tolerance. Don't add bias-pull-up
+				 * here without measuring first.
+				 */
+				bias-disable;
+			};
+		};
+	};
+};

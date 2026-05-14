@@ -1,0 +1,52 @@
+# /etc/rc_keymaps/playbill.toml
+#
+# Playbill IR remote keymap. Loaded by ir-keytable at boot (via our
+# /etc/udev/rules.d/60-playbill-ir-keymap.rules) and registered against
+# rc-core for the gpio-ir-receiver overlay (see
+# image/overlays/...-playbill-ir-recv.dts).
+#
+# Scancodes below were CAPTURED FROM THE PHYSICAL REMOTE on 2026-05-13
+# using `sudo ir-keytable -t -p nec` on the live Q6A board. They are
+# NOT the Argon ONE remote's codes from the canonical Argon decoder
+# script (download.argon40.com/scripts/argonone-irdecoder-libgpiod.py).
+# That script's table did not match this remote — only VOL- (0x81) by
+# coincidence. The remote that ships with this rig appears to be a
+# different vendor's product with a similar form factor.
+#
+# If/when the remote model changes, recapture with:
+#
+#   sudo ir-keytable -t -p nec   # press each button, copy each scancode
+#
+# then update the table below and reload with:
+#
+#   sudo ir-keytable -c -p nec -w /etc/rc_keymaps/playbill.toml
+#
+# Keycode → Playbill action mapping is documented in docs/app/navigation.md.
+
+[[protocols]]
+name = "playbill"
+protocol = "nec"
+
+[protocols.scancodes]
+# D-pad
+0xca = "KEY_UP"
+0xd2 = "KEY_DOWN"
+0x99 = "KEY_LEFT"
+0xc1 = "KEY_RIGHT"
+0xce = "KEY_ENTER"           # OK (center)
+
+# Hierarchy + menus
+0x90 = "KEY_ESC"             # Back   (Playbill: Escape == Backspace == Back)
+0xcb = "KEY_HOMEPAGE"        # Home
+0x9d = "KEY_CONTEXT_MENU"    # Menu   (reserved per nav contract — currently no-op)
+
+# Audio
+0x80 = "KEY_VOLUMEUP"
+0x81 = "KEY_VOLUMEDOWN"
+
+# Launch Playbill — the remote's "Power" button does NOT power the host
+# off; it launches the Playbill app. Mapped to KEY_PROG1 (XF86Launch1);
+# a system-wide GNOME custom-keybinding on XF86Launch1 runs
+# `gio launch /usr/share/applications/trailcurrent-playbill.desktop`.
+# See the media-keys section in image/files/gnome/dconf/00-trailcurrent-playbill.
+0x9c = "KEY_PROG1"

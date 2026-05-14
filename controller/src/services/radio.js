@@ -25,7 +25,8 @@ const { spawn, execFile } = require('child_process');
 const { PRESETS_JSON, ensureDirs } = require('../paths');
 const scannerData = require('./scanner-data');
 
-let session = null; // { rtl, sink, band, frequencyHz, gain }
+let session = null; // { rtl, fx, sink, band, frequencyHz, gain }
+let soxAvailable = null; // tri-state: null=unknown, true/false after first probe
 
 function listAdapters() {
   // rtl_test -t lists devices; we run with a timeout because rtl_test does
@@ -47,11 +48,30 @@ function listAdapters() {
   });
 }
 
-function tune({ band = 'fm', frequencyHz, gain = 'auto', modulation } = {}) {
+function tune({ band = 'fm', frequencyHz, gain = 'auto', modulation, soxFilter } = {}) {
   if (!frequencyHz) return Promise.reject(new Error('frequencyHz required'));
   return stop().then(() => new Promise((resolve, reject) => {
     const args = buildRtlFmArgs({ band, frequencyHz, gain, modulation });
     const rtl = spawn('rtl_fm', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    // Optional sox stage between rtl_fm and aplay for per-source loudness
+    // balancing (caller passes filter args from audio-fx). When sox isn't
+    // available or no filter was requested, we skip it and pipe rtl_fm
+    // directly into aplay — the original two-process chain. The chain is:
+    //   rtl_fm (raw S16_LE PCM) → [sox filter] → aplay → PipeWire sink
+    const rate = band === 'fm' ? '48000' : '12000';
+    const useFx = Array.isArray(soxFilter) && soxFilter.length > 0 && hasSox();
+    let fx = null;
+    if (useFx) {
+      // sox -t raw -r N -e signed -b 16 -c 1 - -t raw -r N ... - <filter args>
+      const soxArgs = [
+        '-q',
+        '-t', 'raw', '-r', rate, '-e', 'signed', '-b', '16', '-c', '1', '-',
+        '-t', 'raw', '-r', rate, '-e', 'signed', '-b', '16', '-c', '1', '-',
+        ...soxFilter,
+      ];
+      fx = spawn('sox', soxArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+    }
 
     // Pipe rtl_fm's raw PCM into the system audio device via aplay. aplay's
     // `-t raw` mode reads headerless PCM from stdin and hands it to ALSA, which
@@ -59,7 +79,12 @@ function tune({ band = 'fm', frequencyHz, gain = 'auto', modulation } = {}) {
     const sinkArgs = buildSinkArgs({ band });
     const sink = spawn('aplay', sinkArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
 
-    rtl.stdout.pipe(sink.stdin);
+    if (fx) {
+      rtl.stdout.pipe(fx.stdin);
+      fx.stdout.pipe(sink.stdin);
+    } else {
+      rtl.stdout.pipe(sink.stdin);
+    }
 
     // Stream EPIPE handlers — when stop() kills aplay, rtl_fm's next write to
     // the closed sink.stdin throws 'error' on rtl.stdout; conversely if aplay
@@ -70,6 +95,20 @@ function tune({ band = 'fm', frequencyHz, gain = 'auto', modulation } = {}) {
     const swallowEpipe = (err) => { if (err && err.code !== 'EPIPE') console.warn('[radio] stream error:', err.message); };
     rtl.stdout.on('error', swallowEpipe);
     sink.stdin.on('error', swallowEpipe);
+    if (fx) {
+      fx.stdout.on('error', swallowEpipe);
+      fx.stdin.on('error', swallowEpipe);
+      // sox sometimes prints "WARN compand: clipped" once during settle —
+      // suppress unless we're debugging.
+      let fxErr = '';
+      fx.stderr.on('data', (b) => { fxErr += b.toString(); });
+      fx.on('error', (e) => console.warn('[radio] sox spawn error:', e.message));
+      fx.on('close', (code) => {
+        if (code !== 0 && code !== null && code !== 143 /*SIGTERM*/ && code !== 137 /*SIGKILL*/) {
+          console.warn(`[radio] sox exited ${code}: ${fxErr.slice(-300)}`);
+        }
+      });
+    }
 
     let rtlErr = '';
     let sinkErr = '';
@@ -79,13 +118,14 @@ function tune({ band = 'fm', frequencyHz, gain = 'auto', modulation } = {}) {
     sink.on('error', (e) => { console.warn('[radio] aplay spawn error:', e.message); });
     rtl.on('close', (code) => {
       if (session && session.rtl === rtl) session = null;
-      try { sink.stdin.end(); } catch (_) {}
+      try { (fx ? fx.stdin : sink.stdin).end(); } catch (_) {}
       if (!rtl.__playbillResolved && code !== 0) {
         reject(new Error(`rtl_fm exited ${code}: ${rtlErr.slice(-400)}`));
       }
     });
     sink.on('close', (code) => {
       try { rtl.kill('SIGTERM'); } catch (_) {}
+      if (fx) { try { fx.kill('SIGTERM'); } catch (_) {} }
       // If aplay exits with non-zero AND we never resolved tune(), surface
       // its stderr so the renderer toast tells us why (e.g. "audio open error:
       // No such file or directory" when the PCM device is missing).
@@ -105,7 +145,7 @@ function tune({ band = 'fm', frequencyHz, gain = 'auto', modulation } = {}) {
     rtl.stdout.once('data', () => {
       resolveTimer = setTimeout(() => {
         rtl.__playbillResolved = true;
-        session = { rtl, sink, band, frequencyHz, gain };
+        session = { rtl, fx, sink, band, frequencyHz, gain };
         resolve({ band, frequencyHz, gain });
       }, 400);
     });
@@ -178,12 +218,38 @@ function stop() {
   return new Promise((resolve) => {
     s.rtl.once('close', () => resolve());
     try { s.rtl.kill('SIGTERM'); } catch (_) {}
+    if (s.fx) { try { s.fx.kill('SIGTERM'); } catch (_) {} }
     try { s.sink.kill('SIGTERM'); } catch (_) {}
     setTimeout(() => {
       try { s.rtl.kill('SIGKILL'); } catch (_) {}
+      if (s.fx) { try { s.fx.kill('SIGKILL'); } catch (_) {} }
       try { s.sink.kill('SIGKILL'); } catch (_) {}
     }, 500);
   });
+}
+
+/**
+ * One-shot probe for sox availability. Caches the result so subsequent
+ * tune() calls don't re-spawn `which`. We synchronously check on disk to
+ * avoid making tune() async-only on the probe (rtl_fm needs to start ASAP
+ * after the user hits a preset, not after a 50ms PATH walk).
+ */
+function hasSox() {
+  if (soxAvailable !== null) return soxAvailable;
+  // Walk PATH manually rather than spawning `which`; this stays sync and
+  // keeps tune() fast. On a typical Ubuntu install sox is in /usr/bin.
+  const pathEntries = (process.env.PATH || '').split(':');
+  for (const dir of pathEntries) {
+    try {
+      if (fs.existsSync(`${dir}/sox`)) { soxAvailable = true; return true; }
+    } catch (_) { /* keep looking */ }
+  }
+  soxAvailable = false;
+  if (!soxAvailable) {
+    console.warn('[radio] sox not found in PATH — per-band loudness trim disabled. ' +
+                 'Install with: sudo apt-get install sox');
+  }
+  return false;
 }
 
 function getState() {

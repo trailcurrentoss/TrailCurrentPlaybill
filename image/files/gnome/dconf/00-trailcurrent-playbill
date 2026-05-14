@@ -64,3 +64,15 @@ app-picker-layout=@aa{sv} []
 # password input box.
 logo='/usr/share/backgrounds/trailcurrent-playbill/trailcurrent-wordmark.png'
 disable-user-list=false
+
+# Argon IR remote's "Power" button launches Playbill (it does NOT power
+# the host off). The IR keymap at /etc/rc_keymaps/playbill.toml maps the
+# remote's Power scancode to KEY_PROG1 (XF86Launch1); this binding is
+# what catches it inside the user's GNOME session and runs the launcher.
+[org/gnome/settings-daemon/plugins/media-keys]
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/playbill-launch/']
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/playbill-launch]
+name='Launch Playbill'
+binding='XF86Launch1'
+command='gio launch /usr/share/applications/trailcurrent-playbill.desktop'

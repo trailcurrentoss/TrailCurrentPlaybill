@@ -79,6 +79,33 @@
           "description": "Preferred RTL-SDR device index. null lets the controller auto-pick."
         }
       }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "description": "Cross-source loudness balancing. Without this, switching from a heavily-mastered FM station to a quiet DVD scene is jarring. Per-source trim compensates for typical level differences between sources; real-time normalization smooths within-source dynamic range so dialogue doesn't disappear under explosions.",
+      "properties": {
+        "normalize": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable real-time loudness normalization on mpv-based sources (library, livetv, youtube). Uses the dynaudnorm audio filter — better for live playback than two-pass loudnorm. Set false to play source material untouched."
+        },
+        "perSourceTrimDb": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {},
+          "description": "Per-source gain offset in decibels. 0 = no change, +6 ≈ 2× perceived loudness, -6 ≈ half. Negative values are typically what's needed because most digital sources are mastered hotter than DVD/Blu-ray content. Applied on top of the system master volume.",
+          "properties": {
+            "library":  { "type": "number", "minimum": -24, "maximum": 12, "default":  0 },
+            "livetv":   { "type": "number", "minimum": -24, "maximum": 12, "default": -3 },
+            "youtube":  { "type": "number", "minimum": -24, "maximum": 12, "default": -2 },
+            "radioFm":  { "type": "number", "minimum": -24, "maximum": 12, "default": -8 },
+            "radioAm":  { "type": "number", "minimum": -24, "maximum": 12, "default":  0 },
+            "cast":     { "type": "number", "minimum": -24, "maximum": 12, "default":  0 }
+          }
+        }
+      }
     }
   }
 }

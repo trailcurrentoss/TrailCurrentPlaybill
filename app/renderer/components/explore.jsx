@@ -228,6 +228,17 @@ function ExploreView() {
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
 
+      // GLOBAL escape hatches — always let these bubble to the shell's
+      // window-level handler so the user can leave the screen. The map's
+      // d-pad-as-pan mode must never trap the user.
+      //   Escape | Backspace → Back
+      //   h | H              → Home
+      // The shell's app.jsx handles them via goBack()/goHome(); the same
+      // path is also used by the remote's nav.dpad → onNavDpad subscriber.
+      if (e.key === 'Escape' || e.key === 'Backspace' || e.key === 'h' || e.key === 'H') {
+        return;  // no preventDefault / stopPropagation; let it bubble
+      }
+
       const map = mapRef.current;
       if (!map) return;
 
@@ -288,6 +299,13 @@ function ExploreView() {
       return next;
     });
   }
+  // Exit the screen — synthesize an Escape keydown on the window so the
+  // shell's universal Back handler in app.jsx runs (same code path as the
+  // hardware-remote nav.dpad 'back' key and the keyboard Esc). Avoids
+  // duplicating goBack logic here.
+  function exitScreen() {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  }
   function recenter() {
     const cur = vehiclePosRef.current;
     const map = mapRef.current;
@@ -343,8 +361,14 @@ function ExploreView() {
         {/* Mouse-only — tabindex=-1 keeps these out of the FocusZones leaf
             set so an arrow press on the canvas can never wander into the
             toolbar (which would strand the user with no way back to the
-            map's d-pad mode). */}
+            map's d-pad mode). The Exit button is the visible escape hatch
+            for users on a touchscreen / mouse; remote users get Back via
+            the global nav.dpad path; keyboard users get Esc/Backspace
+            (the canvas keydown handler explicitly lets those bubble). */}
         <div className="explore-tools">
+          <button className="explore-tool-btn" tabIndex={-1} onClick={exitScreen} title="Exit (Back)">
+            <ion-icon name="close-outline"></ion-icon>
+          </button>
           <button className="explore-tool-btn" tabIndex={-1} onClick={recenter} disabled={!vehiclePos} title="Center on rig">
             <ion-icon name="navigate-outline"></ion-icon>
           </button>
@@ -360,6 +384,7 @@ function ExploreView() {
           <span className="chip">↑↓←→ Pan</span>
           <span className="chip">⏎ Zoom</span>
           {vehiclePos && <span className="chip">R Recenter</span>}
+          <span className="chip">Esc Back</span>
         </div>
       </div>
     </div>

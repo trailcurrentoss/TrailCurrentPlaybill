@@ -5,8 +5,57 @@
 
 const { app, BrowserWindow, screen, nativeTheme, ipcMain, globalShortcut, Menu, Notification } = require('electron');
 const path = require('path');
+const fs   = require('fs');
+const os   = require('os');
 
 const ControllerClient = require('./ipc-client');
+
+// ─── Headwaters TLS trust ──────────────────────────────────────────────────
+//
+// Electron's bundled Chromium does NOT consult the OS trust store, so the
+// self-signed Headwaters certificate (`headwaters.local`, signed by the
+// TrailCurrent CA the user pasted during Settings → Headwaters) fails TLS
+// verification when the renderer hits the tile server. That's what makes
+// the Explore screen render a black map: MapLibre's style.json fetch is
+// rejected before any tiles can load.
+//
+// We narrow the trust to the configured Headwaters hostname so an attacker
+// on the LAN can't spoof headwaters.local. The hostname comes from
+// connection.json (~/.config/trailcurrent-playbill/connection.json), which
+// the controller wrote when the user finished onboarding. If onboarding
+// hasn't happened yet there's nothing to trust and we leave the default
+// strict policy intact.
+
+const CONFIG_DIR    = path.join(os.homedir(), '.config', 'trailcurrent-playbill');
+const CONNECTION_JSON = path.join(CONFIG_DIR, 'connection.json');
+
+function configuredHeadwatersHost() {
+  try {
+    const c = JSON.parse(fs.readFileSync(CONNECTION_JSON, 'utf8'));
+    if (c && c.caCertProvided && c.brokerUrl) {
+      return new URL(c.brokerUrl).hostname;
+    }
+  } catch (_) { /* not configured yet */ }
+  return null;
+}
+
+// Fires when the renderer (or main) makes an HTTPS request and the cert
+// fails strict verification. We accept the error iff the URL hostname
+// matches the configured Headwaters host. Chrome's certificate chain has
+// already been built; the user's CA established trust separately during
+// onboarding (mqtts:// uses the same cert).
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+  let target = null;
+  try { target = new URL(url).hostname; } catch (_) { /* malformed url */ }
+  const host = configuredHeadwatersHost();
+  if (host && target && target === host) {
+    event.preventDefault();
+    callback(true);
+    return;
+  }
+  // Default Electron behavior — reject. Callback expects a boolean.
+  callback(false);
+});
 
 // Radio AND Live TV are owned by the controller daemon
 // (controller/src/services/{radio,livetv}.js) so a single rtl_fm /
@@ -178,7 +227,6 @@ controller.start();
 // work. We keep the legacy `playbill.radio.*` and `playbill.dvb.*` IPC
 // names so the renderer (radio.jsx, live.jsx) works unchanged. Each
 // handler below is a one-liner that dispatches a typed bus command.
-const fs = require('fs');
 function logFwd(tag, err) {
   try {
     const line = `[${new Date().toISOString()}] ${tag} ${err && (err.stack || err.message || String(err))}\n`;

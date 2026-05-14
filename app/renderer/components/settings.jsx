@@ -604,6 +604,7 @@ function SettingsView({ focus }) {
   const tabs = [
     { id: 'headwaters', label: 'Headwaters', icon: 'water-outline' },
     { id: 'device',     label: 'Device',     icon: 'hardware-chip-outline' },
+    { id: 'audio',      label: 'Audio',      icon: 'volume-medium-outline' },
     { id: 'youtube',    label: 'YouTube',    icon: 'logo-youtube' },
     { id: 'library',    label: 'Library',    icon: 'film-outline' },
     // Phase 2+: { id: 'sources', label: 'Sources', icon: 'apps-outline' },
@@ -644,6 +645,7 @@ function SettingsView({ focus }) {
            style={{flex:1, overflow:'auto'}}>
         {tab === 'headwaters' && <HeadwatersScreen ctrlState={ctrlState} />}
         {tab === 'device'     && <DeviceScreen     ctrlState={ctrlState} />}
+        {tab === 'audio'      && <AudioScreen      ctrlState={ctrlState} />}
         {tab === 'youtube'    && <YoutubeScreen    ctrlState={ctrlState} />}
         {tab === 'library'    && <LibraryScreen    ctrlState={ctrlState} />}
       </div>
@@ -973,6 +975,221 @@ function LibraryScreen({ ctrlState }) {
           metadata <code style={{color:'rgba(255,255,255,0.6)'}}>.json</code> sidecar. Move, back up,
           or delete files directly &mdash; the library refreshes the next time you open it.
         </p>
+      </section>
+    </div>
+  );
+}
+
+// ─── Audio settings: per-source loudness trim + normalize toggle ─────
+//
+// FM radio is mastered way hotter than a DVD; YouTube is hotter than both
+// Live TV in turn. Without per-source compensation the jump between them
+// is jarring — these sliders let the user offset each source by ±dB so
+// switching between Library, Radio, YouTube, etc. lands at a similar
+// perceived loudness. The "Real-time loudness normalization" toggle adds
+// dynaudnorm inside mpv to even out within-source dynamic range too.
+//
+// Stored under settings.audio (validated by the controller's schema):
+//   { normalize: bool, perSourceTrimDb: { library, livetv, youtube,
+//     radioFm, radioAm, cast } }
+
+const AUDIO_SOURCES = [
+  { key: 'library', label: 'Library',  hint: 'DVDs, local files, Plex',         icon: 'film-outline' },
+  { key: 'livetv',  label: 'Live TV',  hint: 'OTA / DVB tuner',                 icon: 'tv-outline' },
+  { key: 'youtube', label: 'YouTube',  hint: 'Streamed YouTube videos',         icon: 'logo-youtube' },
+  { key: 'radioFm', label: 'FM Radio', hint: 'Broadcast FM (heavily compressed)', icon: 'radio-outline' },
+  { key: 'radioAm', label: 'AM Radio', hint: 'Broadcast AM',                    icon: 'radio-outline' },
+  { key: 'cast',    label: 'AirPlay',  hint: 'iPhone / iPad mirror & cast',     icon: 'phone-portrait-outline' },
+];
+
+const AUDIO_DEFAULTS = {
+  library: 0, livetv: -3, youtube: -2, radioFm: -8, radioAm: 0, cast: 0,
+};
+
+function TrimSlider({ value, onChange, disabled }) {
+  // -24 .. +12 dB matches the schema's range. Step 0.5 dB for fine tuning.
+  return (
+    <div style={{display:'flex', alignItems:'center', gap:14, width:'100%'}}>
+      <input type="range" min={-24} max={12} step={0.5} value={value}
+             onChange={(e) => onChange(parseFloat(e.target.value))}
+             disabled={disabled}
+             style={{flex:1, accentColor:'var(--tc-primary)'}} />
+      <div style={{minWidth:64, textAlign:'right', fontFamily:'var(--font-mono)',
+                    fontSize:13, color: value === 0 ? 'rgba(255,255,255,0.6)' : '#fff',
+                    fontWeight: value === 0 ? 400 : 600}}>
+        {value > 0 ? '+' : ''}{value.toFixed(1)} dB
+      </div>
+    </div>
+  );
+}
+
+function AudioScreen({ ctrlState }) {
+  const audio = (ctrlState && ctrlState.settings && ctrlState.settings.audio) || {};
+  const initialTrims = { ...AUDIO_DEFAULTS, ...(audio.perSourceTrimDb || {}) };
+  const initialNormalize = audio.normalize !== false;
+
+  const [trims, setTrims]         = useState(initialTrims);
+  const [normalize, setNormalize] = useState(initialNormalize);
+  const [busy, setBusy]           = useState(false);
+  const [savedAt, setSavedAt]     = useState(0);
+  const [error, setError]         = useState(null);
+
+  // Keep local state in sync if settings change from another path (e.g.
+  // PWA edits, settings.patch via MQTT). Without this the slider stays
+  // stuck at whatever the user saw on mount.
+  useEffect(() => {
+    setTrims({ ...AUDIO_DEFAULTS, ...(audio.perSourceTrimDb || {}) });
+    setNormalize(audio.normalize !== false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctrlState && ctrlState.settings && JSON.stringify(ctrlState.settings.audio)]);
+
+  async function save(partial) {
+    setBusy(true); setError(null);
+    try {
+      await window.playbill.controller.command({
+        action: 'settings.patch',
+        value:  { audio: { normalize, perSourceTrimDb: trims, ...partial } },
+      });
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally { setBusy(false); }
+  }
+
+  function setTrim(key, v) {
+    const next = { ...trims, [key]: v };
+    setTrims(next);
+    // Debounce-ish: write on slider release only. We rely on onChange
+    // updating local state for snappy UI; the save fires from a separate
+    // commit button below to avoid spamming the IPC bus while dragging.
+  }
+
+  async function commit() {
+    await save({});
+  }
+
+  function resetAll() {
+    setTrims({ ...AUDIO_DEFAULTS });
+    setNormalize(true);
+  }
+
+  async function resetAndSave() {
+    setTrims({ ...AUDIO_DEFAULTS });
+    setNormalize(true);
+    setBusy(true); setError(null);
+    try {
+      await window.playbill.controller.command({
+        action: 'settings.patch',
+        value:  { audio: { normalize: true, perSourceTrimDb: { ...AUDIO_DEFAULTS } } },
+      });
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally { setBusy(false); }
+  }
+
+  const sectionHdr = { font:'600 11px var(--font-sans)', letterSpacing:2,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.45)',
+                       margin:'0 0 14px' };
+
+  // Detect unsaved changes vs the snapshot from ctrlState.
+  const dirty =
+    JSON.stringify(trims) !== JSON.stringify({ ...AUDIO_DEFAULTS, ...(audio.perSourceTrimDb || {}) }) ||
+    normalize !== (audio.normalize !== false);
+
+  return (
+    <div style={{padding:'40px 60px', maxWidth:900}}>
+      <h1 style={{margin:'0 0 8px', font:'700 32px var(--font-sans)', letterSpacing:-1}}>Audio</h1>
+      <p style={{color:'rgba(255,255,255,0.6)', fontSize:14, marginBottom:32, maxWidth:680}}>
+        Balance the volume of each source so switching between Library, Radio, YouTube and the
+        rest isn&rsquo;t jarring. Trims are applied <em>before</em> the system master volume —
+        the volume bar still goes 0&ndash;100%, but the level it represents is consistent
+        across sources.
+      </p>
+
+      {error && (
+        <div style={{marginBottom:14}}>
+          <ErrorAlert kind="unknown" title="Could not save" message={error} />
+        </div>
+      )}
+      {savedAt !== 0 && !dirty && !error && (
+        <div style={{marginBottom:14}}>
+          <SuccessAlert title="Saved." message="Trim values apply to the next track / station you start." />
+        </div>
+      )}
+
+      <section data-zone="settings.audio.normalize" data-zone-axis="vertical"
+               style={{marginBottom:28}}>
+        <h2 style={sectionHdr}>Loudness normalization</h2>
+        <label style={{display:'flex', alignItems:'flex-start', gap:14, padding:'14px 16px',
+                       background:'rgba(255,255,255,0.03)',
+                       border:'1px solid rgba(255,255,255,0.08)', borderRadius:8,
+                       cursor:'pointer', maxWidth:680}}>
+          <input type="checkbox" checked={normalize}
+                 onChange={(e) => setNormalize(e.target.checked)}
+                 style={{marginTop:3, accentColor:'var(--tc-primary)', transform:'scale(1.2)'}} />
+          <div>
+            <div style={{font:'600 14px var(--font-sans)', marginBottom:4}}>Real-time loudness normalization</div>
+            <div style={{fontSize:12, color:'rgba(255,255,255,0.6)', lineHeight:1.5}}>
+              Keeps quiet dialogue and loud explosions at a similar perceived loudness within a single
+              video. Applied to Library, Live TV, and YouTube via the player&rsquo;s
+              <code style={{color:'rgba(255,255,255,0.75)', background:'rgba(255,255,255,0.05)',
+                              padding:'1px 5px', borderRadius:3, margin:'0 4px',
+                              fontFamily:'var(--font-mono)', fontSize:11}}>dynaudnorm</code>
+              filter. Turn off to hear source material untouched.
+            </div>
+          </div>
+        </label>
+      </section>
+
+      <section data-zone="settings.audio.trim" data-zone-axis="vertical">
+        <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:14}}>
+          <h2 style={{...sectionHdr, margin:0}}>Per-source trim</h2>
+          <button type="button" onClick={resetAndSave} disabled={busy}
+                  className="tv-btn"
+                  style={{fontSize:12, padding:'6px 12px',
+                          background:'rgba(255,255,255,0.04)',
+                          color:'rgba(255,255,255,0.7)'}}>
+            <ion-icon name="refresh-outline"></ion-icon> Restore defaults
+          </button>
+        </div>
+        <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:20, maxWidth:680}}>
+          Each slider offsets that source by &plusmn;dB. <strong>0&nbsp;dB</strong> = no change,
+          <strong>&minus;6&nbsp;dB</strong> &approx; half as loud, <strong>+6&nbsp;dB</strong> &approx; twice as loud.
+          Negative is usually what you need &mdash; broadcast FM and YouTube tend to ship hotter than
+          DVDs and Live TV.
+        </p>
+
+        <div style={{display:'flex', flexDirection:'column', gap:14, maxWidth:680}}>
+          {AUDIO_SOURCES.map(({ key, label, hint, icon }) => (
+            <div key={key}
+                 style={{padding:'14px 16px', background:'rgba(255,255,255,0.03)',
+                          border:'1px solid rgba(255,255,255,0.08)', borderRadius:8}}>
+              <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:10}}>
+                <ion-icon name={icon} style={{fontSize:18, color:'var(--tc-primary)'}}></ion-icon>
+                <div style={{font:'600 14px var(--font-sans)'}}>{label}</div>
+                <div style={{flex:1}} />
+                <div style={{fontSize:11, color:'rgba(255,255,255,0.45)'}}>{hint}</div>
+              </div>
+              <TrimSlider value={trims[key] ?? 0}
+                          onChange={(v) => setTrim(key, v)}
+                          disabled={busy} />
+            </div>
+          ))}
+        </div>
+
+        <div style={{display:'flex', gap:12, marginTop:24}}>
+          <button type="button" onClick={commit} disabled={busy || !dirty}
+                  className="tv-btn primary">
+            <ion-icon name="save-outline"></ion-icon>
+            {busy ? 'Saving…' : (dirty ? 'Save changes' : 'Saved')}
+          </button>
+          {dirty && (
+            <button type="button" onClick={resetAll} disabled={busy} className="tv-btn">
+              <ion-icon name="arrow-undo-outline"></ion-icon> Discard
+            </button>
+          )}
+        </div>
       </section>
     </div>
   );

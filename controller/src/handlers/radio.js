@@ -22,11 +22,12 @@
 
 'use strict';
 
-const radio  = require('../services/radio');
-const player = require('../services/player');
-const livetv = require('../services/livetv');
+const radio   = require('../services/radio');
+const player  = require('../services/player');
+const livetv  = require('../services/livetv');
+const audioFx = require('../services/audio-fx');
 
-function register({ bus, state }) {
+function register({ bus, state, settings }) {
   // Helper to write into state.radio in one place. `running:false` collapses
   // to a tidy paused-snapshot so observers don't have to special-case nulls.
   function setRadioState(patch) {
@@ -51,7 +52,12 @@ function register({ bus, state }) {
     try { await livetv.stopAll(); state.patch({ livetv: null }); }
     catch (e) { console.warn('[radio.tune] livetv.stopAll failed:', e.message); }
 
-    const result = await radio.tune({ band, frequencyHz, gain, modulation });
+    // Pull per-band loudness trim from settings so FM (typically hot) and
+    // AM (typically quiet from rtl_fm) end up at a comparable perceived
+    // level to whatever was playing before.
+    const settingsSnap = settings ? settings.get() : null;
+    const soxFilter = audioFx.soxFilterForBand(settingsSnap, band);
+    const result = await radio.tune({ band, frequencyHz, gain, modulation, soxFilter });
     setRadioState({
       running:     true,
       band:        result.band,

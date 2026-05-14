@@ -20,7 +20,8 @@
 
 'use strict';
 
-const uxplay = require('../sources/cast/uxplay');
+const uxplay  = require('../sources/cast/uxplay');
+const audioFx = require('../services/audio-fx');
 
 function register({ bus, state, settings }) {
 
@@ -51,8 +52,13 @@ function register({ bus, state, settings }) {
     // 'Playbill' if settings aren't loaded.
     const cur = settings ? settings.get() : null;
     const receiverName = (cur && cur.device && cur.device.name) || 'Playbill';
+    // Per-source loudness trim: build the gstreamer audio sink chain with
+    // the configured Cast trim applied inline. At 0 dB this is just
+    // 'pulsesink' (same as before); non-zero injects an audioconvert +
+    // volume stage so we attenuate before the system mixer.
+    const audioSink = audioFx.uxplayAudioPipeline(cur);
     try {
-      const r = await uxplay.start({ receiverName });
+      const r = await uxplay.start({ receiverName, audioSink });
       publish({ lastError: null });
       // Mark this as the active source so other UIs (PWAs, NowPlayingBar)
       // know what the device is doing.

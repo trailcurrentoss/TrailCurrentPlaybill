@@ -241,34 +241,61 @@ shortcut button — it's reached spatially, by Left, like any other zone.
 
 ## Hardware: physical and virtual remote
 
-Reference remote: **[Argon IR Remote](https://argon40.com/products/argon-remote)** ($10).
+Reference remote: the 11-button IR remote bundled with the Playbill rig
+(visually similar to the Argon ONE remote but emits a **different NEC
+scancode set** — see table below). Scancodes captured directly from the
+physical remote on 2026-05-13 against the Q6A's gpio-ir-receiver:
 
-Eleven physical buttons map cleanly to our vocabulary:
+| Remote button | NEC scancode | Linux keycode (toml) | Playbill action |
+|---|---|---|---|
+| Power     | `0x9c` | `KEY_PROG1`         | Launch Playbill (via GNOME XF86Launch1 keybinding — does NOT poweroff) |
+| ▲ Up      | `0xca` | `KEY_UP`            | Move focus up |
+| ▼ Down    | `0xd2` | `KEY_DOWN`          | Move focus down |
+| ◀ Left    | `0x99` | `KEY_LEFT`          | Move focus left (or open SideNav from leftmost zone) |
+| ▶ Right   | `0xc1` | `KEY_RIGHT`         | Move focus right |
+| OK        | `0xce` | `KEY_ENTER`         | Activate focused element |
+| ↩ Back    | `0x90` | `KEY_ESC`           | Go back / dismiss modal |
+| ⌂ Home    | `0xcb` | `KEY_HOMEPAGE`      | Go to home screen |
+| ≡ Menu    | `0x9d` | `KEY_CONTEXT_MENU`  | (reserved — currently no-op) |
+| Vol +     | `0x80` | `KEY_VOLUMEUP`      | System volume up (PipeWire) |
+| Vol −     | `0x81` | `KEY_VOLUMEDOWN`    | System volume down (PipeWire) |
 
-| Argon button | Maps to |
-|---|---|
-| Power | System power (kernel-level) |
-| ▲ ▼ ◀ ▶ | Up / Down / Left / Right |
-| Center (OK) | OK |
-| ↩ Back | Back |
-| ⌂ Home | Home |
-| ≡ Menu | (reserved — currently no-op) |
-| + / − | Volume + / − |
+The Argon decoder script at `download.argon40.com/scripts/argonone-irdecoder-libgpiod.py`
+publishes a different scancode set; only Vol − (0x81) overlaps with this
+remote by coincidence. If the bundled remote ever changes model, recapture
+with `sudo ir-keytable -t -p nec` (press each button), then update both
+[image/files/rc_keymaps/playbill.toml](../../image/files/rc_keymaps/playbill.toml)
+and this table, and hot-reload with `sudo udevadm trigger
+--action=add --subsystem-match=rc` (the project's
+`60-playbill-ir-keymap.rules` re-applies on rc-core add events).
 
-### IR receiver: TSOP38238 on the Q6A GPIO
+### IR receiver: VS1838B on Q6A header PIN_15 (gpio1)
 
 We do not consume a USB port for IR.
 
-- TSOP38238 (or TSOP4838 / VS1838B) — 3 pins: 3V3, GND, DATA
-- DATA pin wires to an available GPIO; a device-tree overlay enables
-  `gpio-ir-recv`
-- `ir-keytable` loads a keymap mapping the remote's IR scancodes to
-  Linux keycodes: `KEY_UP`, `KEY_DOWN`, `KEY_LEFT`, `KEY_RIGHT`,
-  `KEY_ENTER`, `KEY_ESC` (→ Back), `KEY_HOMEPAGE` (→ Home),
-  `KEY_CONTEXT_MENU` (→ Menu, currently unused),
-  `KEY_VOLUMEUP`, `KEY_VOLUMEDOWN`, `KEY_POWER`
-- Keymap ships at `/etc/rc_keymaps/playbill.toml`, registered via
-  `/etc/rc_maps.cfg`, loaded at boot
+- VS1838B (KY-022 module) — 3 pins: `+` (3.3V), `−` (GND), `S` (signal)
+- Wiring: Q6A PIN_1 (3.3V), PIN_9 (GND), PIN_15 (gpio1). The three pins all
+  sit in the LEFT (odd) column of the header.
+- **Do NOT use PIN_3** — the Q6A's pre-kernel firmware probes I2C7 for
+  HAT-EEPROM and hangs the boot when a non-I2C device sits on SDA; the DT
+  `exclusive` claim is too late to fix it.
+- **Do NOT use PIN_5 either** — empirically the IR receiver works on PIN_5
+  but with a "few presses then decoder stops" reliability pattern. PIN_5's
+  primary TLMM function is I2C7_SCL and the muxed-out pad state interacts
+  poorly with bias settings; `bias-pull-up` made it worse, not better.
+  Moved to PIN_15 / gpio1 (a pad whose primary alt-function is plain GPIO
+  with no I2C / UART / SPI side-effects) on 2026-05-14.
+- Overlay: [image/overlays/qcs6490-radxa-dragon-q6a-playbill-ir-recv.dts](../../image/overlays/qcs6490-radxa-dragon-q6a-playbill-ir-recv.dts)
+  binds `gpio-ir-receiver` to `&tlmm 1 GPIO_ACTIVE_LOW` and declares the
+  node as a `wakeup-source` (required on Qualcomm SoCs so runtime PM
+  doesn't suspend the IRQ at idle).
+- Keymap: [image/files/rc_keymaps/playbill.toml](../../image/files/rc_keymaps/playbill.toml) (scancodes above).
+- Auto-load: [image/files/udev/60-playbill-ir-keymap.rules](../../image/files/udev/60-playbill-ir-keymap.rules)
+  runs `ir-keytable -s $name -c -p nec -w /etc/rc_keymaps/playbill.toml`
+  on every rc-core add event. Required because Ubuntu Noble's
+  `ir-keytable` deb does **not** ship its own
+  `/lib/udev/rules.d/60-ir-keytable.rules` — without our rule the kernel
+  boots with `rc-empty` + LIRC-only and every press is silently dropped.
 
 The keycodes arrive in the renderer as standard `KeyboardEvent`s — no
 special remote codepath. The controller's `nav.dpad` action is only
