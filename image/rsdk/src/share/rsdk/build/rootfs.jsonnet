@@ -180,12 +180,32 @@ function(
             "libdvdnav4",
 
             // ── OTA TV tuner + SDR radio userspace ──────────────────────
-            // The Q6A drives a Hauppauge WinTV-dualHD (USB ATSC tuner;
-            // kernel driver `dvb_usb_cxusb` is in-tree and loads on hot-
-            // plug) and an RTL-SDR USB dongle (kernel driver
-            // `dvb_usb_rtl28xxu`, also in-tree). The kernel side is free —
-            // just plug-and-play. These apt packages give us the userspace
-            // we need to actually tune and demod from the Playbill app:
+            // The Q6A drives a Hauppauge WinTV-dualHD model 01595 (USB ATSC
+            // tuner, USB ID 2040:826d) and an RTL-SDR USB dongle (RTL2832U).
+            //
+            // Kernel driver situation (verified May 2026 against
+            // linux-image-6.18.2-4-qcom):
+            //   * The Radxa BSP kernel ships dvb-core + a few tuner-IC
+            //     modules but ZERO USB-DVB bridge drivers. The dualHD-01595
+            //     needs em28xx + em28xx-dvb + lgdt3306a + si2157; none are
+            //     present in-tree. Earlier comments in this file claimed
+            //     `dvb_usb_cxusb` claims the dualHD — that was wrong on
+            //     two counts (cxusb isn't in this kernel either, and the
+            //     01595 USB ID is matched by em28xx-cards.c as
+            //     EM28174_BOARD_HAUPPAUGE_WINTV_DUALHD_01595, not cxusb).
+            //   * The RTL-SDR's matching kernel driver `dvb_usb_rtl28xxu`
+            //     is ALSO missing from this kernel — fortuitously fine,
+            //     because we want librtlsdr (userspace) to claim the
+            //     dongle directly, not the kernel DVB stack.
+            //
+            // The missing USB-DVB drivers (em28xx family + lgdt3306a +
+            // si2157 + tveeprom) ship as an out-of-tree DKMS package,
+            // `playbill-dvb-dkms`, installed via the image build's apt
+            // hook so DKMS rebuilds them on every kernel upgrade. See
+            // docs/app/live-tv.md for the rationale and full chain.
+            //
+            // These apt packages give us the userspace we need to actually
+            // tune and demod from the Playbill app:
             //
             //   dvb-tools     — dvbv5-scan / dvbv5-zap (channel scan +
             //                   per-program TS capture for ATSC)
@@ -1004,173 +1024,132 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 5: Stage Electron app into /opt/trailcurrent-playbill/
+            // Hook 5: Install trailcurrent-playbill + trailcurrent-playbill-dkms debs
             //
-            // build.sh stages the unpacked Electron arm64 dir
-            // (app/dist/linux-arm64-unpacked/) into $STAGING/electron-app/.
-            // We copy the whole tree to /opt/trailcurrent-playbill/, drop
-            // the .desktop launcher into /usr/share/applications/, and
-            // install the Playbill icon set into /usr/share/icons/hicolor/.
+            // Migrated from raw file-copy to proper Debian packaging
+            // (2026-05-15). The image build's build.sh produces two debs
+            // under packaging/<pkg>/dist/, then stages them at
+            // $STAGING/files/debs/. This hook installs them into the
+            // chroot via `apt-get install ./pkg.deb`, which resolves
+            // their Depends transparently against the apt cache.
+            //
+            // The trailcurrent-playbill deb carries:
+            //   /opt/trailcurrent-playbill/                  (Electron app)
+            //   /opt/trailcurrent-playbill/controller/       (Node daemon)
+            //   /usr/share/applications/trailcurrent-playbill.desktop
+            //   /usr/share/icons/hicolor/<size>/apps/trailcurrent-playbill.{png,svg}
+            //   /usr/lib/systemd/user/playbill-controller.service
+            // Its postinst runs update-desktop-database, gtk-update-icon-
+            // cache, systemctl --global enable playbill-controller.service,
+            // and setcap cap_net_bind_service on /usr/bin/node.
+            //
+            // The trailcurrent-playbill-dkms deb installs kernel-module
+            // source under /usr/src/trailcurrent-playbill-dkms-<ver>/
+            // and runs dkms install in its postinst against the installed
+            // kernel headers. AUTOINSTALL=yes in dkms.conf means future
+            // kernel upgrades automatically pick up rebuilds.
+            //
+            // Same artifacts also ship via manual `dpkg -i` or a private
+            // apt repo for post-image OTA updates through Headwaters /
+            // Farwatch — image build is just the first install path.
+            //
+            // Order: AFTER hook 3a (apt + nodejs + libcap2-bin + DKMS infra
+            //        + dvb-tools / mpv / etc all need to be present before
+            //        these debs resolve their Depends).
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
-                echo "[hook 5] staging Electron app into /opt/trailcurrent-playbill/"
+                echo "[hook 5] installing trailcurrent-playbill + dkms debs"
                 STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
 
-                if [ ! -d "$STAGING/electron-app" ]; then
-                    echo "  ERROR: $STAGING/electron-app missing — build.sh should have staged it" >&2
+                if [ ! -d "$STAGING/files/debs" ]; then
+                    echo "  ERROR: $STAGING/files/debs missing — build.sh should have staged the debs" >&2
                     exit 1
                 fi
-                if [ ! -x "$STAGING/electron-app/trailcurrent-playbill" ]; then
-                    echo "  ERROR: $STAGING/electron-app/trailcurrent-playbill is not executable" >&2
+                DKMS_DEB=$(ls "$STAGING/files/debs/"trailcurrent-playbill-dkms_*.deb 2>/dev/null | head -1)
+                APP_DEB=$(ls "$STAGING/files/debs/"trailcurrent-playbill_*.deb 2>/dev/null | grep -v dkms | head -1)
+                if [ -z "$DKMS_DEB" ] || [ -z "$APP_DEB" ]; then
+                    echo "  ERROR: missing one or both staged debs (DKMS=$DKMS_DEB, APP=$APP_DEB)" >&2
                     exit 1
                 fi
 
-                APP_DIR="$1/opt/trailcurrent-playbill"
-                mkdir -p "$APP_DIR"
-                cp -a "$STAGING/electron-app/." "$APP_DIR/"
-                # Electron's chrome-sandbox needs SUID to enable the GPU sandbox.
-                chmod 4755 "$APP_DIR/chrome-sandbox" 2>/dev/null || true
+                # Copy debs into the chroot so apt can install them via
+                # local file path. /var/cache/apt-local/ is a transient
+                # location (purged at end of build) — keeps /var/cache/apt
+                # clean for the runtime image.
+                mkdir -p "$1/var/cache/apt-local"
+                install -m 644 "$DKMS_DEB" "$1/var/cache/apt-local/$(basename "$DKMS_DEB")"
+                install -m 644 "$APP_DEB"  "$1/var/cache/apt-local/$(basename "$APP_DEB")"
 
-                APP_SIZE=$(du -sh "$APP_DIR" | cut -f1)
-                echo "  staged $APP_SIZE Electron app"
+                # Install DKMS first (the app deb Depends on it). Use apt
+                # rather than raw dpkg so deps resolve. apt-get install
+                # ./path.deb is the canonical way to install a local deb
+                # while pulling deps from the configured apt sources.
+                echo "  installing $(basename "$DKMS_DEB")"
+                chroot "$1" apt-get install -y --no-install-recommends \
+                    "/var/cache/apt-local/$(basename "$DKMS_DEB")" 2>&1 | tail -10
 
-                # Launcher .desktop entry
-                mkdir -p "$1/usr/share/applications"
-                install -m 644 "$STAGING/files/launcher/trailcurrent-playbill.desktop" \
-                    "$1/usr/share/applications/trailcurrent-playbill.desktop"
+                echo "  installing $(basename "$APP_DEB")"
+                chroot "$1" apt-get install -y --no-install-recommends \
+                    "/var/cache/apt-local/$(basename "$APP_DEB")" 2>&1 | tail -10
 
-                # Icons (one per resolution)
-                for size in 16 24 32 48 64 96 128 256 512; do
-                    src="$STAGING/files/icons/${size}x${size}.png"
-                    [ -f "$src" ] || continue
-                    dst_dir="$1/usr/share/icons/hicolor/${size}x${size}/apps"
-                    mkdir -p "$dst_dir"
-                    install -m 644 "$src" "$dst_dir/trailcurrent-playbill.png"
-                done
-                # SVG (scalable)
-                if [ -f "$STAGING/files/icons/icon.svg" ]; then
-                    mkdir -p "$1/usr/share/icons/hicolor/scalable/apps"
-                    install -m 644 "$STAGING/files/icons/icon.svg" \
-                        "$1/usr/share/icons/hicolor/scalable/apps/trailcurrent-playbill.svg"
+                # Verify DKMS actually built the modules against the
+                # rootfs kernel headers. If the build failed silently
+                # the rig will boot fine but Live TV won't work.
+                if chroot "$1" dkms status -m trailcurrent-playbill-dkms 2>/dev/null \
+                        | grep -q "installed"; then
+                    echo "  ✓ trailcurrent-playbill-dkms modules installed"
+                else
+                    echo "  WARNING: trailcurrent-playbill-dkms reports no installed modules" >&2
+                    chroot "$1" dkms status -m trailcurrent-playbill-dkms 2>&1 || true
                 fi
 
-                # Refresh GNOME's caches so the launcher entry + icons are
-                # discoverable on first boot. Without these, GNOME may not
-                # see the new .desktop file until something else (a package
-                # install, a logout/login) triggers a rebuild.
-                chroot "$1" update-desktop-database -q /usr/share/applications 2>&1 \
-                    || echo "  WARNING: update-desktop-database failed (non-fatal)"
-                chroot "$1" gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor 2>&1 \
-                    || echo "  WARNING: gtk-update-icon-cache failed (non-fatal)"
+                # Verify setcap on /usr/bin/node landed (the app deb's
+                # postinst runs it; this catches xattr-less filesystems
+                # before they bite onboarding's port-80 bind).
+                CAPS=$(chroot "$1" getcap /usr/bin/node 2>/dev/null || true)
+                case "$CAPS" in
+                    *cap_net_bind_service*) echo "  ✓ setcap on node OK: $CAPS" ;;
+                    *) echo "  ERROR: setcap on /usr/bin/node not effective: $CAPS" >&2; exit 1 ;;
+                esac
+
+                # Clean up the staging cache — these debs don't need to
+                # ship in the runtime image; users grab updates via apt
+                # repo / manual dpkg / Headwaters OTA, never from here.
+                rm -rf "$1/var/cache/apt-local"
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 5a: Stage playbill-controller daemon + systemd user unit
+            // Hook 5a: yt-dlp shadow install + playbill-audio-fix unit
             //
-            // The controller is the always-running Node.js daemon that owns
-            // MQTT, mpv, the source plugins (radio, livetv, youtube),
-            // device discovery, and the IPC socket the GUI client subscribes
-            // to. Lives at /opt/trailcurrent-playbill/controller/.
+            // Two image-baked sidecars that don't belong inside the
+            // trailcurrent-playbill deb because they're orthogonal to
+            // the app itself:
             //
-            // Three things this hook does:
-            //   1. Copy the controller tree (incl. node_modules — staged by
-            //      build.sh) to /opt/trailcurrent-playbill/controller/
-            //   2. Install the systemd user unit so the daemon auto-starts
-            //      with every user session, and symlink it into
-            //      default.target.wants/ for image-baked auto-enable
-            //   3. setcap CAP_NET_BIND_SERVICE on /usr/bin/node so the
-            //      controller's onboarding HTTP listener can bind port 80
-            //      without running as root (per docs/app/onboarding.md)
+            //   * /usr/local/bin/yt-dlp — overrides apt's yt-dlp with the
+            //     most-recent upstream release (apt's yt-dlp is months
+            //     stale and breaks against YouTube's evolving extractor
+            //     surface). Image-baked rather than packaged so the rig
+            //     ships with a known-fresh version on flash day; updates
+            //     happen via `pip install --upgrade --user yt-dlp` or
+            //     the controller's source plugin runtime fallback.
             //
-            // Order: AFTER hook 3a (apt installs nodejs + libcap2-bin) and
-            //        AFTER hook 5 (Electron app, sibling install dir).
+            //   * playbill-audio-fix.service — Q6A-board-specific kick
+            //     that restarts wireplumber 6 s after session start to
+            //     work around a codec-attach race. Image-quirk, not app
+            //     code, so it lives in the image hooks rather than the
+            //     userspace deb. (When the codec attach race goes away
+            //     upstream, remove this entire hook.)
+            //
+            // Order: AFTER hook 5 (the app deb is installed; this hook
+            //        just adds sidecars).
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
-                echo "[hook 5a] staging playbill-controller daemon + systemd user unit"
+                echo "[hook 5a] yt-dlp + playbill-audio-fix sidecars"
                 STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
 
-                if [ ! -d "$STAGING/controller" ]; then
-                    echo "  ERROR: $STAGING/controller missing — build.sh should have staged it" >&2
-                    exit 1
-                fi
-                if [ ! -f "$STAGING/controller/src/index.js" ]; then
-                    echo "  ERROR: $STAGING/controller/src/index.js missing — controller staging is incomplete" >&2
-                    exit 1
-                fi
-                if [ ! -d "$STAGING/controller/node_modules" ]; then
-                    echo "  ERROR: $STAGING/controller/node_modules missing — must include for runtime" >&2
-                    exit 1
-                fi
-                if [ ! -f "$STAGING/files/systemd-user/playbill-controller.service" ]; then
-                    echo "  ERROR: $STAGING/files/systemd-user/playbill-controller.service missing" >&2
-                    exit 1
-                fi
-
-                # 1. Stage the daemon.
-                CTRL_DIR="$1/opt/trailcurrent-playbill/controller"
-                mkdir -p "$CTRL_DIR"
-                cp -a "$STAGING/controller/." "$CTRL_DIR/"
-                CTRL_SIZE=$(du -sh "$CTRL_DIR" | cut -f1)
-                echo "  staged $CTRL_SIZE controller (incl. node_modules)"
-
-                # 2. Install systemd user units + image-baked auto-enable.
-                #    Both units land in /usr/lib/systemd/user/ and get a
-                #    symlink under default.target.wants/. Per-user enable
-                #    at first systemd-user manager start, no first-boot
-                #    logic needed.
-                mkdir -p "$1/usr/lib/systemd/user" "$1/usr/lib/systemd/user/default.target.wants"
-
-                # playbill-controller.service: the MQTT/IPC daemon.
-                install -m 644 "$STAGING/files/systemd-user/playbill-controller.service" \
-                    "$1/usr/lib/systemd/user/playbill-controller.service"
-                ln -sf ../playbill-controller.service \
-                    "$1/usr/lib/systemd/user/default.target.wants/playbill-controller.service"
-                echo "  installed playbill-controller.service (auto-enabled)"
-
-                # playbill-audio-fix.service: one-shot kick that restarts
-                # wireplumber 6 seconds into the user session, working
-                # around a recurring race where wireplumber's initial
-                # sound-card scan misses the WCD938x codec attach and
-                # the rig ends up in "Dummy Output". Removing this unit
-                # is safe once upstream pipewire/wireplumber reliably
-                # reacts to the codec udev event on this hardware. See
-                # the unit file for the full rationale.
-                install -m 644 "$STAGING/files/systemd-user/playbill-audio-fix.service" \
-                    "$1/usr/lib/systemd/user/playbill-audio-fix.service"
-                ln -sf ../playbill-audio-fix.service \
-                    "$1/usr/lib/systemd/user/default.target.wants/playbill-audio-fix.service"
-                echo "  installed playbill-audio-fix.service (auto-enabled)"
-
-                # 3. setcap on the node binary so the controller's onboarding
-                #    HTTP listener can bind port 80 (the privileged-port
-                #    requirement comes from Headwaters' mDNS proxy hardcoding
-                #    http://<host>.local — see docs/app/onboarding.md). The
-                #    capability survives reboots. Requires libcap2-bin
-                #    (installed in hook 3a) for the setcap binary itself.
-                NODE_BIN="$1/usr/bin/node"
-                if [ ! -x "$NODE_BIN" ]; then
-                    echo "  ERROR: /usr/bin/node not present in rootfs — hook 3a should have installed nodejs" >&2
-                    exit 1
-                fi
-                chroot "$1" setcap "cap_net_bind_service=+ep" /usr/bin/node
-                # Verify it stuck (setcap silently no-ops on filesystems
-                # without xattr support; ext4 in our rootfs.tar is fine but
-                # let's not assume).
-                CAPS=$(chroot "$1" getcap /usr/bin/node 2>/dev/null || true)
-                case "$CAPS" in
-                    *cap_net_bind_service*) echo "  ✓ setcap applied: $CAPS" ;;
-                    *) echo "  ERROR: setcap on /usr/bin/node did not take effect: $CAPS" >&2; exit 1 ;;
-                esac
-
-                # 4. Install the fresh yt-dlp release fetched by build.sh
-                #    into /usr/local/bin/yt-dlp. PATH precedence makes this
-                #    shadow /usr/bin/yt-dlp from apt; the apt one stays as a
-                #    safety-net fallback if /usr/local/bin/yt-dlp ever gets
-                #    nuked by a user. See build.sh "Fetch the latest yt-dlp
-                #    release" block — it caches in image/cache/ and only
-                #    re-downloads if older than 7 days.
+                # yt-dlp — shadows apt /usr/bin/yt-dlp via PATH precedence.
                 if [ -f "$STAGING/files/yt-dlp/yt-dlp" ]; then
                     install -m 755 "$STAGING/files/yt-dlp/yt-dlp" "$1/usr/local/bin/yt-dlp"
                     YT_VER=$(chroot "$1" /usr/local/bin/yt-dlp --version 2>&1 | head -1 || echo "?")
@@ -1178,6 +1157,17 @@ function(
                 else
                     echo "  WARNING: $STAGING/files/yt-dlp/yt-dlp missing — apt yt-dlp is the only fallback (likely stale)" >&2
                 fi
+
+                # playbill-audio-fix.service — image-quirk wireplumber kick.
+                # Also globally-enable via default.target.wants/ symlink
+                # the way the controller service does (its enable happens
+                # in the trailcurrent-playbill deb postinst).
+                mkdir -p "$1/usr/lib/systemd/user" "$1/usr/lib/systemd/user/default.target.wants"
+                install -m 644 "$STAGING/files/systemd-user/playbill-audio-fix.service" \
+                    "$1/usr/lib/systemd/user/playbill-audio-fix.service"
+                ln -sf ../playbill-audio-fix.service \
+                    "$1/usr/lib/systemd/user/default.target.wants/playbill-audio-fix.service"
+                echo "  installed playbill-audio-fix.service (auto-enabled)"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -1769,23 +1759,31 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 13b: DVB tuner firmware (Si2168 / Si2158)
+            // Hook 13b: DVB tuner firmware (Si2168 / Si2158) — VESTIGIAL
             //
-            // Ubuntu Noble's linux-firmware does NOT ship the Silicon Labs
-            // Si2168 demodulator / Si2158 tuner firmware. The Hauppauge
-            // WinTV-dualHD DVB-T2/C variant uses these chips; the kernel
-            // driver fails with `firmware file '...' not found` and never
-            // creates /dev/dvb/adapterN without them.
+            // CURRENT STATUS (2026-05-15): the supported tuner is the
+            // Hauppauge WinTV-dualHD model 01595 (USB 2040:826d), which uses
+            // LGDT3306A demod + Si2157 RF tuner. Neither needs firmware
+            // loaded from /lib/firmware (their config is register-table
+            // based in the kernel module). The Si2168/Si2158 firmware
+            // blobs staged here are NOT loaded by any module installed
+            // by this image. They remain on disk as forward-compatible
+            // ammunition: if Playbill ever extends `playbill-dvb-dkms` to
+            // build `si2168.ko` and `si2158.ko` for a different (DVB-T2/C
+            // international) Hauppauge variant, the firmware is already
+            // staged for the kernel firmware loader to find on hot-plug.
+            // Until that day this hook is a ~50 KB no-op.
             //
-            // The ATSC variant (LGDT3306A + Si2157) does NOT need external
-            // firmware (in-driver register tables), but staging these blobs
-            // costs <50 KB and lets the same image serve international users
-            // with DVB-T2/C tuners.
+            // Earlier revisions of this comment claimed the dualHD needs
+            // these blobs — that was wrong (the dualHD ATSC model has
+            // never used Si2168, and even the international DVB-T2/C
+            // variants need em28xx in-kernel before the firmware path
+            // matters).
             //
             // Blobs are fetched at image-build time by build.sh from the
             // OpenELEC dvb-firmware mirror, cached, and installed here into
-            // the well-known /lib/firmware/ path the kernel firmware loader
-            // searches on hot-plug. Order: standalone, no deps on other hooks.
+            // the well-known /lib/firmware/ path. Order: standalone, no
+            // deps on other hooks.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e

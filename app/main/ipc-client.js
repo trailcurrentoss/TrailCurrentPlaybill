@@ -27,6 +27,34 @@ const RECONNECT_INITIAL_MS = 500;
 const RECONNECT_MAX_MS     = 5000;
 const COMMAND_TIMEOUT_MS   = 10000;
 
+// Per-action timeout overrides for commands that wrap genuinely slow
+// subprocesses. Without these the renderer's IPC promise rejects with
+// "controller command timed out: <action>" while the work continues
+// fine on the controller side — confusing UX and a real bug.
+//
+//   livetv.scan  — dvbv5-scan walks the full US ATSC frequency table
+//                  (~70 channels at 6 MHz spacing). 1–3 min on a working
+//                  antenna, plus per-channel lock retries when signal is
+//                  marginal. 5-min cap is generous and still finite.
+//   radio.scan   — rtl_power across a full band. The MW/LW bands plus
+//                  rtl_power's smoothing pass can run 30–90 s. 3-min cap.
+//
+// Keep this table small and well-justified. Default timeout exists to
+// catch a genuinely-stuck controller; ballooning every action's timeout
+// to 5 min would defeat that.
+const PER_ACTION_TIMEOUT_MS = {
+  'livetv.scan':  5 * 60 * 1000,
+  'radio.scan':   3 * 60 * 1000,
+  // dvbv5-zap with the LGDT3306A demod can take 8-12 s to acquire lock on
+  // marginal ATSC signals (the controller's tune() resolves once "Lock"
+  // appears in dvbv5-zap stderr). At the default 10 s we raced the lock
+  // and the renderer rejected the tune promise WHILE the controller was
+  // still mid-resolve — leaving an orphaned dvbv5-zap holding the
+  // frontend and a confusing "Tuned but nothing plays" state. 30 s gives
+  // plenty of headroom; failed locks bail in ~5-8 s on their own anyway.
+  'livetv.tune':  30 * 1000,
+};
+
 class ControllerClient extends EventEmitter {
   constructor() {
     super();
@@ -67,10 +95,12 @@ class ControllerClient extends EventEmitter {
     }
     return new Promise((resolve, reject) => {
       const id = String(this._nextId++);
+      const action = cmd && cmd.action;
+      const timeoutMs = (action && PER_ACTION_TIMEOUT_MS[action]) || COMMAND_TIMEOUT_MS;
       const timer = setTimeout(() => {
         this._pending.delete(id);
-        reject(new Error(`controller command timed out: ${cmd && cmd.action}`));
-      }, COMMAND_TIMEOUT_MS);
+        reject(new Error(`controller command timed out: ${action}`));
+      }, timeoutMs);
       this._pending.set(id, { resolve, reject, timer });
       try {
         this._socket.write(JSON.stringify({ kind: 'command', id, cmd }) + '\n');

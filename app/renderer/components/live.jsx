@@ -1,4 +1,11 @@
-/* Live TV — Hauppauge WinTV-dualHD (or any in-tree linux-dvb device).
+/* Live TV — Hauppauge WinTV-dualHD model 01595 only (USB 2040:826d).
+
+   Supported tuner is intentionally a single model: drivers (em28xx +
+   em28xx-dvb + lgdt3306a + si2157 + tveeprom) come from the out-of-tree
+   playbill-dvb-dkms package because the Radxa Q6A kernel ships no USB-DVB
+   bridge drivers. See docs/app/live-tv.md for the rationale and the full
+   driver chain. Adding another tuner means adding another module subtree
+   to that DKMS package and updating its dkms.conf.
 
    NAV CONTRACT (docs/app/navigation.md): zone-root + zone-axis only. The
    FocusZones engine handles arrow motion + Enter/OK by clicking the focused
@@ -88,14 +95,31 @@ function LiveView() {
       // Tune via the legacy playbill.dvb shim (forwards to controller
       // livetv.tune); playback goes straight to controller transport.play
       // so we don't depend on app/main/services/player.js (deleted in Phase 7).
+      //
+      // sourceId MUST be 'livetv' — otherwise transport.play's "stop every
+      // other audio producer" guard fires livetv.stopAll() and kills the
+      // dvbv5-zap capture we just started, before mpv opens the TS file.
+      // The per-source audio trim (audio.perSourceTrimDb.livetv) also rides
+      // on sourceId.
       const { tsPath } = await window.playbill.dvb.tune({ adapter: 0, channel: ch.name });
       await window.playbill.controller.command({
-        action: 'transport.play',
-        url:    tsPath,
+        action:    'transport.play',
+        sourceId:  'livetv',
+        url:       tsPath,
         mediaType: 'video',
-        metadata: { title: ch.name, sourceItemId: ch.name },
+        metadata:  { title: ch.name, sourceItemId: ch.name },
       });
     } catch (e) {
+      // Surface the error to the user, but do NOT defensively call
+      // stopTune here. When two tune attempts overlap (e.g. user clicks
+      // channel B while A's lock is still resolving) the controller's
+      // tune(B) calls stopTune internally, which SIGTERMs zap-A and
+      // makes tune-A reject with "exited null before lock". The renderer
+      // landing here for the A error then defensively-stop-tuning would
+      // kill zap-B that tune-B just spawned, cascading kills across
+      // every rapid channel change. With the 30 s IPC timeout on
+      // livetv.tune (ipc-client.js), genuine orphan-on-timeout is
+      // rare enough we don't need defensive cleanup here.
       setError(String(e.message || e));
     } finally {
       setTuning(null);
@@ -109,6 +133,19 @@ function LiveView() {
       // Reverse order leaves mpv reading from a half-closed file for a beat.
       await window.playbill.controller.command({ action: 'transport.stop' });
       await window.playbill.dvb.stopTune({ adapter: 0 });
+    } catch (e) {
+      setError(String(e.message || e));
+    }
+  }
+
+  async function stopScan() {
+    // The user wanted out of the scan. Optimistically clear the local
+    // scanning flag so the UI updates instantly; the rescan() promise
+    // will resolve shortly (likely with an empty/partial channel list)
+    // and re-set state from the result.
+    setScanning(false);
+    try {
+      await window.playbill.dvb.stopScan();
     } catch (e) {
       setError(String(e.message || e));
     }
@@ -131,7 +168,7 @@ function LiveView() {
           <p>{statusLine({ adapters, channels: sortedChannels, scanning, tools, tunedName })}</p>
         </div>
         <div data-zone="live.ctrl" data-zone-axis="horizontal" style={{display:'flex', gap:8}}>
-          {tunedName && (
+          {tunedName && !scanning && (
             <button
               className="tv-btn"
               onClick={stop}
@@ -141,15 +178,27 @@ function LiveView() {
               Stop
             </button>
           )}
-          <button
-            className="tv-btn"
-            onClick={rescan}
-            disabled={scanning || (tools && !tools.scan)}
-            title={tools && !tools.scan ? 'dvbv5-scan not installed' : 'Rescan ATSC frequency table'}
-          >
-            <ion-icon name={scanning ? 'sync-outline' : 'refresh-outline'}></ion-icon>
-            {scanning ? 'Scanning…' : 'Rescan'}
-          </button>
+          {scanning ? (
+            <button
+              className="tv-btn"
+              data-zone-default="true"
+              onClick={stopScan}
+              title="Abort the channel scan and return to the previous channel list. The scan acquires the tuner exclusively, so tuning is blocked until it stops."
+            >
+              <ion-icon name="close-outline"></ion-icon>
+              Stop Scan
+            </button>
+          ) : (
+            <button
+              className="tv-btn"
+              onClick={rescan}
+              disabled={tools && !tools.scan}
+              title={tools && !tools.scan ? 'dvbv5-scan not installed' : 'Rescan ATSC frequency table'}
+            >
+              <ion-icon name="refresh-outline"></ion-icon>
+              Rescan
+            </button>
+          )}
         </div>
       </div>
 
@@ -167,7 +216,7 @@ function LiveView() {
         <EmptyState
           icon="hardware-chip-outline"
           title="No tuner connected"
-          body="Plug in the Hauppauge WinTV-dualHD (or compatible linux-dvb tuner) and click Rescan."
+          body="Plug in the Hauppauge WinTV-dualHD (model 01595, USB 2040:826d) and click Rescan. Other tuner models are not supported in this build."
         />
       )}
 
@@ -188,17 +237,25 @@ function LiveView() {
         >
           {sortedChannels.map((ch) => {
             const isOnAir = tunedName === ch.name;
+            // While dvbv5-scan is running it holds the frontend exclusively
+            // — any tune attempt returns EBUSY. Disabling the tile here
+            // both prevents that bad UX and signals to the user that the
+            // scan is what's blocking them. The Stop Scan button is the
+            // way out (controlled-focus default during scan).
+            const disabled = scanning;
             return (
               <button
                 key={ch.name}
-                data-zone-default={isOnAir ? 'true' : undefined}
+                data-zone-default={isOnAir && !scanning ? 'true' : undefined}
                 className={
                   'ch-tile' +
                   (tuning === ch.name ? ' tuning' : '') +
-                  (isOnAir ? ' on-air' : '')
+                  (isOnAir ? ' on-air' : '') +
+                  (disabled ? ' disabled' : '')
                 }
-                onClick={() => watch(ch)}
-                title={`Tune to ${ch.name}`}
+                onClick={disabled ? undefined : () => watch(ch)}
+                disabled={disabled}
+                title={disabled ? 'Channel scan in progress — Stop Scan to tune' : `Tune to ${ch.name}`}
               >
                 <div className="ch-num">{formatChannelNumber(ch)}</div>
                 <div className="ch-name">{ch.name}</div>

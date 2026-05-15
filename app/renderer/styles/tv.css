@@ -412,6 +412,11 @@ button.app-card:focus-visible {
   border-color: var(--tc-primary);
   background: linear-gradient(180deg, rgba(82,164,65,0.10) 0%, #0e0e0e 60%);
 }
+.ch-tile.disabled, .ch-tile:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ch-tile.disabled:hover, .ch-tile:disabled:hover { border-color: rgba(255,255,255,0.06); }
 .ch-tile .ch-tuning {
   position: absolute; top: 12px; right: 14px;
   font: 600 10px var(--font-mono); color: var(--tc-primary);

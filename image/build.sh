@@ -129,62 +129,42 @@ log "Staging icon set"
 mkdir -p "$STAGING_DIR/files/icons"
 cp -a "$ICONS_DIR/." "$STAGING_DIR/files/icons/"
 
-# Unpacked Electron app — rebuild via electron-builder if any source under
-# app/main or app/renderer is newer than the bundled asar (or if the dist
-# is missing entirely). Without this guard, an image build silently ships
-# whatever was in dist/ at the time of the last manual `npm run dist` —
-# usually weeks stale, missing every screen added since.
-ASAR="$ELECTRON_APP_DIR/resources/app.asar"
-NEED_BUILD=0
-if [ ! -f "$ASAR" ]; then
-    NEED_BUILD=1
-    log "Electron asar missing — building"
-elif [ -n "$(find "$REPO_ROOT/app/main" "$REPO_ROOT/app/renderer" -newer "$ASAR" -print -quit 2>/dev/null)" ]; then
-    NEED_BUILD=1
-    log "Electron source newer than bundled asar — rebuilding"
-fi
-if [ "$NEED_BUILD" = 1 ]; then
-    if [ ! -d "$REPO_ROOT/app/node_modules" ]; then
-        log "  app/node_modules missing — running npm install"
-        ( cd "$REPO_ROOT/app" && npm install 2>&1 | tail -3 ) || fatal "app npm install failed"
-    fi
-    ( cd "$REPO_ROOT/app" && npm run dist 2>&1 | tail -8 ) || fatal "electron-builder dist failed"
-    if [ ! -f "$ASAR" ]; then
-        fatal "electron-builder ran but $ASAR still missing"
-    fi
-fi
+# ── Build the trailcurrent-playbill + trailcurrent-playbill-dkms debs ──
+#
+# Migrated from raw file-copy to proper Debian packaging (2026-05-15) so
+# the same artifacts can ship via image build, manual scp+dpkg, or a
+# private apt repo / Headwaters-Farwatch OTA. trailcurrent-playbill
+# Depends: trailcurrent-playbill-dkms — kernel modules tag along
+# transparently. Same pattern as nvidia-driver / virtualbox / zfs-linux.
+#
+# Both build-deb.sh scripts handle their own dependency installation
+# and produce reproducible `.deb` files under
+# packaging/<pkg>/dist/. We rebuild every image build (cheap when the
+# sources haven't changed thanks to npm/electron-builder caching).
+log "Building trailcurrent-playbill-dkms deb"
+( bash "$REPO_ROOT/packaging/trailcurrent-playbill-dkms/build-deb.sh" 2>&1 | tail -5 ) \
+    || fatal "trailcurrent-playbill-dkms build failed"
 
-log "Staging unpacked Electron app from $ELECTRON_APP_DIR"
-APP_SRC_SIZE=$(du -sh "$ELECTRON_APP_DIR" | cut -f1)
-cp -a "$ELECTRON_APP_DIR/." "$STAGING_DIR/electron-app/"
-log "  staged $APP_SRC_SIZE Electron app"
+log "Building trailcurrent-playbill deb (includes Electron app + controller)"
+( bash "$REPO_ROOT/packaging/trailcurrent-playbill/build-deb.sh" 2>&1 | tail -10 ) \
+    || fatal "trailcurrent-playbill build failed"
 
-# Controller daemon — Node.js code + node_modules. Runs as a systemd
-# user service alongside the GUI; owns the MQTT bridge, mpv playback,
-# YouTube source, etc. Must include node_modules so the board can run
-# without npm. See architecture-v2 §2 for the daemon-and-GUI split.
-CONTROLLER_DIR="${CONTROLLER_DIR:-$REPO_ROOT/controller}"
-log "Staging controller daemon from $CONTROLLER_DIR"
-if [ ! -d "$CONTROLLER_DIR/node_modules" ]; then
-    log "  controller/node_modules missing — running npm install"
-    (cd "$CONTROLLER_DIR" && npm install --omit=dev) || fatal "controller npm install failed"
-fi
-mkdir -p "$STAGING_DIR/controller"
-# Skip .git, .env-style files, anything obviously not for shipping.
-rsync -a --exclude='.git' --exclude='*.log' --exclude='.env*' \
-    "$CONTROLLER_DIR/" "$STAGING_DIR/controller/"
-CONTROLLER_SIZE=$(du -sh "$STAGING_DIR/controller" | cut -f1)
-log "  staged $CONTROLLER_SIZE controller (incl. node_modules)"
+# Stage both debs into $STAGING/files/debs/ for the chroot install hook.
+mkdir -p "$STAGING_DIR/files/debs"
+PLAYBILL_DEB=$(ls "$REPO_ROOT/packaging/trailcurrent-playbill/dist/"*.deb 2>/dev/null | head -1)
+DKMS_DEB=$(ls "$REPO_ROOT/packaging/trailcurrent-playbill-dkms/dist/"*.deb 2>/dev/null | head -1)
+[ -f "$PLAYBILL_DEB" ] || fatal "no trailcurrent-playbill deb produced"
+[ -f "$DKMS_DEB" ]     || fatal "no trailcurrent-playbill-dkms deb produced"
+install -m 644 "$DKMS_DEB"     "$STAGING_DIR/files/debs/$(basename "$DKMS_DEB")"
+install -m 644 "$PLAYBILL_DEB" "$STAGING_DIR/files/debs/$(basename "$PLAYBILL_DEB")"
+log "  staged $(basename "$DKMS_DEB") ($(du -h "$DKMS_DEB" | cut -f1))"
+log "  staged $(basename "$PLAYBILL_DEB") ($(du -h "$PLAYBILL_DEB" | cut -f1))"
 
-# systemd user units. Hook 5a installs each into /usr/lib/systemd/user/
-# and symlinks default.target.wants/ for auto-start.
-#  - playbill-controller.service: the MQTT daemon (template lives next to
-#    the source it owns, so it's read from controller/systemd/).
-#  - playbill-audio-fix.service:  one-shot wireplumber-rescan kick to
-#    work around the boot-time codec-attach race on the Q6A.
+# playbill-audio-fix.service: still managed via image hook 6 (this unit
+# is image-board-quirk-specific, not part of the userspace package —
+# kicks wireplumber once at session start to work around the Q6A audio
+# attach race). Hook 6 stages it the way it always has.
 mkdir -p "$STAGING_DIR/files/systemd-user"
-install -m 644 "$CONTROLLER_DIR/systemd/playbill-controller.service" \
-    "$STAGING_DIR/files/systemd-user/playbill-controller.service"
 install -m 644 "$REPO_ROOT/image/files/systemd-user/playbill-audio-fix.service" \
     "$STAGING_DIR/files/systemd-user/playbill-audio-fix.service"
 
@@ -228,22 +208,28 @@ fi
 mkdir -p "$STAGING_DIR/files/yt-dlp"
 install -m 755 "$YTDLP_CACHE" "$STAGING_DIR/files/yt-dlp/yt-dlp"
 
-# ── Fetch DVB tuner firmware (Si2168 / Si2158) ────────────────────────────
-# Ubuntu Noble's linux-firmware package does NOT ship the Silicon Labs
-# Si2168 demodulator or Si2158 tuner firmware (verified May 2026:
-# `dpkg -L linux-firmware | grep si21` returns nothing). The Hauppauge
-# WinTV-dualHD DVB-T2/C variant uses these chips; without the firmware the
-# kernel driver fails with `si2168 7-0064: firmware file 'dvb-demod-...'
-# not found` and /dev/dvb/adapterN never appears.
+# ── Fetch DVB tuner firmware (Si2168 / Si2158) — VESTIGIAL FOR THE 01595 ──
+# CURRENT STATUS (2026-05-15): the supported tuner is the Hauppauge
+# WinTV-dualHD model 01595 (USB 2040:826d). That model uses LGDT3306A demod
+# + Si2157 RF tuner. NEITHER chip loads firmware from /lib/firmware (their
+# config is register-table-based inside the kernel module). The blobs
+# fetched and staged below are NOT loaded by any module this image installs.
 #
-# The ATSC variant of the WinTV-dualHD uses LGDT3306A + Si2157, neither of
-# which needs an external firmware file (in-driver register tables), so the
-# ATSC path works without these blobs — but vendoring them costs <50 KB and
-# means the same image works for international DVB-T2/C tuners too.
+# They remain on disk as forward-compatible ammunition: if Playbill ever
+# extends `playbill-dvb-dkms` to build si2168.ko / si2158.ko for an
+# international DVB-T2/C variant of the dualHD, the firmware path is
+# already staged for the kernel firmware loader to find on hot-plug. Until
+# then this section is a ~50 KB no-op.
+#
+# Earlier revisions of this comment said the dualHD needs these blobs —
+# that was wrong. Ubuntu Noble's linux-firmware is still missing them
+# (`dpkg -L linux-firmware | grep si21` returns nothing), so we keep the
+# fetch wired up against the future need; we just don't have a module that
+# requests them on this image.
 #
 # Source: OpenELEC/dvb-firmware on GitHub (the canonical mirror of the
 # extracted firmware blobs used by every Linux DVB stack distribution). Hook
-# 13b stages these into /lib/firmware/ so the kernel finds them on hot-plug.
+# 13b stages these into /lib/firmware/.
 DVB_FW_FILES="dvb-demod-si2168-02.fw dvb-demod-si2168-a20-01.fw dvb-demod-si2168-a30-01.fw dvb-demod-si2168-b40-01.fw dvb-tuner-si2158-a20-01.fw"
 DVB_FW_BASE="https://github.com/OpenELEC/dvb-firmware/raw/master/firmware"
 DVB_FW_CACHE="$CACHE_DIR/dvb-firmware"

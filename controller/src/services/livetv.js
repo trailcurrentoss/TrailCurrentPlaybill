@@ -1,6 +1,12 @@
-/* livetv source — DVB / ATSC tuner. Hauppauge WinTV-dualHD (model 1595)
-   and any other in-tree linux-dvb device. The kernel driver
-   (`dvb_usb_cxusb` family) exposes adapters as
+/* livetv source — DVB / ATSC tuner.
+
+   Supported hardware: Hauppauge WinTV-dualHD, model 01595, USB ID 2040:826d
+   ONLY. (Other DVB devices won't enumerate because the Q6A kernel ships no
+   USB-DVB bridge drivers — we add the specific stack this one needs via the
+   playbill-dvb-dkms package: em28xx + em28xx-dvb + lgdt3306a + si2157 +
+   tveeprom. Earlier comments in this file claimed `dvb_usb_cxusb` — that
+   was wrong; the 01595 actually uses the em28xx bridge, NOT cxusb.) The
+   loaded drivers expose adapters as
    /dev/dvb/adapterN/{frontend0, demux0, dvr0}.
 
    Lifted from app/main/services/dvb.js as part of Phase 5 — moved into the
@@ -26,6 +32,32 @@ const { CHANNELS_CONF, RUNTIME_DIR, ensureDirs } = require('../paths');
 
 const DVB_ROOT = '/dev/dvb';
 const tuneSessions = new Map(); // adapterIdx → { proc, tsPath, channel }
+let scanProc = null; // single dvbv5-scan process (only one scan at a time)
+
+/* Poll-open the frontend device until it accepts an exclusive R/W open,
+   or until timeout. After SIGTERMing dvbv5-scan the kernel needs a beat
+   to fully release the frontend; tune() (via dvbv5-zap) fired immediately
+   gets EBUSY. Callers (stopScan, scan-on-natural-completion) await this
+   so when their promises resolve the frontend is actually tune-ready.
+
+   100 ms poll interval, 5 s default cap. Returns true on free, false on
+   timeout — callers can decide whether to surface or proceed regardless. */
+async function waitForFrontendFree(adapter = 0, timeoutMs = 5000) {
+  const fePath = path.join(DVB_ROOT, `adapter${adapter}`, 'frontend0');
+  if (!fs.existsSync(fePath)) return false;
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const fd = fs.openSync(fePath, fs.constants.O_RDWR);
+      fs.closeSync(fd);
+      return true;
+    } catch (e) {
+      if (e.code !== 'EBUSY') return false; // some other error — give up
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return false;
+}
 
 function listAdapters() {
   if (!fs.existsSync(DVB_ROOT)) return [];
@@ -70,15 +102,51 @@ function scan({ adapter = 0, country = 'US' } = {}) {
       // Don't pass `-A` here — Ubuntu Noble's dvbv5-scan rejects it as
       // "invalid option" and fails the scan immediately.
       '-a', String(adapter),
+      '-v',                  // verbose — emits per-channel progress on stderr
       '-O', 'DVBv5',
       '-o', CHANNELS_CONF,
       freqTable,
     ];
     const proc = spawn('dvbv5-scan', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    scanProc = proc;
     let stderr = '';
-    proc.stderr.on('data', (b) => { stderr += b.toString(); });
-    proc.on('error', reject);
-    proc.on('close', (code) => {
+    // Stream stderr to the controller journal in real time so an operator
+    // running `journalctl --user -u trailcurrent-playbill-controller -f`
+    // sees scan progress (which frequency is being tried, whether it
+    // locked, etc.) instead of waiting blind for completion. Without
+    // this, dvbv5-scan looks indistinguishable from "hung" until the
+    // 1-3 minute (sometimes much longer) full pass finishes.
+    let logBuf = '';
+    proc.stderr.on('data', (b) => {
+      const s = b.toString();
+      stderr += s;
+      logBuf += s;
+      let nl;
+      while ((nl = logBuf.indexOf('\n')) >= 0) {
+        const line = logBuf.slice(0, nl).trimEnd();
+        logBuf = logBuf.slice(nl + 1);
+        if (line) console.log('[livetv.scan]', line);
+      }
+    });
+    proc.on('error', (err) => { if (scanProc === proc) scanProc = null; reject(err); });
+    proc.on('close', async (code, signal) => {
+      if (scanProc === proc) scanProc = null;
+      if (logBuf) { console.log('[livetv.scan]', logBuf.trimEnd()); logBuf = ''; }
+      // Wait for the frontend device to fully release before resolving.
+      // dvbv5-scan closes its fd as part of exit, but the kernel takes
+      // ~100-500 ms before the device accepts another exclusive open.
+      // Resolving early means the renderer thinks "scan done" → fires a
+      // tune → dvbv5-zap gets EBUSY → user sees "Device or resource busy."
+      await waitForFrontendFree(adapter);
+      // SIGTERM/SIGKILL exits cleanly as a "scan aborted by user" — return
+      // whatever channels.conf has (may be empty / partial) without throwing.
+      // This lets the renderer's stopScan() path resolve naturally.
+      if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+        console.log('[livetv.scan] aborted by signal', signal);
+        try { resolve(listChannels()); }
+        catch (e) { resolve([]); }
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`dvbv5-scan exited ${code}: ${stderr.slice(-400)}`));
         return;
@@ -86,6 +154,30 @@ function scan({ adapter = 0, country = 'US' } = {}) {
       try { resolve(listChannels()); }
       catch (e) { reject(e); }
     });
+  });
+}
+
+/* Abort an in-progress scan. SIGTERM gives dvbv5-scan a chance to clean
+   up the frontend; if it doesn't quit within a second we SIGKILL so the
+   user isn't stuck. No-op when no scan is running.
+
+   We do NOT manually waitForFrontendFree() here — the scan promise's
+   close handler already does that before resolving. By the time the
+   close event fires here, the same handler upstairs has already drained
+   the frontend; we just wait for the close event. */
+function stopScan() {
+  if (!scanProc) return Promise.resolve({ ok: true, wasRunning: false });
+  const proc = scanProc;
+  return new Promise((resolve) => {
+    const onExit = async () => {
+      // Defense-in-depth: also wait here, in case scan()'s close handler
+      // hasn't finished its waitForFrontendFree() yet.
+      await waitForFrontendFree(0);
+      resolve({ ok: true, wasRunning: true });
+    };
+    proc.once('close', onExit);
+    try { proc.kill('SIGTERM'); } catch (_) {}
+    setTimeout(() => { try { proc.kill('SIGKILL'); } catch (_) {} }, 1000);
   });
 }
 
@@ -219,6 +311,7 @@ function probeTools() {
 module.exports = {
   listAdapters,
   scan,
+  stopScan,
   listChannels,
   tune,
   stopTune,

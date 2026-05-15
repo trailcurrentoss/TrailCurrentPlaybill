@@ -321,6 +321,7 @@ function forwardToController(action, valueFromArgs) {
 // DVB → livetv. Renderer keeps calling playbill.dvb.* unchanged.
 ipcMain.handle('playbill.dvb.listAdapters', forwardToController('livetv.listAdapters'));
 ipcMain.handle('playbill.dvb.scan',         forwardToController('livetv.scan',         (a) => a || {}));
+ipcMain.handle('playbill.dvb.stopScan',     forwardToController('livetv.stopScan'));
 ipcMain.handle('playbill.dvb.listChannels', forwardToController('livetv.listChannels'));
 ipcMain.handle('playbill.dvb.tune',         forwardToController('livetv.tune',         (a) => a || {}));
 ipcMain.handle('playbill.dvb.stopTune',     forwardToController('livetv.stopTune',     (a) => a || {}));

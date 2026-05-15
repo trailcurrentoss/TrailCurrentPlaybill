@@ -80,20 +80,20 @@
         case 'livetv-empty-no-tuner':
           return { adapters: [], channels: [], scanning: false, tuning: null };
         case 'livetv-empty-no-channels':
-          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' },
-                                 { index: 1, name: 'Adapter 1 (dvb_usb_cxusb)' }],
+          return { adapters: [{ index: 0, name: 'Adapter 0 (em28xx)' },
+                                 { index: 1, name: 'Adapter 1 (em28xx)' }],
                    channels: [], scanning: false, tuning: null };
         case 'livetv-scanning':
-          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' }],
+          return { adapters: [{ index: 0, name: 'Adapter 0 (em28xx)' }],
                    channels: [], scanning: true, tuning: null };
         case 'livetv-channel-tuning':
-          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' },
-                                 { index: 1, name: 'Adapter 1 (dvb_usb_cxusb)' }],
+          return { adapters: [{ index: 0, name: 'Adapter 0 (em28xx)' },
+                                 { index: 1, name: 'Adapter 1 (em28xx)' }],
                    channels: FIXTURE_CHANNELS, scanning: false, tuning: 'WNBC-DT' };
         case 'livetv-channel-grid':
         default:
-          return { adapters: [{ index: 0, name: 'Adapter 0 (dvb_usb_cxusb)' },
-                                 { index: 1, name: 'Adapter 1 (dvb_usb_cxusb)' }],
+          return { adapters: [{ index: 0, name: 'Adapter 0 (em28xx)' },
+                                 { index: 1, name: 'Adapter 1 (em28xx)' }],
                    channels: FIXTURE_CHANNELS, scanning: false, tuning: null };
       }
     }

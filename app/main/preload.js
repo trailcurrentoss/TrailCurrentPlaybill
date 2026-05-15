@@ -113,6 +113,7 @@ contextBridge.exposeInMainWorld('playbill', {
   dvb: {
     listAdapters: ()    => ipcRenderer.invoke('playbill.dvb.listAdapters'),
     scan:         (a)   => ipcRenderer.invoke('playbill.dvb.scan', a),
+    stopScan:     ()    => ipcRenderer.invoke('playbill.dvb.stopScan'),
     listChannels: ()    => ipcRenderer.invoke('playbill.dvb.listChannels'),
     tune:         (a)   => ipcRenderer.invoke('playbill.dvb.tune', a),
     stopTune:     (a)   => ipcRenderer.invoke('playbill.dvb.stopTune', a),

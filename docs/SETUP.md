@@ -133,9 +133,11 @@ Common failure: WCD938x codec doesn't appear in `aplay -l`. This is a known Qual
 3. Electron opens fullscreen, dark TrailCurrent TV shell. Top bar shows brand chrome (`TrailCurrent Playbill` + system status icons). Sidebar (Home / Apps / Live TV / Radio / Library / Rig View / Search / Settings) on the left. Hero in the center with placeholder Stage-1 copy. Empty rows below (Continue Watching, Your Apps, Trails Nearby, Offline Library — Movies) — later stages will populate them.
 4. Arrow keys navigate. `H` returns to Home. `Esc` or `Backspace` backs out. `Ctrl+Q` quits.
 
-### Live TV — Hauppauge WinTV-dualHD (USB ATSC tuner)
+### Live TV — Hauppauge WinTV-dualHD (USB ATSC tuner, model 01595 only)
 
-1. Plug the WinTV-dualHD into a USB port. The kernel's `dvb_usb_cxusb` driver claims it on hot-plug — verify with `ls /dev/dvb/` (you should see `adapter0/` and `adapter1/`, one per tuner).
+> Driver chain: `em28xx` (USB bridge) → `em28xx-dvb` → `lgdt3306a` (ATSC demod) + `si2157` (RF tuner). None of these ship in the Radxa BSP kernel — they come from the out-of-tree `playbill-dvb-dkms` package, auto-rebuilt by DKMS on every kernel upgrade. See [live-tv.md](./app/live-tv.md) for the rationale.
+
+1. Plug the WinTV-dualHD model 01595 (USB ID `2040:826d`) into a USB port. The DKMS-built `em28xx` driver claims it on hot-plug — verify with `ls /dev/dvb/` (you should see `adapter0/` and `adapter1/`, one per tuner). If `/dev/dvb` is empty, run `dkms status | grep playbill-dvb` — should show `installed` for the running kernel. Other tuner models are not supported.
 2. Connect an OTA antenna to the tuner's RF input.
 3. Sidebar → **Live TV**. The empty state will say "No channels yet." Click **Rescan**.
 4. Channel scan runs `dvbv5-scan` against the US ATSC frequency table (`dtv-scan-tables` package). On a strong signal it takes 1–3 minutes and writes `~/.config/trailcurrent-playbill/channels.conf`.

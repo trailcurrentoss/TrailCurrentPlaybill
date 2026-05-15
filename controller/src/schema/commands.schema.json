@@ -53,6 +53,7 @@
     { "$ref": "#/$defs/LivetvTune" },
     { "$ref": "#/$defs/LivetvStopTune" },
     { "$ref": "#/$defs/LivetvScan" },
+    { "$ref": "#/$defs/LivetvStopScan" },
     { "$ref": "#/$defs/LivetvListChannels" },
     { "$ref": "#/$defs/LivetvListAdapters" },
     { "$ref": "#/$defs/LivetvProbeTools" },
@@ -452,6 +453,11 @@
           }
         }
       }
+    },
+    "LivetvStopScan": {
+      "x-class": "B",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "livetv.stopScan" } }
     },
     "LivetvListChannels": {
       "x-class": "B",

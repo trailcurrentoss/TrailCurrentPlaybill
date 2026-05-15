@@ -85,6 +85,21 @@ function register({ bus, state }) {
     }
   });
 
+  bus.register('livetv.stopScan', async () => {
+    // Abort an in-progress dvbv5-scan. The scan handler above will
+    // resolve naturally with whatever channels.conf had (often empty
+    // or partial) once dvbv5-scan exits, so we don't need to mutate
+    // state here — just signal the process and return.
+    const result = await livetv.stopScan();
+    // Mark scanning false right away so the renderer's button state
+    // updates without waiting for the scan promise to resolve. The
+    // livetv.scan handler will overwrite lastScan with the partial
+    // result once the close event lands.
+    const cur = state.get().livetv || {};
+    if (cur.scanning) state.patch({ livetv: { ...cur, scanning: false } });
+    return result;
+  });
+
   bus.register('livetv.listChannels', async () => livetv.listChannels());
   bus.register('livetv.listAdapters', async () => livetv.listAdapters());
   bus.register('livetv.probeTools',   async () => livetv.probeTools());

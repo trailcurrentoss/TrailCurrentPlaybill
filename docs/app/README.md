@@ -70,51 +70,54 @@ Deleting `~/.config/trailcurrent-playbill/` resets the app to a fresh state (nex
 
 | Device | Bus | Driver | Used by |
 |---|---|---|---|
-| Hauppauge WinTV-dualHD (model 1595) | USB | `dvb_usb_cxusb` (in-tree) | Live TV |
+| Hauppauge WinTV-dualHD (model 01595, USB `2040:826d`) | USB | `em28xx` + `em28xx-dvb` + `lgdt3306a` + `si2157` + `tveeprom` — out-of-tree via `playbill-dvb-dkms` (Radxa BSP kernel ships no USB-DVB drivers; see [live-tv.md](./live-tv.md#why-not-in-tree)) | Live TV |
 | RTL-SDR USB dongle (RTL2832U) | USB | librtlsdr (kernel `dvb_usb_rtl28xxu` is **blacklisted** in the image so userspace can claim the device) | Radio |
 | Adreno 643 GPU + Venus video decoder | SoC | Mesa Turnip + V4L2-M2M | mpv hardware decode (`--hwdec=auto-safe --vo=gpu-next`) |
 | PipeWire → built-in 3.5mm jack | SoC | WCD938x codec, Q6 audio fabric | All audio output |
 
 Image-side package + module configuration that makes this work lives in [`image/rsdk/src/share/rsdk/build/rootfs.jsonnet`](../../image/rsdk/src/share/rsdk/build/rootfs.jsonnet) and [`image/files/modprobe/disable-unused.conf`](../../image/files/modprobe/disable-unused.conf).
 
-## Roadmap — Auto-update via GitHub releases (AppImage migration)
+## Packaging and updates
 
-**Status: planned, on hold until the Q6A image stabilises.**
+**Status: Debian-package based, in production (2026-05-15).**
 
-Today the app is shipped as an unpacked Electron `dir` build that the rootfs install hook copies into `/opt/trailcurrent-playbill/`. That makes the install completely self-contained inside the image, but it also means the app can only be updated by reflashing or by manually replacing files in `/opt` — there is no in-app update mechanism.
+Playbill ships as two cooperating Debian packages — the nvidia-driver / virtualbox / zfs-linux pattern:
 
-The plan is to switch to **AppImage** + **electron-updater** + **GitHub releases** so updates ship out of band from full image rebuilds.
+| Package | Architecture | Contents |
+|---|---|---|
+| `trailcurrent-playbill` | `arm64` | Electron app at `/opt/trailcurrent-playbill/`, Node controller daemon at `/opt/trailcurrent-playbill/controller/`, `/usr/share/applications/trailcurrent-playbill.desktop`, icon set, `/usr/lib/systemd/user/playbill-controller.service` |
+| `trailcurrent-playbill-dkms` | `all` | Kernel modules `em28xx` + `em28xx-dvb` + `lgdt3306a` + `si2157` + `tveeprom` built via DKMS against whatever kernel is installed |
 
-### Why AppImage
+`trailcurrent-playbill` `Depends: trailcurrent-playbill-dkms (>= 1.0.0)`, so users only ever install or upgrade the main package — the kernel modules tag along transparently and DKMS handles rebuilds on kernel updates.
 
-- Self-contained, no system-wide install needed — the AppImage is a single executable file the user can run from anywhere.
-- `electron-updater` (already part of the `electron-builder` ecosystem we use) supports AppImage updates natively. It downloads the new AppImage, atomically swaps the file in place, and restarts the app — no `sudo`, no `apt`, no privileged helper.
-- Works cleanly on ARM64.
-- Can coexist with the apt-pinned system packages on the image — Playbill's own update channel is independent of the OS update channel.
+### Build pipeline
 
-### Concrete change set when we make the switch
+Both debs are produced from sources in [`packaging/`](../../packaging/):
 
-1. **`app/electron-builder.config.js`** — change the Linux target from `dir` to `AppImage`:
-   ```js
-   linux: {
-     target: [{ target: 'AppImage', arch: ['arm64'] }],
-     ...
-   },
-   publish: { provider: 'github', owner: 'TrailCurrent', repo: 'TrailCurrentPlaybill' },
-   ```
-2. **`app/package.json`** — add `electron-updater` to `dependencies`.
-3. **`app/main/services/updater.js`** *(new)* — wraps `autoUpdater` from `electron-updater`. Polls GitHub releases on a 6-hour cadence, emits IPC events `playbill.updater.available` / `.downloaded` so the renderer can show a non-blocking toast with "Restart to install".
-4. **`app/main/main.js`** — wire the updater service alongside the existing dvb / radio / player services.
-5. **`app/renderer/components/chrome.jsx`** — small "update available" toast in the top bar, focusable from the side nav.
-6. **`image/rsdk/src/share/rsdk/build/rootfs.jsonnet`** — change the install hook to drop `Playbill.AppImage` (a single file, ~120 MB) into `/opt/trailcurrent-playbill/` instead of the unpacked tree. Update the `.desktop` `Exec=` line to point at the AppImage. Mark the file `+x`.
-7. **GitHub Actions workflow** *(new)* — on tag push, build the AppImage for `linux-arm64`, draft a release, attach `Playbill.AppImage` and `latest-linux.yml`. `electron-updater` reads `latest-linux.yml` from the latest release to determine the version.
+```
+packaging/trailcurrent-playbill/build-deb.sh        # main app deb
+packaging/trailcurrent-playbill-dkms/build-deb.sh   # DKMS sibling
+```
 
-### Tradeoffs
+[`image/build.sh`](../../image/build.sh) invokes both scripts on every image build, stages the resulting `.deb` files into `$STAGING/files/debs/`, and [rootfs.jsonnet hook 5](../../image/rsdk/src/share/rsdk/build/rootfs.jsonnet) installs them inside the chroot via `apt-get install ./pkg.deb` so dependency resolution is normal.
 
-- AppImages bundle their own runtime libs — adds ~20 MB vs the unpacked dir, but trivially small relative to the image.
-- The unpacked dir is easier to peek at during development. For dev, `npm run start` still runs against `app/main/` directly — only the production install format changes.
-- An AppImage runs FUSE-mounted — the FUSE driver `libfuse2` (the legacy v2 ABI that AppImages need) must be in the image. Verify that `libfuse2t64` is installed when we make the switch.
+### Update channels
 
-### Why we're holding off
+Three ways the same two debs reach a rig:
 
-The image build is still iterating — kernel pinning, alsa-ucm vendor overlays, the boot-time Plymouth path, etc. While that is in flux, the unpacked-dir install gives us a faster build → flash → verify cycle (no AppImage packaging step). Once the image is stable enough that we're not reflashing every other day, we cut over to AppImage and the in-app updater takes over from there.
+| Path | When | Mechanism |
+|---|---|---|
+| **Image flash** | First install, kernel upgrades, hardware changes | Bundled into the rootfs by the image build. |
+| **One-off SCP + dpkg** | Dev iteration, urgent patches | `scp pkg.deb rig:/tmp && ssh rig 'sudo dpkg -i /tmp/pkg.deb'`. DKMS rebuilds. |
+| **Fleet OTA via Headwaters / Farwatch** | Production update cadence (planned) | Private apt repo hosting the latest `.deb` files. Headwaters or Farwatch runs `apt-get update && apt-get install --only-upgrade trailcurrent-playbill` per rig. Same dependency resolution as image-build install. |
+
+The same `.deb` works for all three. There is **no AppImage**, **no electron-updater**, **no separate update channel for the kernel modules** — `apt` is the single mechanism.
+
+### Versioning
+
+App and DKMS package versions advance independently:
+
+- `trailcurrent-playbill` follows `app/package.json` version.
+- `trailcurrent-playbill-dkms` follows the version in [`packaging/trailcurrent-playbill-dkms/src/dkms.conf`](../../packaging/trailcurrent-playbill-dkms/src/dkms.conf).
+
+Bump the DKMS version only when the kernel-side source actually changes (driver subtree refresh, new module added). The main package's `Depends: trailcurrent-playbill-dkms (>= X.Y.Z)` floor moves at the same time so apt knows a kernel-side bump is required for the new app version.
