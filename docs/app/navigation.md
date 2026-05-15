@@ -23,7 +23,32 @@ and the Roku remote convention.
 | **Home** (⌂) | Go to the home screen | — |
 | **Vol +/−** | System volume control (forwarded to PipeWire) | — |
 | **Power** | System power (handled at the case / kernel level) | — |
-| **Menu** (≡) | Reserved for future contextual options (Roku-Star pattern) — currently a no-op | "Open the side nav" |
+| **Menu** (≡) | Per-screen contextual options (Roku-Star pattern). Only Explore currently binds it (opens the map context menu). Other screens treat it as a no-op. | "Open the side nav" |
+
+### Menu key delivery quirk (Chromium-on-Wayland)
+
+The kernel keymap (`image/files/rc_keymaps/playbill.toml`) maps the
+hamburger button to `KEY_M` — the letter 'm' — instead of the
+semantically-correct `KEY_CONTEXT_MENU`. This is a workaround for a
+Chromium-on-Wayland defect: the shipping Electron build silently drops
+`KEY_CONTEXT_MENU` between Wayland's keyboard surface and the renderer's
+DOM. Verified live 2026-05-15: `ir-keytable -t` shows the kernel
+emitting `EV_KEY KEY_CONTEXT_MENU(0x1b6)` correctly on every Menu
+press, but window-level capture listeners on both `keydown` AND
+`contextmenu` never fire in the renderer.
+
+What this means for screen authors:
+
+- Bind your contextual-menu opener to `e.key === 'm' || e.key === 'M'`
+  (and optionally `'ContextMenu'` for the keyboard-with-real-Menu-key
+  case). The Explore canvas does both — see `explore.jsx`.
+- Side effect: pressing the IR Menu button while focus is in a text
+  input types a literal 'm'. Acceptable because the IR remote isn't a
+  typing device. If you ever build a screen where users expect to type
+  with the IR remote, revisit the keymap.
+- When Electron upgrades or Chromium fixes Wayland `KEY_CONTEXT_MENU`
+  propagation, switch the keymap back to `KEY_CONTEXT_MENU` and drop
+  the 'm' check.
 
 The d-pad has **one rule, applied everywhere**:
 
@@ -31,6 +56,189 @@ The d-pad has **one rule, applied everywhere**:
 > escapes to the parent zone in that direction.
 
 Hierarchy lives on **Back**, never on a direction key.
+
+---
+
+## Back is the universal escape — context-aware
+
+The most important rule for keeping navigation consistent across screens
+(including ones where Left/Right *cannot* reach an edge, like the Explore
+map or a video player): **Back always works, and what it does is
+determined globally, not per-screen.** Resolution order:
+
+1. **SideNav open** → close it. Same instinct as dismissing any menu
+   overlay anywhere else in the OS.
+2. **Playback running** → stop the player. Stay on the current screen so
+   the user can resume navigating; a second Back climbs the hierarchy.
+3. **Sub-screen** (Settings, YouTube, Cast — anything reached *from inside*
+   another screen) → return to its parent screen.
+4. **Top-level screen** (home, apps, live, radio, local, explore, rig,
+   search) → **open the SideNav.** This is what guarantees the side nav
+   is always reachable with one key, including on screens like Explore
+   where pressing Left just pans a map and never escapes to an edge.
+
+Implementation: `goBack()` in `app.jsx`. New top-level screens get this
+behavior for free — do not add per-screen Back/Esc handlers.
+
+Reaching the SideNav therefore has two redundant paths, by design:
+
+- **Left at the leftmost edge** of a discrete zone (geometric escape)
+- **Back** at a top-level screen (deterministic, works everywhere
+  regardless of layout or focus state)
+
+The second path is the one users can rely on when Left can't escape —
+maps, scrubbers, paged grids, unbounded lists.
+
+---
+
+## Focus is the framework's responsibility, not the screen's
+
+A new screen does not place focus. The shell does it on screen mount via
+`FocusZones.enterZone(root)`, which:
+
+1. restores the last-focused child of that root (memory carries across
+   screen-back-and-forward), or
+2. focuses the leaf marked `data-zone-default`, or
+3. focuses the first focusable leaf, or
+4. recurses into the first child zone.
+
+**The body-focus watchdog** is the safety net. If any keypress arrives
+while focus is on `<body>` (because async data caused a re-render that
+unmounted the focused element, etc.), the engine restores focus into the
+root *and continues handling the same press*. The user never loses a
+keystroke to focus recovery.
+
+Implementation: top of `handleKeydown` in `focus-zones.js`.
+
+---
+
+## SideNav saves & restores focus
+
+When SideNav opens (by Left-at-edge or by Back-at-top-level), `app.jsx`
+snapshots `document.activeElement` as `sideNav.priorFocus`. When SideNav
+closes without picking a new screen (the user pressed Right/Back/Esc to
+dismiss), focus is restored to `priorFocus`. This is the same pattern as
+`react-focus-lock` and tvOS modal presentation, and it's what makes "I
+just peeked at the menu" feel non-jarring.
+
+Same applies for any future modal/dialog: push focus on open, pop on
+close. Never leak focus to `<body>` on dismiss.
+
+---
+
+## Escape hatches — when a screen legitimately consumes the d-pad
+
+Two screen archetypes don't fit the "buttons in a grid" mould but still
+participate in the contract:
+
+### Focus sinks (maps, video players, scrubbers)
+
+Screens with **unbounded directional input** — Explore's map, a fullscreen
+video player, a paged document — consume Up/Down/Left/Right *themselves*
+for their primary action (pan / zoom / seek). The framework rule:
+
+- Bind keydown to **the focusable element**, not `window`. The handler only
+  fires while that element has focus, so opening SideNav (which moves focus
+  away) automatically suspends the sink.
+- `preventDefault()` + `stopPropagation()` ONLY for the arrows you want to
+  consume. **Never** for Escape, Backspace, `h`, `H`, or Home — those MUST
+  bubble to the shell so the user can leave the sink.
+- Make the sink element a child of the zone-root and tag the zone-root the
+  same way as any other screen.
+
+Explore is the canonical implementation. Look there before inventing a
+new pattern.
+
+### Slider-like widgets
+
+A widget that maps Left/Right to a value change (the radio dial stepping
+frequency, a volume slider, a date picker) follows the HTML `<input
+type=range>` model: Left/Right adjust the value, Up/Down/Enter bubble.
+
+- Element-level `onKeyDown` consumes Left/Right with `preventDefault()` +
+  `stopPropagation()`.
+- Up, Down, Enter — let them bubble so FocusZones routes them normally.
+- The widget should be the only focusable element in its zone (single
+  button in a horizontal zone) so users don't expect Left/Right to move
+  to a sibling.
+
+Radio's dial is the canonical implementation.
+
+---
+
+## Modals & overlays
+
+Anything that appears OVER the current screen — the DVD prompt, the CD
+prompt, future confirm dialogs, etc. — is a **modal zone-root**. The
+rules:
+
+1. Tag the modal's root container with `data-zone-root data-zone="…"
+   data-zone-axis="vertical"`. Even though there's already a zone-root
+   for the screen underneath, `FocusZones.getRoot()` deliberately
+   returns the **last visible** `[data-zone-root]` in document order so
+   the modal wins. App shells render modals AFTER the main screen, so
+   they're last in DOM order automatically.
+2. The body-focus watchdog in `FocusZones.handleKeydown` will land
+   focus on the modal's `data-zone-default` element (or its first
+   focusable leaf) the next time the user presses any directional /
+   Enter key.
+3. **Esc / Backspace** inside a modal should close it. Register a
+   `window.PlaybillBackHook` that returns `true` when the modal is
+   visible and dismisses it internally. App.jsx's `goBack` consults
+   the hook before falling through to its normal open-the-SideNav
+   behavior.
+
+   **Critical: key the hook's useEffect on a `modalVisible` boolean,
+   NOT on mount.** Modal components like `DvdPrompt` / `CdPrompt` are
+   always mounted in `app.jsx` and conditionally `return null` —
+   they don't unmount. A `[]`-dep useEffect installs the hook once
+   and never cleans up, leaving the hook intercepting Back on every
+   other screen. Always:
+
+   ```js
+   const modalVisible = !!(state && state.status === '…');
+   useEffect(() => {
+     if (!modalVisible) return undefined;
+     window.PlaybillBackHook = () => { dispatch(...); return true; };
+     return () => delete window.PlaybillBackHook;
+   }, [modalVisible]);
+   ```
+
+   Hooks must live ABOVE the early returns (rules of hooks).
+4. Inside a text input within a modal, Space / Enter are passed to the
+   browser as cursor edits / form submit — they cannot leak out to
+   FocusZones and click a button by accident (the `isTextField` check
+   in `handleKeydown` guards this for all modals and all screens).
+
+---
+
+## Adding a new screen — checklist
+
+The previous failure mode was "every new screen reinvents nav." Follow
+this list and the framework does the work for you:
+
+1. **Tag the root** with `data-zone-root data-zone="my-screen"
+   data-zone-axis="vertical"` (or `horizontal` / `grid` as the layout
+   demands). The root is the outermost `<div>` returned by your component.
+2. **Tag every sub-region** (rows, columns, grids) with `data-zone="…"`
+   and `data-zone-axis`. The shape of the zone tree mirrors the visual
+   layout.
+3. **Use `<button>` elements** for anything focusable — never `<div
+   tabIndex=0>`. Buttons fire `onClick` on Enter natively; divs don't.
+4. **Mark a default focus target** with `data-zone-default="true"` on the
+   leaf you want focused when the screen mounts. Optional but improves
+   first-press UX.
+5. **For sub-states (Music's album detail, future detail/preview overlays):**
+   register a `window.PlaybillBackHook` that returns `true` when you've
+   handled Back internally, `false` to fall through to the universal
+   contract. Clean up the hook on unmount.
+6. **Do NOT add a per-screen keyboard handler.** If you find yourself
+   reaching for `addEventListener('keydown')`, you're solving a problem
+   the framework already solves. Re-read this doc.
+
+The runtime lint in `app.jsx` will log `console.error('[nav] screen=… has
+no [data-zone-root]')` when step 1 is forgotten — check the renderer log
+(`/tmp/playbill-renderer.log` on the rig) after adding a new screen.
 
 ---
 

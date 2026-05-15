@@ -38,7 +38,21 @@ protocol = "nec"
 # Hierarchy + menus
 0x90 = "KEY_ESC"             # Back   (Playbill: Escape == Backspace == Back)
 0xcb = "KEY_HOMEPAGE"        # Home
-0x9d = "KEY_CONTEXT_MENU"    # Menu   (reserved per nav contract — currently no-op)
+# Menu / hamburger button. Mapped to KEY_M (the letter 'm') instead of
+# the semantically-correct KEY_CONTEXT_MENU because Chromium-on-Wayland
+# in the shipping Electron build silently DROPS KEY_CONTEXT_MENU events.
+# Verified live on the Q6A 2026-05-15:
+#   - `ir-keytable -t` shows the kernel correctly emits EV_KEY
+#     KEY_CONTEXT_MENU(0x1b6) for every press of the hamburger button.
+#   - Window-level capture-phase listeners on both `keydown` AND
+#     `contextmenu` events in the renderer never fire — Chromium drops
+#     the input between Wayland and DOM dispatch entirely.
+# 'm' is consumed by Explore's canvas keydown handler (which already
+# accepted 'ContextMenu' / 'm' / 'M'). Side effect: pressing the IR
+# Menu button while focus is in a text input will type a literal 'm'.
+# Acceptable since the IR remote isn't used for typing. Revisit when
+# Electron/Chromium gains reliable KEY_CONTEXT_MENU propagation.
+0x9d = "KEY_M"               # Menu — see comment above for why not KEY_CONTEXT_MENU
 
 # Audio
 0x80 = "KEY_VOLUMEUP"

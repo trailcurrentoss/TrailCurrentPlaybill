@@ -56,6 +56,11 @@ if [ -f /etc/machine-id ] && [ ! -f /var/lib/dbus/machine-id ]; then
 fi
 
 # ── 3. Regenerate any missing SSH host keys ─────────────────────────────────
+# Unit is ordered Before=ssh.service, so we generate keys here and sshd
+# starts fresh with them — no restart needed. (The prior `systemctl restart
+# ssh.service` here deadlocked when this unit ran before sysinit.target,
+# since ssh.service couldn't reach active state until sysinit completed,
+# and sysinit was blocked waiting on us — 5-minute timeout every boot.)
 log "Verifying SSH host keys"
 KEY_COUNT=$(ls /etc/ssh/ssh_host_*_key 2>/dev/null | wc -l)
 if [ "$KEY_COUNT" -lt 3 ]; then
@@ -63,11 +68,12 @@ if [ "$KEY_COUNT" -lt 3 ]; then
     rm -f /etc/ssh/ssh_host_*
     ssh-keygen -A
 fi
-systemctl restart ssh.service 2>/dev/null || true
 
 # ── 4. Hostname ─────────────────────────────────────────────────────────────
+# Direct file write (not hostnamectl) — hostnamectl waits on dbus and adds a
+# class of "hangs forever if dbus isn't up" failure modes for no benefit here.
 log "Setting hostname to $HOSTNAME"
-hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || echo "$HOSTNAME" > /etc/hostname
+echo "$HOSTNAME" > /etc/hostname
 grep -q "127.0.1.1.*$HOSTNAME" /etc/hosts || echo "127.0.1.1   $HOSTNAME" >> /etc/hosts
 
 # ── Done ────────────────────────────────────────────────────────────────────

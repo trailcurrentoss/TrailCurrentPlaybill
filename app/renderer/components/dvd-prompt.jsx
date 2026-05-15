@@ -75,12 +75,34 @@ function DvdPrompt() {
     if (dvd.status === 'idle') setPhase('prompt');
   }, [dvd && dvd.status]);
 
+  // Whether the modal is currently visible. Computed BEFORE the hooks so
+  // it can drive the back-hook's dependency array. (React rules of hooks
+  // require hooks to be called in the same order every render — we cannot
+  // gate hooks behind early returns.)
+  const modalVisible = !!(dvd && (
+    dvd.status === 'prompting' || dvd.status === 'ripping' ||
+    dvd.status === 'done'      || dvd.status === 'error'));
+
+  // Register a back-hook ONLY while the modal is actually visible. This
+  // component stays MOUNTED for the life of the renderer (it's always
+  // included in app.jsx's tree, just returns null when there's no disc)
+  // — so if we registered the hook on mount with `[]` deps it would stay
+  // registered forever, intercepting Back from EVERY other screen and
+  // wrongly firing `dvd.dismiss`. By keying on `modalVisible` we install
+  // the hook on open and remove it on close.
+  useEffect(() => {
+    if (!modalVisible) return undefined;
+    window.PlaybillBackHook = () => {
+      if (window.playbill && window.playbill.controller) {
+        window.playbill.controller.command({ action: 'dvd.dismiss' }).catch(() => {});
+      }
+      return true;
+    };
+    return () => { if (window.PlaybillBackHook) delete window.PlaybillBackHook; };
+  }, [modalVisible]);
+
   if (!dvd) return null;
-  // The overlay is visible whenever there is something interesting going
-  // on: a prompt, an in-flight rip, or a terminal done/error to acknowledge.
-  const visible = dvd.status === 'prompting' || dvd.status === 'ripping'
-               || dvd.status === 'done'      || dvd.status === 'error';
-  if (!visible) return null;
+  if (!modalVisible) return null;
 
   const dispatch = (cmd) => window.playbill.controller.command(cmd);
 
@@ -151,7 +173,16 @@ function DvdPrompt() {
 
   // ─── Render ────────────────────────────────────────────────────────
   return (
-    <div className="dvd-prompt-backdrop">
+    // axis="horizontal" because the action buttons (Yes / Manual / Not now)
+    // are laid out as a horizontal flex row inside .dvd-prompt-actions.
+    // Vertical was wrong — Up/Down couldn't reach the buttons since they
+    // aren't stacked, and Left/Right tried to escape the modal.
+    <div
+      className="dvd-prompt-backdrop"
+      data-zone-root
+      data-zone="dvd-prompt"
+      data-zone-axis="horizontal"
+    >
       <div className="dvd-prompt-card">
         <div className="dvd-prompt-header">
           <ion-icon name="disc-outline"></ion-icon>

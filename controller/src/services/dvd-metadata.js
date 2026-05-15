@@ -99,7 +99,15 @@ function lookupOmdb(apiKey, q) {
       res.on('end', () => {
         try {
           const j = JSON.parse(body);
-          if (j.Response !== 'True') { resolve(null); return; }
+          if (j.Response !== 'True') {
+            // Surface the real failure reason instead of swallowing it. OMDb
+            // returns Response:"False" + Error:"..." for invalid key,
+            // movie-not-found, daily-limit, etc.; without this log, a
+            // misconfigured key or daily-limit-hit looks identical to
+            // "didn't find a match" and the user has no diagnostic path.
+            console.warn(`[dvd-metadata] OMDb lookup '${q.title}' returned Response=${j.Response} Error=${j.Error || '(none)'}`);
+            resolve(null); return;
+          }
           resolve({
             title:     j.Title,
             year:      j.Year && j.Year.replace(/[^\d].*$/, ''),  // OMDb returns "2010–" for ongoing shows
@@ -111,11 +119,25 @@ function lookupOmdb(apiKey, q) {
             runtime:   j.Runtime && j.Runtime !== 'N/A' ? j.Runtime : null,
             source:    'omdb',
           });
-        } catch (_) { resolve(null); }
+        } catch (e) {
+          console.warn(`[dvd-metadata] OMDb lookup '${q.title}' JSON parse failed: ${e.message}; body=${body.slice(0, 200)}`);
+          resolve(null);
+        }
       });
     });
-    req.on('timeout', () => { try { req.destroy(); } catch(_){} resolve(null); });
-    req.on('error',   () => resolve(null));
+    req.on('timeout', () => {
+      console.warn(`[dvd-metadata] OMDb lookup '${q.title}' timed out after 6 s`);
+      try { req.destroy(); } catch(_){}
+      resolve(null);
+    });
+    req.on('error', (e) => {
+      // TLS certificate issues / DNS failures / connection refused all
+      // surface as 'error'. Including the actual e.message means a future
+      // "the lookup silently failed" debugging session takes 5 seconds in
+      // the journal instead of 50 minutes of bisecting through code paths.
+      console.warn(`[dvd-metadata] OMDb lookup '${q.title}' HTTP error: ${e.message}`);
+      resolve(null);
+    });
     req.end();
   });
 }

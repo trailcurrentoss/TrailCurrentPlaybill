@@ -324,6 +324,9 @@ function ExploreView() {
     if (!el) return;
 
     function onKey(e) {
+      // TEMP DIAG — log every key the canvas receives so we can confirm
+      // the IR Menu button is reaching this handler.
+      console.log('[explore-key] key=' + e.key + ' code=' + e.code + ' menuOpen=' + menuOpenRef.current);
       // Don't fight a focused real text field (none on this screen today;
       // belt-and-braces in case search lands here later).
       const t = e.target;
@@ -345,14 +348,17 @@ function ExploreView() {
           case ' ':
             activateMenuItem(menuIdxRef.current);
             break;
-          case 'ContextMenu':
-          case 'm':
-          case 'M':
           case 'Escape':
           case 'Backspace':
             setMenuOpen(false);
             refocusCanvas();
             break;
+          // INTENTIONAL: 'm' / 'M' / 'ContextMenu' do NOT close the menu
+          // while it's open. The IR remote's Menu button maps to KEY_M
+          // (see playbill.toml), and rapid taps used to TOGGLE the menu
+          // — open, close, open, close — so the user saw nothing settle.
+          // Only Esc/Backspace dismisses the menu now. The open-on-m
+          // path below is unchanged.
           default:
             menuHandled = false;
         }

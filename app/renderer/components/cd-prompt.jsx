@@ -56,10 +56,29 @@ function CdPrompt() {
     if (music.status === 'idle') setPhase('prompt');
   }, [music && music.status]);
 
+  // Whether the modal is currently visible — drives back-hook lifecycle.
+  // Same caveat as DvdPrompt: this component is ALWAYS mounted in app.jsx
+  // and returns null when idle, so the back-hook must NOT be registered
+  // on mount with `[]` deps. Key on `modalVisible` so the hook only
+  // exists while the modal is on screen; otherwise it would intercept
+  // Back from every unrelated screen and wrongly fire music.dismiss.
+  const modalVisible = !!(music && (
+    music.status === 'prompting' || music.status === 'ripping' ||
+    music.status === 'done'      || music.status === 'error'));
+
+  useEffect(() => {
+    if (!modalVisible) return undefined;
+    window.PlaybillBackHook = () => {
+      if (window.playbill && window.playbill.controller) {
+        window.playbill.controller.command({ action: 'music.dismiss' }).catch(() => {});
+      }
+      return true;
+    };
+    return () => { if (window.PlaybillBackHook) delete window.PlaybillBackHook; };
+  }, [modalVisible]);
+
   if (!music) return null;
-  const visible = music.status === 'prompting' || music.status === 'ripping'
-               || music.status === 'done'      || music.status === 'error';
-  if (!visible) return null;
+  if (!modalVisible) return null;
 
   const dispatch = (cmd) => window.playbill.controller.command(cmd);
 
@@ -167,7 +186,12 @@ function CdPrompt() {
     : 'Audio CD';
 
   return (
-    <div className="dvd-prompt-backdrop">
+    <div
+      className="dvd-prompt-backdrop"
+      data-zone-root
+      data-zone="cd-prompt"
+      data-zone-axis="horizontal"
+    >
       <div className="dvd-prompt-card">
         <div className="dvd-prompt-header">
           <ion-icon name="musical-notes-outline"></ion-icon>

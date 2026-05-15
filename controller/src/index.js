@@ -196,7 +196,16 @@ async function main() {
   youtubeHandlers.register({ bus, state });
   headwatersHandlers.register({ bus, state });
   telemetryHandlers.register({ bus, state, mqtt });
-  timeSyncHandlers.register({ bus, state, mqtt });
+  // timeSyncHandlers intentionally NOT registered. Rig clock now comes from
+  // the DS1307 RTC with a CR2032 battery; the kernel reads it at boot and
+  // the clock seeds correctly without any sync. MQTT/GNSS time-sync was
+  // disabled 2026-05-15 because: (a) it disables NTP to call timedatectl,
+  // which broke persistence of manually-set clocks across reboot, and
+  // (b) the broker cert validation needs the clock to be already-correct
+  // before the time-sync messages can flow — chicken-and-egg. Revisit
+  // when there's a cert-validation-bypass bootstrap path. Source for the
+  // handler remains in controller/src/handlers/time-sync.js for future
+  // re-enablement.
   castHandlers.register({ bus, state, settings });
   netflixHandlers.register({ bus, state });
   // systemHandlers wants `ipc` so system.focus can publish a focus-request

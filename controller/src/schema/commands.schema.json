@@ -713,6 +713,12 @@
       "type": "object", "additionalProperties": false, "required": ["action"],
       "properties": { "action": { "const": "dvd.libraryList" } }
     },
+    "LibraryDiskInfo": {
+      "x-class": "B",
+      "description": "Return disk capacity / free space for the partition that holds ~/Videos/Playbill Library. Used by the Offline Library UI to show actual remaining storage instead of a mock '1.2 TB available' string. Returns { totalBytes, freeBytes, mountpoint } or null on failure.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "library.diskInfo" } }
+    },
     "DvdSetOmdbKey": {
       "x-class": "B",
       "description": "Persist the user's OMDb API key (https://www.omdbapi.com). Free tier is 1000 lookups/day — plenty for a personal library. Empty value clears.",

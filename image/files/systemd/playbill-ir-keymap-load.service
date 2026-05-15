@@ -1,0 +1,22 @@
+[Unit]
+Description=Playbill — load IR keymap into rc-core
+Documentation=https://github.com/trailcurrent/TrailCurrentPlaybill/blob/main/docs/app/navigation.md
+After=systemd-udev-trigger.service local-fs.target
+ConditionPathExists=/etc/rc_keymaps/playbill.toml
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# rc0 is created by the gpio-ir-receiver driver early in boot (kernel
+# monotonic time ~3.7 s on the Q6A), but `systemd-udev-trigger.service`
+# may have run before the driver probed — that's the original "keymap
+# not loaded at boot" failure mode this unit exists to fix. The pre-
+# start poll gives the kernel up to 10 s to surface /sys/class/rc/rc0,
+# then we write the keymap. Idempotent: re-runs on every boot but the
+# kernel's keymap state survives ir-keytable's exit, so an extra write
+# is harmless.
+ExecStartPre=/bin/sh -c "for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /sys/class/rc/rc0 ] && exit 0; sleep 1; done; echo \"rc0 never appeared\" >&2; exit 1"
+ExecStart=/usr/bin/ir-keytable -s rc0 -c -p nec -w /etc/rc_keymaps/playbill.toml
+
+[Install]
+WantedBy=multi-user.target

@@ -1,12 +1,17 @@
 /* YouTube screen — search + results + play. Phase 6b.
-
-   Talks to the controller daemon exclusively through window.playbill
-   .controller.command(). The controller's source plugin (controller/src/
-   sources/youtube/) wraps yt-dlp; this screen is just a presentation +
-   input layer. Same pattern as Settings: form-heavy, so we let the
-   browser's native focus drive instead of forcing it through the
-   tile-grid focus engine. The global keyboard handler in app.jsx already
-   bails out for screens that contain inputs/buttons. */
+ *
+ * NAVIGATION CONTRACT (docs/app/navigation.md):
+ * Zone-root with two child zones — `youtube.search` (horizontal, holds the
+ * input + Search button) and `youtube.results` (vertical, holds the result
+ * rows). Each result row is a <button> so FocusZones drives the d-pad and
+ * native Enter activates onClick. NO per-screen keyboard handler — earlier
+ * versions tried to manually move focus between rows on ArrowUp/Down, which
+ * fought with FocusZones doing the same thing and produced the "skip every
+ * other row" bug.
+ *
+ * Search → Down jumps into the results zone (FocusZones escapes the input
+ * via parent-sibling sibling lookup). Up from the first result jumps back
+ * to the search input the same way. */
 
 // React.forwardRef so YoutubeView can autofocus the first card after a
 // search lands — TV-remote users immediately get an Enter-to-play target
@@ -15,26 +20,14 @@ const YoutubeResultCard = React.forwardRef(function YoutubeResultCard(
   { item, onPlay, busy }, ref
 ) {
   const dur = item.duration ? formatDuration(item.duration) : null;
-  function trigger(e) {
-    // Don't double-fire when the inner Play button is the source.
-    if (e && e.target && e.target.closest && e.target.closest('button.tv-btn')) return;
-    onPlay(item);
-  }
-  function onKey(e) {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      trigger();
-    }
-  }
   return (
-    <div
+    <button
       ref={ref}
+      type="button"
       className={'yt-card' + (busy ? ' busy' : '')}
-      tabIndex={0}                    // makes the whole row a remote D-pad target
-      role="button"
       aria-label={`Play ${item.title}`}
-      onClick={trigger}
-      onKeyDown={onKey}
+      disabled={busy}
+      onClick={() => onPlay(item)}
     >
       <div className="yt-thumb" style={{ backgroundImage: item.thumbnail ? `url(${item.thumbnail})` : '' }}>
         {dur && <div className="yt-dur">{dur}</div>}
@@ -46,15 +39,11 @@ const YoutubeResultCard = React.forwardRef(function YoutubeResultCard(
           <div className="yt-views">{formatViews(item.viewCount)}</div>
         )}
       </div>
-      <button
-        className="tv-btn primary"
-        disabled={busy}
-        onClick={(e) => { e.stopPropagation(); onPlay(item); }}
-      >
-        <ion-icon name="play"></ion-icon>
-        {busy ? 'Loading…' : 'Play'}
-      </button>
-    </div>
+      <div className="yt-card-cta">
+        <ion-icon name={busy ? 'sync' : 'play'}></ion-icon>
+        <span>{busy ? 'Loading…' : 'Play'}</span>
+      </div>
+    </button>
   );
 });
 
@@ -67,68 +56,23 @@ function YoutubeView() {
   const [nowPlaying, setNowPlaying] = useState(null);
   const inputRef       = useRef(null);
   const firstResultRef = useRef(null);
-  const resultsRef     = useRef(null);
 
-  // Autofocus the search box on mount + on every visible-from-elsewhere.
+  // Autofocus the search box on mount so the user can start typing
+  // immediately. (FocusZones' watchdog would otherwise land focus on the
+  // first focusable button in the search zone — Search button or input —
+  // and we prefer the input.)
   useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
 
   // After a search lands, jump focus to the first result so the user can
-  // immediately Enter-to-play with a remote (no need to Tab out of the
-  // search box and into the list).
+  // immediately Enter-to-play with a remote.
   useEffect(() => {
     if (results.length > 0 && firstResultRef.current) {
       firstResultRef.current.focus();
     }
   }, [results]);
 
-  // Arrow-key navigation between result cards. Without this the browser's
-  // default behavior is to scroll the container, which makes the page move
-  // but doesn't shift focus — the user can't actually pick a different row
-  // with a remote.  ArrowDown from the search input jumps into the list;
-  // ArrowUp from the first card jumps back to the search input.
-  function onScreenKeyDown(e) {
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    const target = e.target;
-    const inSearch = target === inputRef.current;
-    const onCard   = target && target.classList && target.classList.contains('yt-card');
-    if (!inSearch && !onCard) return;            // some other input — let browser handle
-
-    const cards = resultsRef.current
-      ? Array.from(resultsRef.current.querySelectorAll('.yt-card'))
-      : [];
-
-    if (inSearch && e.key === 'ArrowDown' && cards.length) {
-      e.preventDefault();
-      cards[0].focus();
-      cards[0].scrollIntoView({ block: 'nearest' });
-      return;
-    }
-
-    if (onCard) {
-      const i = cards.indexOf(target);
-      if (i < 0) return;
-      let next;
-      if (e.key === 'ArrowDown') {
-        if (i >= cards.length - 1) return;       // already at last; let browser handle (no-op)
-        next = cards[i + 1];
-      } else {
-        // ArrowUp from the first card jumps back to the search input.
-        if (i === 0) {
-          e.preventDefault();
-          inputRef.current && inputRef.current.focus();
-          return;
-        }
-        next = cards[i - 1];
-      }
-      e.preventDefault();
-      next.focus();
-      next.scrollIntoView({ block: 'nearest' });
-    }
-  }
-
   // Subscribe to controller state for live now-playing updates so the
-  // header can show what's playing across pause/resume/stop/etc. without
-  // polling.
+  // header can show what's playing across pause/resume/stop/etc.
   useEffect(() => {
     if (!window.playbill || !window.playbill.controller) return;
     let unsub;
@@ -192,12 +136,12 @@ function YoutubeView() {
   }
 
   return (
-    // data-zone-root marks this screen as using the spatial focus engine.
-    // The legacy onScreenKeyDown handler stays for the search↔results jump
-    // refinement on real keyboards; FocusZones handles all remote presses
-    // and the up-from-first-result / down-from-search edge cases too.
-    <div data-zone-root data-zone="youtube" data-zone-axis="vertical"
-         className="yt-view" onKeyDown={onScreenKeyDown}>
+    <div
+      data-zone-root
+      data-zone="youtube"
+      data-zone-axis="vertical"
+      className="yt-view"
+    >
       <div data-zone="youtube.search" data-zone-axis="horizontal" className="yt-header">
         <h1><ion-icon name="logo-youtube" style={{color:'#FF0000', verticalAlign:'middle'}}></ion-icon> YouTube</h1>
         <form className="yt-search" onSubmit={doSearch}>
@@ -224,11 +168,11 @@ function YoutubeView() {
             {nowPlaying.subtitle && <span style={{color:'rgba(255,255,255,0.5)'}}> — {nowPlaying.subtitle}</span>}
           </div>
           <div className="yt-np-actions">
-            <button className="tv-btn" onClick={pauseToggle}>
+            <button type="button" className="tv-btn" onClick={pauseToggle}>
               <ion-icon name={nowPlaying.paused ? 'play' : 'pause'}></ion-icon>
               {nowPlaying.paused ? 'Resume' : 'Pause'}
             </button>
-            <button className="tv-btn" onClick={stop}>
+            <button type="button" className="tv-btn" onClick={stop}>
               <ion-icon name="stop"></ion-icon> Stop
             </button>
           </div>
@@ -248,8 +192,7 @@ function YoutubeView() {
         </div>
       )}
 
-      <div data-zone="youtube.results" data-zone-axis="vertical"
-           className="yt-results" ref={resultsRef}>
+      <div data-zone="youtube.results" data-zone-axis="vertical" className="yt-results">
         {results.map((it, i) => (
           <YoutubeResultCard
             key={it.id}

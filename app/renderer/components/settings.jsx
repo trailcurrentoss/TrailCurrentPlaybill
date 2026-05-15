@@ -585,6 +585,30 @@ function SettingsView({ focus }) {
     return () => { unsubState && unsubState(); unsubStatus && unsubStatus(); };
   }, []);
 
+  // Settings is a two-zone screen: a vertical tabs rail on the left and
+  // a vertical content area on the right with multiple sub-sections per
+  // tab. Without a back-hook, pressing Back from deep in a sub-section
+  // unwinds the user all the way out of Settings — a 4-step drop that
+  // skips every intermediate level. This hook implements the canonical
+  // multi-level Back: if focus is anywhere inside `settings.content`,
+  // climb one level to the active tab. If focus is on the tab rail,
+  // return false so app.jsx's universal Back opens the SideNav with
+  // the Settings menu item highlighted. Same PlaybillBackHook pattern
+  // Music uses for album-detail → album-grid; see docs/app/navigation.md.
+  useEffect(() => {
+    window.PlaybillBackHook = () => {
+      const active = document.activeElement;
+      if (!active || active === document.body) return false;
+      // Focus already on the tabs rail → let goBack take the next step.
+      if (active.closest('[data-zone="settings.tabs"]')) return false;
+      // Focus is in content. Move it to the active tab and consume Back.
+      const tabBtn = document.querySelector('[data-tab-active="true"]');
+      if (tabBtn) { try { tabBtn.focus(); } catch (_) {} return true; }
+      return false;
+    };
+    return () => { if (window.PlaybillBackHook) delete window.PlaybillBackHook; };
+  }, []);
+
   if (!ctrlConnected) {
     return (
       <div style={{padding:'120px 60px', textAlign:'center', color:'rgba(255,255,255,0.6)'}}>

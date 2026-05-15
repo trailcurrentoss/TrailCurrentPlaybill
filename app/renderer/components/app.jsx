@@ -133,15 +133,32 @@ function TVApp() {
     return () => window.removeEventListener('playbill:navigate', onNavigate);
   }, []);
 
-  // When changing to a zone-root screen, drop focus into the screen so the
-  // first remote press lands somewhere useful instead of staying on <body>.
-  // Uses rAF so the new screen's DOM is mounted before we look up its root.
+  // When a screen mounts, drop focus into its zone-root so the first remote
+  // press lands somewhere useful instead of on <body>. The check is now
+  // unconditional — every screen that follows the nav contract has a
+  // data-zone-root, and the call is a no-op for any legacy screen that
+  // doesn't. (We also emit a console.error when a screen has no root, so
+  // new non-compliant screens scream in the log instead of silently
+  // breaking the d-pad — see docs/app/navigation.md.)
   useEffect(() => {
-    if (screen !== 'home' && screen !== 'settings' && screen !== 'youtube' && screen !== 'rig' && screen !== 'explore') return;
     const id = requestAnimationFrame(() => {
       if (!window.FocusZones || !window.FocusZones.getRoot) return;
       const root = window.FocusZones.getRoot();
-      if (root) window.FocusZones.enterZone(root);
+      if (root) {
+        window.FocusZones.enterZone(root);
+      } else {
+        // Runtime contract lint. Pillar #1 of the nav architecture: every
+        // screen MUST tag its root with data-zone-root + data-zone-axis.
+        // A missing root means the d-pad has nothing to drive and the user
+        // is going to chase ghosts. Surface it loudly so it gets fixed.
+        console.error(
+          '[nav] screen=' + screen + ' has no [data-zone-root]. ' +
+          'Every screen must follow the navigation contract — see ' +
+          'docs/app/navigation.md. Without a root, FocusZones cannot ' +
+          'place initial focus and Left-at-edge / Back-from-top-level / ' +
+          'the body-focus watchdog all stop working on this screen.'
+        );
+      }
     });
     return () => cancelAnimationFrame(id);
   }, [screen]);
@@ -177,26 +194,101 @@ function TVApp() {
     setFocus(initialFocusFor('home'));
     setSideNav({ focused: false, hovered: false });
   };
-  // Helper: Back — exits the current screen to its parent. Settings/YouTube/
-  // Cast all sit under Apps; everything else returns to the home grid.
+  // Helper: Back — the UNIVERSAL escape hatch. Ordered, context-aware
+  // resolution (see docs/app/navigation.md):
+  //
+  //   1. If the SideNav is open, Back just closes it. Same instinct as a
+  //      menu-overlay dismissal anywhere else in the OS.
+  //   2. If playback is running, Back stops the player. The screen stays
+  //      where it is so the user can resume navigating; a second Back
+  //      then climbs the hierarchy.
+  //   3. If we're on a "sub-screen" (Settings, YouTube, Cast — reached
+  //      from inside Apps), Back returns to the parent screen.
+  //   4. Otherwise (a top-level screen: home/apps/live/radio/local/
+  //      explore/rig/search), Back opens the SideNav. This guarantees
+  //      the side nav is always reachable with one key — critical for
+  //      surfaces like Explore (a map) where pressing Left just pans and
+  //      never reaches a "leftmost edge."
+  //
   // (Cast doesn't go through transport.stop — the CastView's unmount effect
   // fires cast.stop on the controller, which kills UxPlay.)
   const goBack = () => {
-    stopPlaybackIfRunning();
+    // 1. SideNav open → close it.
+    if (sideNav.focused) {
+      setSideNav({ focused: false, hovered: false });
+      return;
+    }
+    // 2. Screen-local back hook — the canonical way for a screen with
+    //    internal sub-states (Music album-detail, future YouTube playlist
+    //    detail, etc.) to step OUT of the sub-state without per-screen
+    //    keyboard handlers. The screen registers a function on
+    //    window.PlaybillBackHook; if it returns true the screen consumed
+    //    Back and we stop. If false (or absent), fall through.
+    if (typeof window.PlaybillBackHook === 'function') {
+      try { if (window.PlaybillBackHook()) return; }
+      catch (e) { console.warn('[app] PlaybillBackHook threw:', e && e.message); }
+    }
+    // 3. Playback running → stop it (and stay on the current screen).
+    const wasPlaying = stopPlaybackIfRunning();
+    if (wasPlaying) return;
     const cur = screenRef.current;
-    // Explore is reached from the side nav and has no logical "parent
-    // screen," so Back goes home — same convention as Rig/Radio/Live.
-    const parent = (cur === 'settings' || cur === 'youtube' || cur === 'cast') ? 'apps' : 'home';
-    setScreen(parent);
-    setFocus(initialFocusFor(parent));
-    setSideNav({ focused: false, hovered: false });
+    // Sub-screens that are launched FROM Apps and have NO SideNav entry
+    // of their own. Back from these returns to Apps, not the SideNav.
+    // Settings is intentionally NOT here — it has `nav-settings` in
+    // SIDE_IDS so Back from Settings opens the SideNav with Settings
+    // highlighted (user-requested behavior: a screen with a menu item
+    // belongs in the menu, not buried under Apps).
+    const SUB_SCREENS = { youtube: 'apps', cast: 'apps' };
+    // 4. Sub-screen → parent screen.
+    if (SUB_SCREENS[cur]) {
+      setScreen(SUB_SCREENS[cur]);
+      setFocus(initialFocusFor(SUB_SCREENS[cur]));
+      return;
+    }
+    // 5. Top-level screen → open the side nav (universal escape).
+    openSideNavMenu();
   };
   // Helper: focus the SideNav at the current screen's row. Reached by
-  // pressing Left from the leftmost zone of any screen — never by a
-  // dedicated key. (The Argon Remote's Menu key is RESERVED; see
+  // (a) pressing Left from the leftmost zone of a discrete screen, or
+  // (b) pressing Back at a top-level screen (universal escape).
+  //
+  // We snapshot the element that was focused at the moment we opened
+  // (`priorFocus`) so closeSideNavMenu can restore it — same pattern as
+  // react-focus-lock / tvOS modal presentation. Without that, the user
+  // closes the menu and lands on <body>, then has to dance arrow keys to
+  // recover focus. (The Argon Remote's Menu key is RESERVED; see
   // docs/app/navigation.md.)
   const openSideNavMenu = () => {
-    setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screenRef.current) });
+    const prior = (document.activeElement && document.activeElement !== document.body)
+      ? document.activeElement
+      : null;
+    setSideNav({ focused: true, hovered: true, focusIdx: screenToNavIdx(screenRef.current), priorFocus: prior });
+    // Architectural note: SideNav.focused is a VIRTUAL focus state — the
+    // DOM doesn't actually move focus to a sidebar button. But "focus
+    // sinks" (Explore's map canvas, a fullscreen video player) attach
+    // their own element-level keydown listeners. Those listeners only
+    // fire while the sink has DOM focus, and they preventDefault+
+    // stopPropagation on arrow keys, which would otherwise swallow the
+    // SideNav up/down before the window-level handler in app.jsx ever
+    // sees it. Blur the current element on menu open so element-level
+    // listeners stand down. closeSideNavMenu restores focus to priorFocus,
+    // which re-arms the sink.
+    if (prior && typeof prior.blur === 'function') {
+      try { prior.blur(); } catch (_) { /* best effort */ }
+    }
+  };
+
+  // Close the SideNav without changing screen. Restores focus to whatever
+  // was focused before the user opened it (priorFocus), so the user lands
+  // back where they left off instead of on <body>.
+  const closeSideNavMenu = () => {
+    const prior = sideNav.priorFocus;
+    setSideNav({ focused: false, hovered: false });
+    if (prior && document.contains(prior)) {
+      // rAF so the SideNav's collapse render lands first; otherwise the
+      // restored focus can fight the menu's exit animation.
+      requestAnimationFrame(() => { try { prior.focus(); } catch (_) {} });
+    }
   };
 
   useEffect(() => {
@@ -212,7 +304,24 @@ function TVApp() {
       home: goHome,
       back: goBack,
       menu: () => {
-        const target = document.activeElement || document.body;
+        // The Menu/ContextMenu synthetic key must reach the SCREEN that's
+        // currently mounted — specifically, an element inside the screen's
+        // zone-root, so the screen's keyDown handler (Explore's map canvas
+        // is the only one today) fires. DOM events bubble UP, so we have
+        // to dispatch on a descendant of the screen, not on body or on
+        // the root itself. If focus is lost to <body>, recover it via
+        // the FocusZones watchdog first so the synthetic dispatch lands
+        // on the screen's data-zone-default element.
+        let target = document.activeElement;
+        const onBody = !target || target === document.body;
+        if (onBody && window.FocusZones && window.FocusZones.getRoot) {
+          const root = window.FocusZones.getRoot();
+          if (root && window.FocusZones.enterZone) {
+            window.FocusZones.enterZone(root);
+            target = document.activeElement;
+          }
+        }
+        if (!target || target === document.body) target = document.body;
         const evtInit = { key: 'ContextMenu', bubbles: true, cancelable: true };
         target.dispatchEvent(new KeyboardEvent('keydown', evtInit));
         target.dispatchEvent(new KeyboardEvent('keyup',   evtInit));
@@ -301,10 +410,11 @@ function TVApp() {
   // transport.stop is a no-op when nothing is playing, so an extra call on
   // every Back/Home press is cheap.
   function stopPlaybackIfRunning() {
-    if (!nowPlayingRef.current) return;
-    if (!window.playbill || !window.playbill.controller) return;
+    if (!nowPlayingRef.current) return false;
+    if (!window.playbill || !window.playbill.controller) return false;
     window.playbill.controller.command({ action: 'transport.stop' })
       .catch((e) => console.warn('[app] transport.stop on nav-exit failed:', e && e.message));
+    return true;
   }
   const [sideNav, setSideNav] = useState({ focused: false, hovered: false });
   const [clock, setClock] = useState('');
@@ -353,27 +463,68 @@ function TVApp() {
       { id: 'lib-filter', cols: 5 },
       { id: 'lib-grid',   cols: 7 },
     ],
-    // music: MusicView handles its own grid/detail navigation in capture-
-    // phase. We only need a stub row schema with cols:1 so the universal
-    // 'Left at col 0 opens the side nav' contract keeps working — the
-    // music screen doesn't otherwise consult focus.row/col.
-    music: [
-      { id: 'music', cols: 1 },
-    ],
+    // Music uses the spatial focus engine (data-zone-root). The detail
+    // back-out-to-grid step is handled via window.PlaybillBackHook (see
+    // music.jsx) which app.jsx's goBack consults before its universal
+    // logic. No ROWS schema entry needed.
     // Rig uses the spatial focus engine (data-zone-root); no row schema needed.
   }), [appsCount]);
 
-  const SIDE_IDS = ['nav-home','nav-apps','nav-live','nav-radio','nav-local','nav-explore','nav-rig','nav-search','nav-settings'];
+  const SIDE_IDS = ['nav-home','nav-apps','nav-live','nav-radio','nav-local','nav-music','nav-explore','nav-rig','nav-search','nav-settings'];
 
   // Keyboard handler
   useEffect(() => {
     const onKey = (e) => {
+      // ─── GLOBAL KEYS ────────────────────────────────────────────────
+      // Keys that MUST work regardless of any open modal, focus sink, or
+      // screen state. Run before every other branch so a screen-level
+      // listener (Explore's map canvas) or modal handler (SideNav) can't
+      // accidentally swallow them. Adding a new global key happens here,
+      // never per-screen.
+      //
+      //   h | H | Home | BrowserHome → Home screen
+      //
+      // Escape/Backspace are NOT global — they're context-aware via
+      // goBack() and live in the per-mode branches below.
+      const inField0 = e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
+      if ((e.key === 'h' || e.key === 'H' || e.key === 'Home' || e.key === 'BrowserHome') && !inField0) {
+        goHome(); e.preventDefault(); return;
+      }
+
+      // ─── SIDE NAV MODE ──────────────────────────────────────────────
+      // When the SideNav is open it owns the d-pad regardless of which
+      // screen is underneath. This MUST run before the zone-root branch
+      // below — on a zone-root screen (Home, Settings, Explore, Rig,
+      // YouTube) the zone-root branch returns early, so a SideNav block
+      // placed after it never fires and up/down/enter inside the menu
+      // silently dies.
+      if (sideNav.focused) {
+        if (e.key === 'ArrowUp') {
+          setSideNav(s => ({ ...s, focusIdx: Math.max(0, (s.focusIdx ?? 0) - 1) }));
+        } else if (e.key === 'ArrowDown') {
+          setSideNav(s => ({ ...s, focusIdx: Math.min(SIDE_IDS.length - 1, (s.focusIdx ?? 0) + 1) }));
+        } else if (e.key === 'ArrowRight' || e.key === 'Escape' || e.key === 'Backspace') {
+          closeSideNavMenu();
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          const target = SIDE_IDS[sideNav.focusIdx ?? 0].replace('nav-', '');
+          if (target !== 'search') {
+            setScreen(target);
+            setFocus(initialFocusFor(target));
+            setSideNav({ focused: false, hovered: false });
+          }
+        } else {
+          return;
+        }
+        e.preventDefault();
+        return;
+      }
+
       // Zone-root screens (Settings, YouTube, Rig — anything tagged with
       // data-zone-root). The spatial focus engine handles all d-pad
       // navigation per docs/app/navigation.md. This branch ONLY enforces
       // the universal contract that every screen inherits:
       //
-      //   H              → Home
+      //   H | Home       → Home
       //   Esc | Backspace→ Back   (both treated identically; the IR remote's
       //                            "Back" button delivers KEY_ESC, BUT the
       //                            keymap also accepts Backspace so a normal
@@ -385,7 +536,9 @@ function TVApp() {
       // data-zone-root + data-zone + data-zone-axis. Nothing else needed.
       if (window.FocusZones && window.FocusZones.getRoot && window.FocusZones.getRoot()) {
         const inField = e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
-        if ((e.key === 'h' || e.key === 'H') && !inField) { goHome(); e.preventDefault(); return; }
+        if ((e.key === 'h' || e.key === 'H' || e.key === 'Home' || e.key === 'BrowserHome') && !inField) {
+          goHome(); e.preventDefault(); return;
+        }
         if ((e.key === 'Escape' || e.key === 'Backspace') && !inField) {
           // Backspace inside an input is "delete a character" — only treat
           // it as Back when no text field is focused.
@@ -413,32 +566,12 @@ function TVApp() {
 
       // Global navigation shortcuts — share goHome/goBack with the remote
       // dpad path so keyboard and remote behave identically.
-      if (e.key === 'h' || e.key === 'H') { goHome(); return; }
+      if (e.key === 'h' || e.key === 'H' || e.key === 'Home' || e.key === 'BrowserHome') { goHome(); return; }
       if (e.key === 'Escape' || e.key === 'Backspace') { goBack(); return; }
       // ContextMenu / remote Menu intentionally NOT handled here. The
       // Menu key is reserved for future contextual options per
       // docs/app/navigation.md — adding a handler now would re-introduce
       // the "too many ways to open the side nav" confusion.
-
-      // Side nav navigation
-      if (sideNav.focused) {
-        if (e.key === 'ArrowUp') {
-          setSideNav(s => ({ ...s, focusIdx: Math.max(0, (s.focusIdx ?? 0) - 1) }));
-        } else if (e.key === 'ArrowDown') {
-          setSideNav(s => ({ ...s, focusIdx: Math.min(SIDE_IDS.length - 1, (s.focusIdx ?? 0) + 1) }));
-        } else if (e.key === 'ArrowRight') {
-          setSideNav({ focused: false, hovered: false });
-        } else if (e.key === 'Enter' || e.key === ' ') {
-          const target = SIDE_IDS[sideNav.focusIdx ?? 0].replace('nav-', '');
-          if (target !== 'search') {
-            setScreen(target);
-            setFocus(initialFocusFor(target));
-            setSideNav({ focused: false, hovered: false });
-          }
-        }
-        e.preventDefault();
-        return;
-      }
 
       // Content navigation
       const schema = ROWS[screen];
@@ -499,7 +632,36 @@ function TVApp() {
     if (s === 'music') return { row: 'music', col: 0, rowY: 0 };
     return { row: 'apps', col: 0, rowY: 0 };
   }
-  function screenToNavIdx(s) { return SIDE_IDS.findIndex(id => id === 'nav-' + s); }
+  // Map every screen to the SideNav item that should be highlighted when
+  // the user opens the menu FROM that screen. The contract:
+  //
+  //   1. If the screen has its OWN nav item (id 'nav-' + screenName), use it.
+  //   2. Otherwise, fall back to the screen's declared parent in
+  //      SCREEN_NAV_PARENT.
+  //   3. If neither resolves, default to Home.
+  //
+  // This is how a future screen that doesn't earn a top-level menu spot
+  // (e.g. a per-app deep-link, a one-off prompt overlay) still highlights
+  // a sensible item in the menu. Adding a new sub-screen: declare its
+  // parent here once and the framework does the right thing forever
+  // after — no per-screen openSideNavMenu logic needed.
+  const SCREEN_NAV_PARENT = {
+    youtube: 'apps',  // YouTube launches from Apps
+    cast:    'apps',  // Cast launches from Apps
+    // settings has its own 'nav-settings' so doesn't need to appear here.
+    // music has its own 'nav-music'. Album-detail isn't a separate screen
+    // (handled via PlaybillBackHook inside music.jsx), so isn't listed.
+  };
+  function screenToNavIdx(s) {
+    let idx = SIDE_IDS.findIndex(id => id === 'nav-' + s);
+    if (idx >= 0) return idx;
+    const parent = SCREEN_NAV_PARENT[s];
+    if (parent) {
+      idx = SIDE_IDS.findIndex(id => id === 'nav-' + parent);
+      if (idx >= 0) return idx;
+    }
+    return 0; // safe default — Home
+  }
 
   const focusedNavId = sideNav.focused ? SIDE_IDS[sideNav.focusIdx ?? 0] : null;
 

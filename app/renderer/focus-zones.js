@@ -34,10 +34,19 @@
   function isVisible(el) {
     if (!el) return false;
     if (el === document.body) return true;
-    // offsetParent is null for display:none and fixed elements with no
-    // parent; for our purposes (focusable cards inside scrollable
-    // panels) that's a good-enough visibility check.
-    if (el.offsetParent === null && el.tagName !== 'BODY') return false;
+    // Computed-style check catches display:none and visibility:hidden
+    // for both normal-flow and fixed-positioned elements.
+    const cs = window.getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    // For NON-fixed elements, offsetParent === null also means hidden
+    // (in a display:none ancestor). For position:fixed elements,
+    // offsetParent is ALWAYS null even when visible — so we must NOT
+    // use offsetParent as a proxy for fixed elements. This caught us
+    // 2026-05-15: the DVD/CD prompt modals were correctly tagged with
+    // data-zone-root but getRoot() rejected them as "not visible"
+    // because offsetParent was null (fixed positioning), and the d-pad
+    // fell through to the screen behind the modal.
+    if (cs.position !== 'fixed' && el.offsetParent === null) return false;
     return true;
   }
 
@@ -67,7 +76,23 @@
   }
 
   function getRoot() {
-    return document.querySelector('[data-zone-root]');
+    // Return the LAST [data-zone-root] in document order so a modal /
+    // overlay (DVD prompt, CD prompt, dialog, future popups) wins over
+    // the screen underneath it. Modals are rendered after the main shell
+    // in app.jsx, so in DOM order they come last. This is the canonical
+    // tvOS / react-focus-lock pattern: the topmost zone-root owns the
+    // d-pad until it's dismissed. Without this, a modal can't capture
+    // focus — querySelector returns the main screen's root, the modal
+    // is invisible to FocusZones, and the d-pad still drives the screen
+    // underneath.
+    const nodes = document.querySelectorAll('[data-zone-root]');
+    if (!nodes.length) return null;
+    // Filter to visible roots only so a conditionally-rendered-null modal
+    // doesn't accidentally claim the d-pad when it's actually off-screen.
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      if (isVisible(nodes[i])) return nodes[i];
+    }
+    return nodes[nodes.length - 1];
   }
 
   // ─── DOM traversal ──────────────────────────────────────────────────
@@ -255,16 +280,28 @@
     if (!root) return false;
 
     let active = document.activeElement;
-    // First keypress after screen mount: focus is on <body>. Land into the root.
+    // Focus watchdog. Two cases land here:
+    //   (1) First keypress after screen mount — focus is on <body>.
+    //   (2) Focus was LOST mid-session because the previously-focused element
+    //       was unmounted/remounted by a re-render (data refresh, async load).
+    // Either way, restore focus into the current zone-root, then CONTINUE
+    // handling the key — so one keypress both recovers focus and acts on it.
+    // Without this, a screen that re-renders frequently (Rig telemetry, etc.)
+    // silently swallows every directional press to re-enter focus while the
+    // user perceives "nothing is happening."
     if (!active || active === document.body || !root.contains(active)) {
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
-          e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
-          e.key === 'Enter' || e.key === ' ') {
-        enterZone(root);
-        e.preventDefault();
-        return true;
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' &&
+          e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' &&
+          e.key !== 'Enter' && e.key !== ' ') {
+        return false;
       }
-      return false;
+      if (!enterZone(root)) return false; // empty screen; let app.jsx handle
+      active = document.activeElement;
+      if (!active || active === document.body || !root.contains(active)) {
+        // enterZone reported success but nothing actually took focus — bail.
+        return false;
+      }
+      // Fall through to the normal direction-handling path on the new element.
     }
 
     const synthetic = !e.isTrusted;
@@ -357,9 +394,16 @@
     }
 
     if (e.key === 'Enter' || e.key === ' ') {
-      // Inside a textarea, Enter inserts a newline — only intercept for
-      // single-line inputs and buttons.
-      if (active.tagName === 'TEXTAREA' && !synthetic) return false;
+      // Inside any text field, Enter and Space must be left to the browser:
+      //   - Space inserts a literal space character (was the YouTube search
+      //     box bug — Space was being interpreted as "click the focused
+      //     button" because activate() falls through to .click() on inputs).
+      //   - Enter inserts a newline in <textarea>; in <input type=text>
+      //     Enter submits the enclosing form natively.
+      // synthetic dispatches from the controller bus are still able to
+      // activate a non-input element — they just can't punch through a
+      // focused text field, which is the right behavior.
+      if (inText) return false;
       if (activate(active)) { e.preventDefault(); return true; }
     }
 

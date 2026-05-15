@@ -78,7 +78,7 @@ function RigView() {
         <div className="rig-empty">
           <ion-icon name="cellular-outline"></ion-icon>
           <div className="t">Waiting for Headwaters</div>
-          <div className="b">No telemetry has arrived yet. Confirm Headwaters is online and the API key is saved in Settings.</div>
+          <div className="b">No telemetry has arrived yet. Confirm Headwaters is online and the MQTT broker connection details are correct in Settings.</div>
         </div>
       )}
 

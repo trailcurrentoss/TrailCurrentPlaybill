@@ -228,6 +228,30 @@ function register({ bus, state, ipc }) {
 
   bus.register('dvd.libraryList', async () => dvdLibrary.list());
 
+  // library.diskInfo — total + free bytes on the partition that holds the
+  // video library. Drives the "X.X GB available" text in the Offline
+  // Library UI; replaced the hardcoded "1.2 TB available" mock string
+  // 2026-05-15. Uses `df -B1` so the result is in bytes — the renderer
+  // formats to human-readable.
+  bus.register('library.diskInfo', async () => {
+    return new Promise((resolve) => {
+      execFile('df', ['-B1', '--output=size,avail,target', dvdLibrary.LIBRARY_ROOT],
+        { timeout: 4000 }, (err, stdout) => {
+        if (err) { resolve(null); return; }
+        const lines = (stdout || '').trim().split('\n');
+        if (lines.length < 2) { resolve(null); return; }
+        const parts = lines[1].trim().split(/\s+/);
+        const totalBytes = parseInt(parts[0], 10);
+        const freeBytes  = parseInt(parts[1], 10);
+        const mountpoint = parts[2] || null;
+        if (!Number.isFinite(totalBytes) || !Number.isFinite(freeBytes)) {
+          resolve(null); return;
+        }
+        resolve({ totalBytes, freeBytes, mountpoint });
+      });
+    });
+  });
+
   // dvd.refreshPosters — walk the library, find titles that have a
   // remote posterUrl in their sidecar but no local .jpg next to the
   // .mkv, and download them. Used for older rips (before poster-caching

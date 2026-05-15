@@ -24,6 +24,32 @@ const { EventEmitter } = require('events');
 
 const DEFAULT_DEVICE = '/dev/sr0';
 const POLL_INTERVAL_MS = 3000;
+// Wait at least this long with stable "cd-discid succeeds + lsblk empty"
+// before firing the audio-CD prompt. DVD drives can take 6+ seconds to
+// expose a filesystem header via lsblk, while cd-discid happily returns
+// a TOC immediately on some discs. The stability window suppresses the
+// "CD modal flashes for a few seconds before DVD modal appears" race.
+const PENDING_STABLE_MS = 8000;
+
+/**
+ * Quick check: does the disc have a filesystem? Pure audio CDs have NO
+ * filesystem and lsblk reports an empty FSTYPE. DVDs/Blu-rays expose
+ * `udf` or `iso9660`. Hybrid Enhanced CDs (audio tracks + a data
+ * session) ALSO expose a filesystem — we treat those as "not a pure
+ * audio CD" so the DVD-watcher's prompt wins. Without this gate,
+ * cd-discid happily returns a TOC for hybrids and DVDs whose firmware
+ * exposes an audio TOC, and the user sees BOTH the DVD modal AND the
+ * audio-CD modal stacked on the same disc (regression caught 2026-05-15).
+ */
+function hasFilesystemProbe(device) {
+  return new Promise((resolve) => {
+    execFile('lsblk', ['-no', 'FSTYPE', device], { timeout: 4000 }, (err, stdout) => {
+      if (err) { resolve(false); return; }
+      const fstype = (stdout || '').trim();
+      resolve(fstype.length > 0);
+    });
+  });
+}
 
 /**
  * Probe /dev/sr0 for an audio CD. Returns null if no disc, no audio
@@ -69,6 +95,14 @@ class CdWatcher extends EventEmitter {
     this._timer    = null;
     this._lastDiscid = null;
     this._present  = false;
+    // Pending audio-CD detection — used to suppress the race where the
+    // drive's TOC is readable BEFORE its filesystem header is. On first
+    // sighting we stash the discid and wait one poll cycle. Only on the
+    // SECOND consecutive "cd-discid succeeds + lsblk shows no FSTYPE"
+    // observation do we fire the 'inserted' event. That gives the DVD-
+    // watcher's lsblk probe time to read the filesystem header on a
+    // spin-up that initially returned empty.
+    this._pendingInfo = null;
   }
 
   getStatus() {
@@ -76,29 +110,72 @@ class CdWatcher extends EventEmitter {
   }
 
   async probeOnce() {
-    const info = await cdDiscidProbe(this._device);
-    if (info) {
-      if (!this._present || info.discid !== this._lastDiscid) {
-        this._present = true;
-        this._lastDiscid = info.discid;
-        this.emit('inserted', { device: this._device, ...info });
+    // First gate: pure audio CDs have NO filesystem. If lsblk reports
+    // any fstype, this is a DVD / Blu-ray / hybrid Enhanced CD — defer
+    // to the DVD-watcher and DO NOT fire the audio-CD prompt.
+    const hasFs = await hasFilesystemProbe(this._device);
+    if (hasFs) {
+      this._pendingInfo = null;        // suppress any pending audio-CD detection
+      if (this._present) {
+        this._present = false;
+        this._lastDiscid = null;
+        this.emit('removed', { device: this._device });
       }
-    } else if (this._present) {
-      this._present = false;
-      this._lastDiscid = null;
-      this.emit('removed', { device: this._device });
+      return;
     }
+    const info = await cdDiscidProbe(this._device);
+    if (!info) {
+      this._pendingInfo = null;
+      if (this._present) {
+        this._present = false;
+        this._lastDiscid = null;
+        this.emit('removed', { device: this._device });
+      }
+      return;
+    }
+    // Already firing for this disc — don't re-emit.
+    if (this._present && info.discid === this._lastDiscid) return;
+
+    // Stability window: require the same disc to keep showing "no
+    // filesystem + valid TOC" for at least PENDING_STABLE_MS before firing.
+    // The 3-second poll interval alone wasn't enough — some DVD drives
+    // take 6+ seconds to spin up far enough for lsblk to read the
+    // filesystem header, and during that window cd-discid is already
+    // happily returning a TOC. The timestamp gate forces us to wait
+    // long enough for lsblk to catch up. The trade-off is that a
+    // genuine pure audio CD takes a couple poll cycles to surface;
+    // acceptable for the use case (user inserts disc, waits).
+    if (!this._pendingInfo || this._pendingInfo.discid !== info.discid) {
+      this._pendingInfo = { ...info, firstSeenAt: Date.now() };
+      return;
+    }
+    if (Date.now() - this._pendingInfo.firstSeenAt < PENDING_STABLE_MS) {
+      // Still in the stability window — keep waiting. Another probe of
+      // hasFs at the top of the next probeOnce() may yet clear this.
+      return;
+    }
+
+    // Stable + still no filesystem — fire.
+    this._present = true;
+    this._lastDiscid = info.discid;
+    this._pendingInfo = null;
+    this.emit('inserted', { device: this._device, ...info });
   }
 
   start() {
     if (this._timer) return;
     // Initial probe seeds state without emitting — a disc already loaded
-    // at daemon start shouldn't re-prompt every restart.
-    cdDiscidProbe(this._device).then((info) => {
-      if (info) {
-        this._present = true;
-        this._lastDiscid = info.discid;
-      }
+    // at daemon start shouldn't re-prompt every restart. Same filesystem
+    // gate as probeOnce: never seed if lsblk shows a filesystem (would
+    // mean a DVD/Blu-ray is loaded, not a pure audio CD).
+    hasFilesystemProbe(this._device).then((hasFs) => {
+      if (hasFs) return;
+      return cdDiscidProbe(this._device).then((info) => {
+        if (info) {
+          this._present = true;
+          this._lastDiscid = info.discid;
+        }
+      });
     }).catch(() => {});
     this._timer = setInterval(() => {
       this.probeOnce().catch((e) => console.warn('[cd-watcher] probe failed:', e.message));

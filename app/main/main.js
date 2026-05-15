@@ -10,6 +10,30 @@ const os   = require('os');
 
 const ControllerClient = require('./ipc-client');
 
+// ─── Single-instance lock ──────────────────────────────────────────────
+//
+// Playbill is a single-window app. Launching it a second time (e.g. the
+// user double-clicks the dock icon, or a `.desktop` Exec= fires twice
+// while the previous instance is still alive) used to spawn a duplicate
+// Electron process — two main + two renderer + two GPU subprocesses, all
+// competing for the same Wayland surface + audio sink. Symptom 2026-05-15:
+// d-pad became sluggish, took multiple presses to register, because two
+// renderers were both rendering the same DOM at ~80% CPU each and the
+// compositor frame budget collapsed.
+//
+// requestSingleInstanceLock is Electron's built-in answer: the first
+// instance gets the lock, every subsequent instance exits immediately and
+// the first one's 'second-instance' event raises the existing window.
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+  console.log('[main] another Playbill instance already running — exiting');
+  app.quit();
+  // process.exit ensures we drop out fast even if app.quit's teardown
+  // takes time; otherwise the duplicate sits as a zombie for several
+  // seconds while the existing instance is the one the user sees.
+  process.exit(0);
+}
+
 // ─── Headwaters TLS trust ──────────────────────────────────────────────────
 //
 // Electron's bundled Chromium does NOT consult the OS trust store, so the
@@ -179,6 +203,21 @@ function raiseOwnWindow() {
     mainWindow.focus();
   } catch (e) { console.warn('[main] raise failed:', e && e.message); }
 }
+
+// When a SECOND Electron instance attempts to launch (user clicks the
+// Power / Playbill icon while we're already running), Electron's
+// single-instance lock causes that second process to exit and fires this
+// event in the first process. Raise our window so the user gets visible
+// feedback — even if the multi-click was driven by impatience, the
+// existing window comes back to the foreground rather than the second
+// click being lost. (Doesn't help if the FIRST instance hasn't yet
+// finished mounting its window — that's a separate UX problem the
+// user flagged 2026-05-15. Splash screen / launch toast is a future
+// improvement; this at least handles the second click while we're up.)
+app.on('second-instance', () => {
+  console.log('[main] second-instance launch — raising existing window');
+  raiseOwnWindow();
+});
 
 function handleControllerEvent(channel, payload) {
   if (channel === 'system.focus') {

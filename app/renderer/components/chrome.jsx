@@ -84,6 +84,7 @@ function SideNav({ active, onSelect, focusId, expanded, onHover }) {
     { id: 'nav-live',    icon: 'tv-outline',      label: 'Live TV' },
     { id: 'nav-radio',   icon: 'radio-outline',   label: 'Radio' },
     { id: 'nav-local',   icon: 'albums-outline',  label: 'Library' },
+    { id: 'nav-music',   icon: 'musical-notes-outline', label: 'Music' },
     { id: 'nav-explore', icon: 'map-outline',     label: 'Explore' },
     { id: 'nav-rig',     icon: 'videocam-outline',label: 'Rig View' },
     { id: 'nav-search',  icon: 'search-outline',  label: 'Search' },

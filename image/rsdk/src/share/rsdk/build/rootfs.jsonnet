@@ -1931,20 +1931,20 @@ function(
                 chroot "$1" systemctl mask    ssh.socket 2>/dev/null || true
                 rm -f "$1/etc/systemd/system/ssh.service.requires/ssh.socket"
 
-                # systemd-timesyncd config drop-in. The Q6A's DS1307 RTC chip is
-                # populated but the carrier ships without a CR2032 battery, so
-                # cold boot starts the clock at a firmware-default in the past.
-                # Without timesyncd enabled, the MQTT bridge then fails its
-                # Headwaters TLS handshake with "certificate is not yet valid"
-                # (logged by mqtt.js as the generic "self-signed certificate in
-                # certificate chain" — see memory feedback_q6a_clock_skew_blocks_mqtt.md).
-                # The drop-in below points to Headwaters first (for rigs that
-                # run NTP there) and falls back to public pools.
+                # systemd-timesyncd: enabled, with Headwaters as the primary
+                # NTP source. Headwaters runs NTP on the rig LAN (user
+                # confirmed 2026-05-15), so this is the canonical off-grid
+                # clock source. Public NTP pools are listed in FallbackNTP
+                # as a "rig has internet but Headwaters is down" safety
+                # net. The drop-in below is staged from
+                # image/files/systemd/timesyncd.conf.d/.
                 STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
                 FILES="$STAGING/files"
-                mkdir -p "$1/etc/systemd/timesyncd.conf.d"
-                install -m 644 "$FILES/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf" \
-                    "$1/etc/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf"
+                if [ -f "$FILES/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf" ]; then
+                    mkdir -p "$1/etc/systemd/timesyncd.conf.d"
+                    install -m 644 "$FILES/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf" \
+                        "$1/etc/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf"
+                fi
 
                 chroot "$1" systemctl enable \
                     ssh.service \
@@ -2081,6 +2081,26 @@ function(
                     install -m 644 "$FILES/udev/60-playbill-ir-keymap.rules" \
                         "$1/etc/udev/rules.d/60-playbill-ir-keymap.rules"
                     echo "  installed IR keymap (rc-playbill → Argon-style NEC table) + udev loader"
+                fi
+                # Belt-and-braces: a oneshot systemd unit that re-writes the
+                # keymap on every boot, ordered after systemd-udev-trigger.
+                # The udev rule above WILL fire at boot when everything aligns,
+                # but `RUN+=` for the rc add event has been observed (live Q6A,
+                # 2026-05-15) to silently fail to invoke ir-keytable on some
+                # cold boots — the kernel's gpio-ir-receiver registers rc0
+                # before systemd-udev-trigger coldplugs the rc subsystem, and
+                # the resulting "add" uevent is processed but the RUN+= doesn't
+                # run ir-keytable. The systemd unit eliminates that race by
+                # running the same `ir-keytable -c -p nec -w …` deterministically
+                # after the udev trigger completes. Idempotent — re-running on
+                # every boot has no side effect.
+                if [ -f "$FILES/systemd/playbill-ir-keymap-load.service" ]; then
+                    install -m 644 "$FILES/systemd/playbill-ir-keymap-load.service" \
+                        "$1/etc/systemd/system/playbill-ir-keymap-load.service"
+                    mkdir -p "$1/etc/systemd/system/multi-user.target.wants"
+                    ln -sf ../playbill-ir-keymap-load.service \
+                        "$1/etc/systemd/system/multi-user.target.wants/playbill-ir-keymap-load.service"
+                    echo "  installed playbill-ir-keymap-load.service (boot-time keymap loader, auto-enabled)"
                 fi
             |||,
 
