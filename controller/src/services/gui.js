@@ -28,6 +28,8 @@
 
 const { spawn, execFile } = require('child_process');
 const { promisify } = require('util');
+const fs = require('fs');
+const path = require('path');
 const execFileP = promisify(execFile);
 
 const BIN = '/opt/trailcurrent-playbill/trailcurrent-playbill';
@@ -50,16 +52,56 @@ async function isRunning() {
   }
 }
 
+/* Build the env we want to hand to the spawned Electron.
+ *
+ * The controller runs as a systemd USER service. systemd inherits
+ * XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS from logind, but it does NOT
+ * inherit WAYLAND_DISPLAY — that variable is set by gnome-session AFTER
+ * the user instance starts, then exported only into the graphical-session
+ * target via `systemctl --user import-environment`. Whether that runs
+ * reliably across distros / GDM versions is, kindly, a coin flip.
+ *
+ * When WAYLAND_DISPLAY is missing the Ozone Wayland backend can't find a
+ * compositor and Electron exits during platform init in <1s, silently —
+ * which is exactly the "Power button doesn't launch anymore" symptom.
+ *
+ * We patch that here: if the variable isn't in our env, scan
+ * $XDG_RUNTIME_DIR for `wayland-N` socket files and pick the lowest one.
+ * That matches what gnome-session would have set anyway (usually
+ * wayland-0). Same logic for DISPLAY (X11) and DBUS_SESSION_BUS_ADDRESS
+ * as a belt-and-braces fallback.
+ */
+function sessionEnv() {
+  const env = { ...process.env };
+  const xdg = env.XDG_RUNTIME_DIR || `/run/user/${process.getuid && process.getuid()}`;
+
+  if (!env.WAYLAND_DISPLAY && xdg) {
+    try {
+      const sock = fs.readdirSync(xdg)
+        .filter((n) => /^wayland-\d+$/.test(n))
+        .sort()[0];
+      if (sock) env.WAYLAND_DISPLAY = sock;
+    } catch (_) { /* no readable runtime dir — fall through */ }
+  }
+  if (!env.DBUS_SESSION_BUS_ADDRESS && xdg) {
+    const busPath = path.join(xdg, 'bus');
+    if (fs.existsSync(busPath)) env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${busPath}`;
+  }
+  if (!env.XDG_RUNTIME_DIR) env.XDG_RUNTIME_DIR = xdg;
+  // Don't reach for DISPLAY — we explicitly run Electron with
+  // --ozone-platform=wayland and an X11 fallback isn't desired.
+  return env;
+}
+
 async function launch() {
   if (await isRunning()) return { ok: true, alreadyRunning: true };
 
-  // Inherit the user session env so GTK/Wayland/D-Bus connect to the right
-  // session. Without DISPLAY/WAYLAND_DISPLAY/DBUS_SESSION_BUS_ADDRESS the
-  // GUI can't find the compositor.
+  const env = sessionEnv();
+  console.log(`[gui] launching ${BIN} (WAYLAND_DISPLAY=${env.WAYLAND_DISPLAY || 'unset'})`);
   const child = spawn(BIN, ARGS, {
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env },
+    env,
   });
   child.on('error', (e) => {
     console.error('[gui] spawn error:', e.message);

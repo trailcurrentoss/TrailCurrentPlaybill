@@ -4,20 +4,11 @@
    later stage when Headwaters NAS / external app integrations come online. */
 
 const TV_DATA = {
-  featured: {
-    title: "TrailCurrent Playbill",
-    tag: "Stage 1 · Empty Shell",
-    meta: ["No content yet", "Wire in Stage 2"],
-    rating: "—",
-    desc: "Headwaters media library, vehicle telemetry, exterior cameras, and external streaming apps wire up in later stages. Live TV and Radio are wired to real hardware (Hauppauge WinTV-dualHD + RTL-SDR) via the main-process services.",
-    bg: null,
-  },
-
-  continue:  [],
-
-  // Streaming-service launchers. Each entry's `launch` field names a handler
-  // registered in TV_APPS.launch below; that handler calls into the main
-  // process via the preload bridge.
+  // App-row launchers. Each entry's `launch` field names the screen the
+  // 'playbill:navigate' CustomEvent should target. Explore (Trails Nearby)
+  // is just another launcher tile, not its own home row — keeping all
+  // launchable destinations on the same row makes the home screen scan
+  // as "here are your destinations" instead of mixing media and tools.
   apps: [
     {
       id: 'youtube',
@@ -33,9 +24,22 @@ const TV_DATA = {
       bg: 'linear-gradient(135deg, #5a8a4a, #2b4a23)',
       launch: 'cast',
     },
+    {
+      id: 'explore',
+      label: 'Trails Nearby',
+      icon: 'map-outline',
+      bg: 'linear-gradient(135deg, #3d6b41, #1a3520)',
+      launch: 'explore',
+    },
+    {
+      id: 'music',
+      label: 'Music',
+      icon: 'musical-notes-outline',
+      bg: 'linear-gradient(135deg, #6c4ba9, #2a1856)',
+      launch: 'music',
+    },
   ],
 
-  rowTrails: [],
   movies:    [],
   music:     [],
 
@@ -63,5 +67,71 @@ const TV_APPS = {
   },
 };
 
+/* Recent local playback — drives the home screen's Continue Watching row.
+   Stored in localStorage because Stage 1 has no per-user persistent state
+   yet; when that exists we'll move this onto the controller so a rig with
+   multiple displays stays in sync. Push happens at transport.play time
+   (PLAYBACK.playLocal) and is broadcast via a CustomEvent so the home
+   screen refreshes without a poll. */
+const RECENT_KEY = 'playbill.recentPlayback';
+const RECENT_MAX = 8;
+
+function readRecent() {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) { return []; }
+}
+
+function writeRecent(list) {
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (_) {}
+  window.dispatchEvent(new CustomEvent('playbill:recentPlayback'));
+}
+
+const PLAYBACK = {
+  recent: () => readRecent(),
+
+  pushRecent(item) {
+    if (!item || !item.id) return;
+    const next = [
+      {
+        id:        item.id,
+        title:     item.title,
+        year:      item.year || null,
+        meta:      item.meta || (item.year ? String(item.year) : ''),
+        img:       item.img || item.posterUrl || null,
+        path:      item.path || null,
+        playedAt:  Date.now(),
+      },
+      ...readRecent().filter((r) => r.id !== item.id),
+    ].slice(0, RECENT_MAX);
+    writeRecent(next);
+  },
+
+  // Fire the same controller command both the home and library screens use,
+  // so the recent list stays in one place. Callers pass a library-shaped
+  // item (must have .path).
+  playLocal(item) {
+    if (!item || !item.path) return;
+    if (!window.playbill || !window.playbill.controller) return;
+    PLAYBACK.pushRecent(item);
+    const url = 'file://' + encodeURI(item.path);
+    window.playbill.controller.command({
+      action: 'transport.play',
+      sourceId: 'local',
+      url,
+      mediaType: 'video',
+      metadata: {
+        title:    item.title,
+        subtitle: item.year ? String(item.year) : null,
+        artworkUrl: item.img || item.posterUrl || null,
+      },
+    }).catch((e) => console.warn('[playback] transport.play failed:', e && e.message));
+  },
+};
+
 window.TV_DATA = TV_DATA;
 window.TV_APPS = TV_APPS;
+window.PLAYBACK = PLAYBACK;

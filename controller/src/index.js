@@ -39,6 +39,7 @@ const navHandlers        = require('./handlers/nav');
 const castHandlers       = require('./handlers/cast');
 const netflixHandlers    = require('./handlers/netflix');
 const dvdHandlers        = require('./handlers/dvd');
+const musicHandlers      = require('./handlers/cd');
 const radioService      = require('./services/radio');
 const volumeService     = require('./services/volume');
 const guiService        = require('./services/gui');
@@ -156,6 +157,7 @@ async function main() {
     cast: null,         // populated by castHandlers.register's initial publish()
     netflix: null,      // populated by netflixHandlers.register's initial publish()
     dvd:  null,         // populated by dvdHandlers.register's initial state.patch
+    music: null,        // populated by musicHandlers.register's initial state.patch (audio-CD slice)
     telemetry: null,    // populated by telemetryHandlers.register (Headwaters mirror)
     ui: null,
   });
@@ -232,6 +234,10 @@ async function main() {
   // Notification. Registered AFTER ipc is created so the watcher's
   // event handlers can reach publishEvent().
   dvdHandlers.register({ bus, state, ipc });
+  // Music handler — audio-CD detector publishes a one-shot 'cd.detected'
+  // IPC event so the Electron main process can pop a desktop Notification,
+  // same pattern as DVD detection. Registered after ipc is created.
+  musicHandlers.register({ bus, state, ipc });
 
   const sockPath = await ipc.start();
 
@@ -342,6 +348,7 @@ async function main() {
     try { await uxplayService.stop(); } catch (e) { console.error('[shutdown] uxplay:', e); }
     try { await netflixBrowser.stop(); } catch (e) { console.error('[shutdown] netflix:', e); }
     try { require('./services/dvd-ripper').cancel(); } catch (e) { console.error('[shutdown] dvd:', e); }
+    try { require('./services/cd-ripper').cancel(); } catch (e) { console.error('[shutdown] cd:', e); }
     try { await mdns.stop(); }   catch (e) { console.error('[shutdown] mdns:', e); }
     try { await claim.stop(); }  catch (e) { console.error('[shutdown] claim:', e); }
     try { await mqtt.stop(); } catch (e) { console.error('[shutdown] mqtt:', e); }
@@ -423,6 +430,9 @@ function installStateToMqttFanout({ state, mqtt }) {
       // Useful for the PWA to mirror the rip prompt and let a phone-side
       // user dismiss / start ripping without walking to the rig.
       case 'dvd':       publish('dvd',       cur.dvd     || null); break;
+      // 'music' is the audio-CD analog of 'dvd' — same lifecycle, different
+      // disc kind. PWAs can mirror the rip prompt for either.
+      case 'music':     publish('music',     cur.music   || null); break;
     }
   }
 
@@ -442,6 +452,7 @@ function installStateToMqttFanout({ state, mqtt }) {
     if (patch.cast !== undefined)       publishFeature('cast',      cur);
     if (patch.netflix !== undefined)    publishFeature('netflix',   cur);
     if (patch.dvd !== undefined)        publishFeature('dvd',       cur);
+    if (patch.music !== undefined)      publishFeature('music',     cur);
   });
 
   // Republish every feature whenever the broker (re)connects. Handles two
@@ -459,6 +470,7 @@ function installStateToMqttFanout({ state, mqtt }) {
       if (cur.cast       !== undefined) publishFeature('cast',      cur);
       if (cur.netflix    !== undefined) publishFeature('netflix',   cur);
       if (cur.dvd        !== undefined) publishFeature('dvd',       cur);
+      if (cur.music      !== undefined) publishFeature('music',     cur);
       if (cur.audio      !== undefined) publishFeature('volume',    cur);
       publishFeature('source', cur);   // always; null is a meaningful value
     });

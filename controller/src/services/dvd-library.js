@@ -56,6 +56,12 @@ function scanCategory(category) {
         const absPoster = path.join(dir, localPosterRel);
         if (fs.existsSync(absPoster)) posterLocalUrl = toFileUrl(absPoster);
       }
+      // mtime of the .mkv stands in for "added to library at." The rip
+      // pipeline writes the .mkv last; the sidecar is rewritten at poster
+      // backfill time, so the .mkv is the more stable timestamp.
+      const mkvPath = path.join(dir, f);
+      let addedAt = 0;
+      try { addedAt = fs.statSync(mkvPath).mtimeMs; } catch (_) { /* missing — leave 0 */ }
       out.push({
         id:        path.join(category, entry.name, f),
         kind:      category === 'Shows' ? 'show' : 'movie',
@@ -72,11 +78,15 @@ function scanCategory(category) {
         posterLocal:     !!posterLocalUrl,
         rating:    meta.rating || null,
         runtime:   meta.runtime || null,
-        path:      path.join(dir, f),
+        path:      mkvPath,
         sidecar:   jsonPath,
+        addedAt,
       });
     }
   }
+  // Newest first — drives "most recent" rows on the home screen and the
+  // ordering inside the Library view.
+  out.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
   return out;
 }
 

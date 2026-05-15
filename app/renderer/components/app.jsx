@@ -113,10 +113,9 @@ function moveFocus(el, dir) {
 
 function TVApp() {
   const [screen, setScreen] = useState('home');
-  // Initial focus lands on the first installed app rather than the hero.
-  // Until Headwaters / Continue Watching data wires up there is no real
-  // hero content to highlight — landing on the apps row means a launchable
-  // tile (YouTube, etc.) is pre-focused and Enter immediately works.
+  // Focus state for the legacy ROWS-driven screens (Apps grid, Live EPG,
+  // Radio dial, Local library). Zone-root screens (Home, Settings,
+  // Explore, Rig, YouTube) ignore this and use the spatial focus engine.
   const [focus, setFocus] = useState({ row: 'apps', col: 0, rowY: 0 });
 
   // App-tile launches dispatch a 'playbill:navigate' CustomEvent (see
@@ -134,12 +133,11 @@ function TVApp() {
     return () => window.removeEventListener('playbill:navigate', onNavigate);
   }, []);
 
-  // When changing to a zone-root screen (Settings / YouTube), drop focus
-  // into the screen so the first remote press lands somewhere useful
-  // instead of staying on <body>. Uses rAF so the new screen's DOM is
-  // mounted before we look up its root.
+  // When changing to a zone-root screen, drop focus into the screen so the
+  // first remote press lands somewhere useful instead of staying on <body>.
+  // Uses rAF so the new screen's DOM is mounted before we look up its root.
   useEffect(() => {
-    if (screen !== 'settings' && screen !== 'youtube' && screen !== 'rig' && screen !== 'explore') return;
+    if (screen !== 'home' && screen !== 'settings' && screen !== 'youtube' && screen !== 'rig' && screen !== 'explore') return;
     const id = requestAnimationFrame(() => {
       if (!window.FocusZones || !window.FocusZones.getRoot) return;
       const root = window.FocusZones.getRoot();
@@ -205,14 +203,20 @@ function TVApp() {
     if (!window.playbill || !window.playbill.controller ||
         typeof window.playbill.controller.onNavDpad !== 'function') return;
 
-    // Per the contract (docs/app/navigation.md): only Home and Back are
-    // global hierarchy keys. Menu is reserved for future contextual
-    // options and is a no-op for now — drop it on the floor so we don't
-    // accidentally tie behavior to it.
+    // Per the contract (docs/app/navigation.md): Home and Back are global
+    // hierarchy keys. Menu is per-screen contextual — we forward it to
+    // the focused DOM node as a synthetic 'ContextMenu' keydown so the
+    // screen itself can decide what to do (e.g. open a contextual popup).
+    // Screens that don't bind ContextMenu simply ignore it.
     const GLOBAL = {
       home: goHome,
       back: goBack,
-      menu: () => { /* reserved — see docs/app/navigation.md */ },
+      menu: () => {
+        const target = document.activeElement || document.body;
+        const evtInit = { key: 'ContextMenu', bubbles: true, cancelable: true };
+        target.dispatchEvent(new KeyboardEvent('keydown', evtInit));
+        target.dispatchEvent(new KeyboardEvent('keyup',   evtInit));
+      },
     };
     const KEY_MAP = {
       up:     'ArrowUp',
@@ -331,13 +335,7 @@ function TVApp() {
   // actual data length so we don't strand focus on empty tiles.
   const appsCount = (window.TV_DATA && window.TV_DATA.apps && window.TV_DATA.apps.length) || 0;
   const ROWS = useMemo(() => ({
-    home: [
-      { id: 'hero',     cols: 3 },
-      { id: 'continue', cols: 5 },
-      { id: 'apps',     cols: Math.max(1, Math.min(8, appsCount)) },
-      { id: 'trails',   cols: 7 },
-      { id: 'movies',   cols: 9 },
-    ],
+    // Home uses the spatial focus engine (data-zone-root); no row schema.
     apps: [
       { id: 'apps', cols: Math.max(1, appsCount) },
     ],
@@ -354,6 +352,13 @@ function TVApp() {
     local: [
       { id: 'lib-filter', cols: 5 },
       { id: 'lib-grid',   cols: 7 },
+    ],
+    // music: MusicView handles its own grid/detail navigation in capture-
+    // phase. We only need a stub row schema with cols:1 so the universal
+    // 'Left at col 0 opens the side nav' contract keeps working — the
+    // music screen doesn't otherwise consult focus.row/col.
+    music: [
+      { id: 'music', cols: 1 },
     ],
     // Rig uses the spatial focus engine (data-zone-root); no row schema needed.
   }), [appsCount]);
@@ -468,10 +473,9 @@ function TVApp() {
           setFocus(f => ({ row: schema[curIdx - 1].id, col: Math.min(schema[curIdx - 1].cols - 1, f.col), rowY: 0 }));
         }
       } else if (e.key === 'Enter' || e.key === ' ') {
-        // Launch the focused app card. Same dispatch from both screens —
-        // home shows the first 8 apps in a strip, apps screen shows them all
-        // in a grid; index into D.apps in both cases.
-        if ((screen === 'home' || screen === 'apps') && focus.row === 'apps') {
+        // Launch the focused app card on the legacy Apps grid. Home uses
+        // the spatial focus engine and routes Enter through button clicks.
+        if (screen === 'apps' && focus.row === 'apps') {
           const app = (window.TV_DATA && window.TV_DATA.apps || [])[focus.col];
           if (app && window.TV_APPS && window.TV_APPS.launch) {
             window.TV_APPS.launch(app);
@@ -485,15 +489,15 @@ function TVApp() {
   }, [focus, screen, sideNav, ROWS]);
 
   function initialFocusFor(s) {
-    if (s === 'home')  return { row: 'apps',    col: 0, rowY: 0 };
+    // Zone-root screens (home, rig, explore, settings, youtube) don't read
+    // this — FocusZones lands focus on the first focusable child. Legacy
+    // ROWS-driven screens get a meaningful starting row/col.
     if (s === 'apps')  return { row: 'apps',    col: 0, rowY: 0 };
     if (s === 'live')  return { row: 'epg',     col: 0, rowY: 0 };
     if (s === 'radio') return { row: 'radio-band', col: 0, rowY: 0 };
     if (s === 'local') return { row: 'lib-filter', col: 0, rowY: 0 };
-    if (s === 'rig')   return { row: 'rig',     col: 0, rowY: 0 };
-    if (s === 'explore') return { row: 'explore', col: 0, rowY: 0 };
-    if (s === 'settings') return { row: 'settings', col: 0, rowY: 0 };
-    return { row: 'hero', col: 0, rowY: 0 };
+    if (s === 'music') return { row: 'music', col: 0, rowY: 0 };
+    return { row: 'apps', col: 0, rowY: 0 };
   }
   function screenToNavIdx(s) { return SIDE_IDS.findIndex(id => id === 'nav-' + s); }
 
@@ -521,11 +525,13 @@ function TVApp() {
         {screen === 'settings' && <SettingsView focus={focus} />}
         {screen === 'youtube'  && <YoutubeView />}
         {screen === 'cast'     && <CastView />}
+        {screen === 'music'    && <MusicView />}
       </div>
 
       <NowPlayingBar />
       <RemoteHint />
       <DvdPrompt />
+      <CdPrompt />
     </div>
   );
 }

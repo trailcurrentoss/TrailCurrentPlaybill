@@ -184,7 +184,17 @@ body {
   border-radius: 8px; overflow: hidden;
   background: #111;
 }
-.card.focused {
+/* Buttons rendered as .card need UA chrome stripped so they match the
+   legacy <div>-based cards on screens that haven't moved onto zone-root
+   focus yet (Apps grid, Library grid). */
+button.card {
+  border: 0; padding: 0; font: inherit; color: inherit; text-align: left;
+}
+button.card:focus { outline: none; }
+/* :focus drives zone-root screens (Home); .focused drives the legacy
+   ROWS-based screens that paint focus state from a prop. Identical look. */
+.card.focused,
+button.card:focus-visible {
   transform: scale(1.1); z-index: 5;
   outline: 3px solid var(--tc-primary); outline-offset: 4px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.8), 0 0 0 8px rgba(82,164,65,0.2);
@@ -240,7 +250,12 @@ body {
   transition: transform 0.2s ease; overflow: hidden;
   background: #111;
 }
-.app-card.focused {
+button.app-card {
+  border: 0; padding: 0; font: inherit; color: inherit;
+}
+button.app-card:focus { outline: none; }
+.app-card.focused,
+button.app-card:focus-visible {
   transform: scale(1.12); z-index: 5;
   outline: 3px solid var(--tc-primary); outline-offset: 4px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.8);
@@ -258,6 +273,64 @@ body {
   background: rgba(255,255,255,0.2);
 }
 .card-progress .fill { height: 100%; background: var(--tc-primary); }
+
+/* ============ Home view ============
+   Vertical stack of rows. The whole screen scrolls vertically; each row
+   scrolls horizontally. scrollIntoView on focusin (see home.jsx) handles
+   pulling off-screen tiles in — no hand-maintained translateY offset
+   table. scroll-padding keeps the focused row out from under the top
+   bar / bottom hint chrome. */
+.home-view {
+  position: absolute; inset: 0;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 60px 0 80px;
+  scroll-padding-top: 80px;
+  scroll-padding-bottom: 110px;
+}
+.home-view::-webkit-scrollbar { display: none; }
+
+.home-row { padding: 16px 48px 16px 80px; }
+.home-row-head {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  margin-bottom: 6px;
+}
+.home-row-title { font: 600 22px var(--font-sans); letter-spacing: -0.3px; color: #fff; }
+.home-row-sub   { font-size: 12px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; }
+.home-row-track {
+  display: flex; gap: 14px;
+  overflow-x: auto; overflow-y: visible;
+  padding: 14px 80px 14px 0;
+  scroll-padding-left: 80px;
+  scroll-padding-right: 80px;
+  scroll-behavior: smooth;
+}
+.home-row-track::-webkit-scrollbar { display: none; }
+
+/* More-tile (offline library overflow). Visually a landscape card with
+   an arrow placeholder where the artwork would be. */
+.card.more-tile .more-thumb {
+  width: 100%; aspect-ratio: 16/9;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, rgba(82,164,65,0.18), rgba(82,164,65,0.05));
+  border: 1px dashed rgba(82,164,65,0.4);
+}
+.card.more-tile .more-thumb ion-icon {
+  font-size: 68px; color: var(--tc-primary);
+}
+
+/* Empty-state tile — non-focusable; conveys "this row will populate as
+   you use the rig" without leaving an unactionable focusable target. */
+.card.empty-tile { width: 360px; background: #0c0c0c; border: 1px dashed rgba(255,255,255,0.08); cursor: default; }
+.card.empty-tile .empty-thumb {
+  width: 100%; aspect-ratio: 16/9;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.02);
+}
+.card.empty-tile .empty-thumb ion-icon {
+  font-size: 48px; color: rgba(255,255,255,0.3);
+}
+.card.empty-tile .title { color: rgba(255,255,255,0.65); }
+.card.empty-tile .meta  { color: rgba(255,255,255,0.35); }
 
 /* ============ Screen-specific ============ */
 .apps-view, .live-view, .local-view, .rig-view {
@@ -323,11 +396,18 @@ body {
   border-color: var(--tc-primary);
   box-shadow: var(--tc-glow-primary);
 }
+.ch-tile.on-air {
+  border-color: var(--tc-primary);
+  background: linear-gradient(180deg, rgba(82,164,65,0.10) 0%, #0e0e0e 60%);
+}
 .ch-tile .ch-tuning {
   position: absolute; top: 12px; right: 14px;
   font: 600 10px var(--font-mono); color: var(--tc-primary);
   background: rgba(82,164,65,0.15); padding: 3px 8px; border-radius: 4px;
   letter-spacing: 1px; text-transform: uppercase;
+}
+.ch-tile .ch-tuning.ch-onair {
+  background: var(--tc-primary); color: #fff;
 }
 
 /* Live TV schedule grid (kept for future EPG view; current grid is .ch-grid) */
@@ -1496,20 +1576,37 @@ button.radio-dial:focus { outline: none; }
 
 /* ============ Explore (map) ============ */
 .explore-view {
-  position: absolute; inset: 0;
+  position: absolute; top: 0; left: 0; right: 0;
+  /* `inset: 0` alone collapses to 0 height here because body uses
+     `display:flex; min-height:100vh`, which does NOT count as an explicit
+     height for percentage resolution. Other views accidentally avoid this
+     by stretching the chain with flow content (heroes, padded sections).
+     Explore is fully absolute and has no flow content — so we pin the
+     viewport height explicitly. Without this MapLibre's container measures
+     1824×0 and the canvas paints to a 0-pixel-tall framebuffer. */
+  height: 100vh;
   /* No padding — the map fills the entire view content area so the user
      gets every spare pixel. The SideNav already sits to the left of
      .tv-content, so the canvas starts flush at left:0 here. */
 }
 
 .explore-canvas-wrap {
-  position: absolute; inset: 0;
+  /* Explicit width/height — `inset: 0` inside an absolutely-positioned
+     parent should fill it, but in this codebase the parent chain has
+     collapsed before (see .explore-view comment) and a measured 0 here
+     means MapLibre's canvas paints to a 0-pixel framebuffer. Use 100%
+     so we don't depend on inset semantics. */
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%;
   overflow: hidden;
   background: #1a1a1a;
 }
 
 .explore-canvas {
-  position: absolute; inset: 0;
+  /* Same reasoning as .explore-canvas-wrap — explicit 100%/100% so the
+     MapLibre container has a defined size at the time of map init. */
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%;
   outline: none;
 }
 .explore-canvas:focus { outline: none; }
@@ -1550,9 +1647,12 @@ button.radio-dial:focus { outline: none; }
 /* Heads-up chip — top-left of the map, mirrors the chips used in the
    Rig view so the visual vocabulary stays consistent. */
 .explore-hud-tl {
-  position: absolute; top: 24px; left: 24px;
-  display: flex; gap: 8px;
-  pointer-events: none;
+  /* Clear the .tv-topbar (height 60px, z-index 10) — at top:24px the chips
+     sit BEHIND the topbar gradient and read as "cut off". 80px gives a few
+     pixels of breathing room below the bar. */
+  position: absolute; top: 80px; left: 24px;
+  display: flex; gap: 8px; flex-wrap: wrap;
+  pointer-events: none; z-index: 20;
 }
 .explore-hud-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1573,8 +1673,10 @@ button.radio-dial:focus { outline: none; }
    focus these (the canvas absorbs all arrow keys), which is intentional
    on a TV: arrows pan, OK cycles zoom, the rest is mouse-only. */
 .explore-tools {
-  position: absolute; top: 24px; right: 24px;
+  /* Clear the .tv-topbar (height 60px, z-index 10); see .explore-hud-tl. */
+  position: absolute; top: 80px; right: 24px;
   display: flex; flex-direction: column; gap: 8px;
+  z-index: 20;
 }
 .explore-tool-btn {
   width: 44px; height: 44px;
@@ -1590,6 +1692,89 @@ button.radio-dial:focus { outline: none; }
 .explore-tool-btn:active { transform: scale(0.96); }
 .explore-tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .explore-tool-btn ion-icon { font-size: 20px; }
+
+/* Contextual popup menu — Roku-style overlay opened by the reserved
+   Menu button on the remote (and `m` on the keyboard). While it's
+   mounted the d-pad navigates the menu items; closing returns the user
+   to the map's pan/zoom mode. Anchored top-right under the toolbar so
+   it doesn't cover the map's center of attention; max-width so long
+   labels wrap rather than overflow. */
+.explore-menu {
+  position: absolute;
+  top: 80px;
+  right: 86px;
+  min-width: 280px; max-width: 360px;
+  background: rgba(15, 15, 15, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 12px 0 4px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,0,0,0.4);
+  z-index: 30;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.explore-menu-title {
+  padding: 0 16px 8px;
+  font: 600 11px var(--font-sans);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.45);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 6px;
+}
+.explore-menu-item {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: 0;
+  color: rgba(255,255,255,0.85);
+  font: 500 14px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+}
+.explore-menu-item:hover { background: rgba(255,255,255,0.04); }
+.explore-menu-item.focused {
+  background: rgba(82,164,65,0.18);
+  color: #c9eab9;
+  outline: 1px solid rgba(82,164,65,0.55);
+  outline-offset: -1px;
+}
+.explore-menu-item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.explore-menu-item ion-icon { font-size: 20px; flex-shrink: 0; }
+.explore-menu-label { flex: 1; }
+.explore-menu-hint {
+  font: 400 11px var(--font-sans);
+  color: rgba(255,255,255,0.45);
+}
+.explore-menu-foot {
+  padding: 10px 16px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  font: 400 11px var(--font-mono, ui-monospace, monospace);
+  color: rgba(255,255,255,0.45);
+}
+
+html[data-theme="light"] .explore-menu {
+  background: rgba(255,255,255,0.96);
+  border-color: rgba(0,0,0,0.10);
+  box-shadow: 0 16px 48px rgba(0,0,0,0.25);
+}
+html[data-theme="light"] .explore-menu-title,
+html[data-theme="light"] .explore-menu-foot {
+  color: rgba(0,0,0,0.55);
+}
+html[data-theme="light"] .explore-menu-item {
+  color: rgba(0,0,0,0.85);
+}
+html[data-theme="light"] .explore-menu-item.focused {
+  background: rgba(82,164,65,0.18);
+  color: #2c5e22;
+}
 
 /* Remote-key hint strip — same chip vocabulary as the global RemoteHint
    but pinned to the map's bottom-left so it reads "this screen treats
@@ -1624,3 +1809,159 @@ html[data-theme="light"] .explore-canvas .maplibregl-ctrl-attrib {
   background: rgba(255,255,255,0.85);
   color: rgba(0,0,0,0.7);
 }
+
+/* ============ Music view (album grid + detail) ============
+   Mirrors the LocalView library treatment — square album cards in a
+   6-column grid, drilling into a cover-art-driven detail screen with
+   a play-all button and per-track list. */
+
+.music-view  { padding: 40px 60px 80px; }
+.music-view .view-hdr h2 { font: 700 28px var(--font-sans); margin: 0 0 6px; }
+.music-view .view-hdr p  { font: 500 13px var(--font-sans); color: rgba(255,255,255,0.55); margin: 0; }
+[data-theme="light"] .music-view .view-hdr p { color: rgba(0,0,0,0.55); }
+
+.music-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 60vh;
+  text-align: center;
+  color: rgba(255,255,255,0.55);
+}
+[data-theme="light"] .music-empty { color: rgba(0,0,0,0.55); }
+.music-empty ion-icon { font-size: 96px; color: rgba(255,255,255,0.18); margin-bottom: 18px; }
+[data-theme="light"] .music-empty ion-icon { color: rgba(0,0,0,0.18); }
+.music-empty h3 { font: 700 20px var(--font-sans); margin: 0 0 8px; color: rgba(255,255,255,0.85); }
+[data-theme="light"] .music-empty h3 { color: rgba(0,0,0,0.85); }
+.music-empty p  { font: 500 14px var(--font-sans); max-width: 380px; }
+
+/* Detail screen */
+.music-detail { padding: 40px 60px 80px; }
+.music-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent; border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.75); font: 600 12px var(--font-sans);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 8px 14px; border-radius: 999px;
+  cursor: pointer; margin-bottom: 28px;
+}
+.music-back:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
+[data-theme="light"] .music-back {
+  border-color: rgba(0,0,0,0.15); color: rgba(0,0,0,0.7);
+}
+[data-theme="light"] .music-back:hover { color: #000; border-color: rgba(0,0,0,0.35); }
+
+.music-detail-hero {
+  display: flex; gap: 36px; align-items: flex-end;
+  margin-bottom: 32px;
+}
+.music-detail-cover {
+  width: 280px; height: 280px;
+  border-radius: 12px;
+  background: #1a1c1f center/cover no-repeat;
+  flex-shrink: 0;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+}
+.music-detail-cover.no-poster { background: linear-gradient(135deg, #2a2c30, #15171a); }
+.music-detail-cover.no-poster ion-icon {
+  font-size: 96px; color: rgba(255,255,255,0.25);
+}
+.music-detail-body { flex: 1 1 auto; min-width: 0; padding-bottom: 10px; }
+.music-detail-eyebrow {
+  font: 700 11px var(--font-sans);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--tc-primary, #52a441);
+  margin-bottom: 8px;
+}
+.music-detail-body h2 {
+  font: 700 36px/1.15 var(--font-sans); letter-spacing: -0.015em;
+  margin: 0 0 12px 0;
+}
+.music-detail-meta {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  font: 500 14px var(--font-sans);
+  color: rgba(255,255,255,0.65);
+  margin-bottom: 20px;
+}
+[data-theme="light"] .music-detail-meta { color: rgba(0,0,0,0.6); }
+
+.music-play-all {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--tc-primary, #52a441); color: #fff;
+  border: 1px solid var(--tc-primary, #52a441);
+  font: 600 14px var(--font-sans);
+  padding: 12px 22px; border-radius: 999px; cursor: pointer;
+}
+.music-play-all ion-icon { font-size: 18px; }
+.music-play-all:hover { background: #61b34f; border-color: #61b34f; }
+.music-play-all.focused {
+  outline: 3px solid var(--tc-primary, #52a441);
+  outline-offset: 3px;
+}
+
+.music-tracklist {
+  display: flex; flex-direction: column;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+[data-theme="light"] .music-tracklist { border-top-color: rgba(0,0,0,0.08); }
+.music-track {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  cursor: pointer;
+  color: rgba(255,255,255,0.85);
+  transition: background 0.12s;
+}
+[data-theme="light"] .music-track {
+  border-bottom-color: rgba(0,0,0,0.06);
+  color: rgba(0,0,0,0.85);
+}
+.music-track:hover { background: rgba(255,255,255,0.04); }
+[data-theme="light"] .music-track:hover { background: rgba(0,0,0,0.04); }
+.music-track.focused {
+  background: rgba(82,164,65,0.12);
+  outline: 2px solid var(--tc-primary, #52a441);
+  outline-offset: -2px;
+}
+.music-track-num {
+  font: 500 13px var(--font-mono);
+  color: rgba(255,255,255,0.4);
+  text-align: right;
+}
+[data-theme="light"] .music-track-num { color: rgba(0,0,0,0.4); }
+.music-track-title { font: 500 15px var(--font-sans); }
+.music-track-dur {
+  font: 500 13px var(--font-mono);
+  color: rgba(255,255,255,0.5);
+}
+[data-theme="light"] .music-track-dur { color: rgba(0,0,0,0.5); }
+
+/* Tracklist preview inside the CD prompt review card */
+.cd-prompt-tracklist {
+  margin-top: 12px;
+  font: 500 12px var(--font-sans);
+}
+.cd-prompt-track {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 10px;
+  padding: 4px 0;
+  color: rgba(255,255,255,0.7);
+}
+[data-theme="light"] .cd-prompt-track { color: rgba(0,0,0,0.7); }
+.cd-prompt-track-num   { font-family: var(--font-mono); color: rgba(255,255,255,0.45); }
+[data-theme="light"] .cd-prompt-track-num { color: rgba(0,0,0,0.45); }
+.cd-prompt-track-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-prompt-track-dur   {
+  font-family: var(--font-mono); color: rgba(255,255,255,0.45); font-size: 11px;
+}
+[data-theme="light"] .cd-prompt-track-dur { color: rgba(0,0,0,0.45); }
+.cd-prompt-track-more {
+  margin-top: 4px;
+  font: 500 11px var(--font-sans);
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 0.02em;
+}
+[data-theme="light"] .cd-prompt-track-more { color: rgba(0,0,0,0.4); }

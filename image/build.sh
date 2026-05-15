@@ -228,6 +228,46 @@ fi
 mkdir -p "$STAGING_DIR/files/yt-dlp"
 install -m 755 "$YTDLP_CACHE" "$STAGING_DIR/files/yt-dlp/yt-dlp"
 
+# ── Fetch DVB tuner firmware (Si2168 / Si2158) ────────────────────────────
+# Ubuntu Noble's linux-firmware package does NOT ship the Silicon Labs
+# Si2168 demodulator or Si2158 tuner firmware (verified May 2026:
+# `dpkg -L linux-firmware | grep si21` returns nothing). The Hauppauge
+# WinTV-dualHD DVB-T2/C variant uses these chips; without the firmware the
+# kernel driver fails with `si2168 7-0064: firmware file 'dvb-demod-...'
+# not found` and /dev/dvb/adapterN never appears.
+#
+# The ATSC variant of the WinTV-dualHD uses LGDT3306A + Si2157, neither of
+# which needs an external firmware file (in-driver register tables), so the
+# ATSC path works without these blobs — but vendoring them costs <50 KB and
+# means the same image works for international DVB-T2/C tuners too.
+#
+# Source: OpenELEC/dvb-firmware on GitHub (the canonical mirror of the
+# extracted firmware blobs used by every Linux DVB stack distribution). Hook
+# 13b stages these into /lib/firmware/ so the kernel finds them on hot-plug.
+DVB_FW_FILES="dvb-demod-si2168-02.fw dvb-demod-si2168-a20-01.fw dvb-demod-si2168-a30-01.fw dvb-demod-si2168-b40-01.fw dvb-tuner-si2158-a20-01.fw"
+DVB_FW_BASE="https://github.com/OpenELEC/dvb-firmware/raw/master/firmware"
+DVB_FW_CACHE="$CACHE_DIR/dvb-firmware"
+mkdir -p "$DVB_FW_CACHE"
+for fw in $DVB_FW_FILES; do
+    if [ ! -s "$DVB_FW_CACHE/$fw" ] || [ -n "${REFRESH_DVB_FW:-}" ]; then
+        log "Fetching DVB firmware $fw"
+        if ! curl -fsSL --retry 3 --retry-delay 2 -o "$DVB_FW_CACHE/$fw.tmp" "$DVB_FW_BASE/$fw"; then
+            fatal "failed to fetch DVB firmware $fw from $DVB_FW_BASE/$fw"
+        fi
+        # Smoke-check: these are tiny (2-19 KB) binary blobs. If we got back
+        # an HTML 404 page (~1 KB of HTML), refuse to stage it.
+        if head -c 4 "$DVB_FW_CACHE/$fw.tmp" | grep -q "<htm\|<!DO"; then
+            rm -f "$DVB_FW_CACHE/$fw.tmp"
+            fatal "DVB firmware $fw download returned HTML — wrong URL?"
+        fi
+        mv "$DVB_FW_CACHE/$fw.tmp" "$DVB_FW_CACHE/$fw"
+    fi
+done
+mkdir -p "$STAGING_DIR/files/dvb-firmware"
+for fw in $DVB_FW_FILES; do
+    install -m 644 "$DVB_FW_CACHE/$fw" "$STAGING_DIR/files/dvb-firmware/$fw"
+done
+
 # ── Compile device-tree overlays ────────────────────────────────────────────
 log "Compiling device-tree overlays"
 mkdir -p "$STAGING_DIR/files/dtbo"

@@ -124,6 +124,124 @@ else
     fail "only ${FREE_GB:-?} GB free at $RSDK_DIR — need >= 30 GB"
 fi
 
+# ── 7. Static apt package-name check ────────────────────────────────────────
+# Catches typos, virtual/Provides-only names (e.g. `libdvdread8` vs the
+# real `libdvdread8t64`), and packages that vanished from Noble's archive
+# BEFORE we burn a 2-hour qemu build cycle on it. Uses the host's apt cache
+# (host is Noble 24.04, same as the target for archive-side packages).
+#
+# Two lists are extracted from rootfs.jsonnet's hook 3a:
+#   * install list — the `apt-get install -y --install-recommends \` block
+#   * verify list  — the `for pkg in ...; do dpkg -s "$pkg" ...` loop
+#
+# Install-list rule: pkg must be installable (real or virtual-with-providers)
+# Verify-list  rule: pkg must be a REAL package (dpkg -s fails on virtuals)
+#
+# Packages from third-party repos (Radxa, Brave, Mozilla PPA) aren't in the
+# host's apt cache; THIRDPARTY_SKIP avoids false positives on those.
+step "7. Static apt package-name check (catches virtual/typo bugs in seconds)"
+
+ROOTFS_JSONNET="${RSDK_DIR}/src/share/rsdk/build/rootfs.jsonnet"
+THIRDPARTY_SKIP="qcom-fastrpc1 libcdsprpc1 radxa-firmware-qcs6490 firefox-esr brave-browser"
+
+if ! command -v apt-cache >/dev/null 2>&1; then
+    warn "apt-cache not available on host — skipping package-name check"
+elif [ ! -f "$ROOTFS_JSONNET" ]; then
+    fail "$ROOTFS_JSONNET not found — cannot extract package lists"
+else
+    INSTALL_LIST=$(awk '
+        /apt-get install -y --install-recommends \\$/ { in_list=1; next }
+        in_list {
+            line=$0
+            sub(/[[:space:]]*\\[[:space:]]*$/, "", line)
+            sub(/^[[:space:]]+/, "", line)
+            if (line == "") { in_list=0; next }
+            print line
+            if ($0 !~ /\\$/) in_list=0
+        }
+    ' "$ROOTFS_JSONNET")
+
+    VERIFY_LIST=$(awk '
+        /for pkg in / && /\\$/ {
+            line=$0
+            sub(/.*for pkg in /, "", line)
+            sub(/[[:space:]]*\\[[:space:]]*$/, "", line)
+            n=split(line, a, /[[:space:]]+/)
+            for (i=1; i<=n; i++) if (a[i] != "") print a[i]
+            in_list=1; next
+        }
+        in_list {
+            line=$0
+            if (line ~ /; do$/) {
+                sub(/[[:space:]]*; do$/, "", line)
+                sub(/^[[:space:]]+/, "", line)
+                n=split(line, a, /[[:space:]]+/)
+                for (i=1; i<=n; i++) if (a[i] != "") print a[i]
+                in_list=0; next
+            }
+            sub(/[[:space:]]*\\$/, "", line)
+            sub(/^[[:space:]]+/, "", line)
+            n=split(line, a, /[[:space:]]+/)
+            for (i=1; i<=n; i++) if (a[i] != "") print a[i]
+        }
+    ' "$ROOTFS_JSONNET")
+
+    is_thirdparty() {
+        case " $THIRDPARTY_SKIP " in *" $1 "*) return 0 ;; esac
+        return 1
+    }
+    # Real package — has its own .deb (madison shows version line).
+    # Capture to a variable to avoid SIGPIPE under `set -o pipefail` (head/grep
+    # exiting early makes apt-cache return non-zero, which pipefail then
+    # propagates, producing false "not installable" reports).
+    is_real_pkg() {
+        local out
+        out=$(apt-cache madison "$1" 2>/dev/null) || true
+        [ -n "$out" ]
+    }
+    # Installable — either real or a virtual with at least one provider.
+    is_installable() {
+        is_real_pkg "$1" && return 0
+        local out
+        out=$(apt-cache showpkg "$1" 2>/dev/null) || true
+        [ -z "$out" ] && return 1
+        # On a provided virtual, providers are listed AFTER the
+        # 'Reverse Provides:' header. On an unknown name, output is empty.
+        echo "$out" | awk '/^Reverse Provides:/{f=1;next} f && /[a-zA-Z]/{found=1} END{exit !found}'
+    }
+
+    PKG_ERRORS=0
+    SKIPPED=0
+    CHECKED_INSTALL=0
+    CHECKED_VERIFY=0
+
+    for pkg in $INSTALL_LIST; do
+        if is_thirdparty "$pkg"; then SKIPPED=$((SKIPPED+1)); continue; fi
+        CHECKED_INSTALL=$((CHECKED_INSTALL+1))
+        if ! is_installable "$pkg"; then
+            fail "install list: '$pkg' is not installable on Noble (typo? renamed? wrong repo?)"
+            PKG_ERRORS=$((PKG_ERRORS+1))
+        fi
+    done
+
+    for pkg in $VERIFY_LIST; do
+        if is_thirdparty "$pkg"; then SKIPPED=$((SKIPPED+1)); continue; fi
+        CHECKED_VERIFY=$((CHECKED_VERIFY+1))
+        if ! is_real_pkg "$pkg"; then
+            if is_installable "$pkg"; then
+                fail "verify list: '$pkg' is a virtual/Provides-only name — dpkg -s will fail. Use the real package name (e.g. libdvdread8 → libdvdread8t64 on Noble)"
+            else
+                fail "verify list: '$pkg' is not a real package on Noble (typo? renamed?)"
+            fi
+            PKG_ERRORS=$((PKG_ERRORS+1))
+        fi
+    done
+
+    if [ "$PKG_ERRORS" -eq 0 ]; then
+        ok "checked $CHECKED_INSTALL install + $CHECKED_VERIFY verify entries against Noble apt cache ($SKIPPED third-party skipped)"
+    fi
+fi
+
 echo ""
 if [ "$ERRORS" -gt 0 ]; then
     echo -e "${BOLD}${RED}Preflight FAILED with $ERRORS errors${RESET}"

@@ -1,5 +1,26 @@
 /* Apps grid view */
 
+function AppCard({ app, focused, onLaunch }) {
+  // Legacy div-based card — the Apps grid still uses the ROWS focus
+  // schema in app.jsx (focus.row/col), so focus state is painted via
+  // the `focused` prop rather than DOM :focus. Home's AppTile is the
+  // zone-root equivalent.
+  const inner = app.icon
+    ? <ion-icon name={app.icon} style={{fontSize: 56, color: '#fff'}}></ion-icon>
+    : (app.logo || app.label || '');
+  return (
+    <div
+      className={'app-card' + (focused ? ' focused' : '')}
+      style={{ background: app.bg }}
+      onClick={() => onLaunch && onLaunch(app)}
+      role="button"
+      tabIndex={-1}
+    >
+      <div className="logo">{inner}</div>
+    </div>
+  );
+}
+
 function AppsView({ focus }) {
   const D = window.TV_DATA;
   const launch = window.TV_APPS && window.TV_APPS.launch;
@@ -29,4 +50,4 @@ function AppsView({ focus }) {
   );
 }
 
-Object.assign(window, { AppsView });
+Object.assign(window, { AppsView, AppCard });

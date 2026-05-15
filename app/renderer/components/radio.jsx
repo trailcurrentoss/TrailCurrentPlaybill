@@ -58,18 +58,31 @@ function RadioView() {
   // Subscribe to controller state changes so PWA / CAN button / IR remote
   // -driven tunes reflect in this UI immediately. Without this, radio.jsx
   // only knows what *it* did — external drivers update state.radio in the
-  // controller but the UI sits stale until the user clicks Refresh. Apply
-  // the delta to local state + dial position; the user's local edits get
-  // overwritten when something actually tunes, which is the right behavior
-  // for a multi-driver appliance ("show me what's actually playing").
+  // controller but the UI sits stale until the user clicks Refresh.
+  //
+  // RACE: the controller publishes state for many reasons (tune, scan start,
+  // scan end, GNSS time sync, heartbeats, etc.). A naive "always pull r.band
+  // into setBand" overwrites in-progress local edits — pressing AM would
+  // flicker active for ~50ms then revert to FM because the very next state
+  // push still carries band='fm'. We dedupe by tracking the last-seen
+  // controller value in a ref: only when the controller's band/frequency
+  // actually CHANGES do we apply it locally. That keeps the "external tune
+  // pulls UI" behavior while letting user clicks stick.
+  const lastFromControllerRef = useRef({ band: null, frequencyHz: null });
   useEffect(() => {
     if (!window.playbill || !window.playbill.controller) return;
     let unsub;
     function apply(r) {
       if (!r) return;
       setState(r);
-      if (r.band)        setBand(r.band);
-      if (r.frequencyHz) setFreq(r.frequencyHz);
+      if (r.band && r.band !== lastFromControllerRef.current.band) {
+        lastFromControllerRef.current.band = r.band;
+        setBand(r.band);
+      }
+      if (r.frequencyHz && r.frequencyHz !== lastFromControllerRef.current.frequencyHz) {
+        lastFromControllerRef.current.frequencyHz = r.frequencyHz;
+        setFreq(r.frequencyHz);
+      }
     }
     (async () => {
       try {
@@ -142,7 +155,11 @@ function RadioView() {
   async function scan() {
     setError(null); setScanning(true); setResults(null);
     try {
-      const stations = await window.playbill.radio.scan({ band });
+      // Controller returns { band, stations } (controller/src/handlers/radio.js
+      // line 100); unwrap so `scanResults` is the array the conditional render
+      // expects. Tolerant of an array-shaped legacy return too.
+      const raw = await window.playbill.radio.scan({ band });
+      const stations = Array.isArray(raw) ? raw : (raw && raw.stations) || [];
       setResults(stations);
       setState({ running: false });
     } catch (e) {

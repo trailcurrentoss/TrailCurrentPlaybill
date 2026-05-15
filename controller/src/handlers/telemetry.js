@@ -43,13 +43,26 @@ const TOPICS = {
   GPS_DETAILS:    'local/gps/details',
   WATER:          'local/water/status',
   LIGHT_STATUS:   'local/lights/+/status',
+  // Switchback relays publish their state on local/relays/<id>/status, NOT
+  // on local/lights/.../status. Without this subscription a relay toggled
+  // from the PWA (or any other client) would never reflect in the Rig view.
+  RELAY_STATUS:   'local/relays/+/status',
   // Headwaters publishes its lights config as retained snapshots on these
   // topics; subscribing gives us names without an HTTP round-trip.
   CONFIG_SYNC:    'local/config/system_sync',
   PDM_CHANNELS:   'local/config/pdm_channels',     // Torrent PDM lights
   RELAY_CHANNELS: 'local/config/relay_channels',   // Switchback / relay-driven lights
-  CONFIG_TRIGGER: 'local/config/system_sync_trigger',
+  // `local/config/request` always works (Headwaters re-publishes channel
+  // configs on demand). `system_sync_trigger` only fires when cloud_enabled.
+  CONFIG_REQUEST: 'local/config/request',
 };
+
+// Switchback lights live at IDs 100 + relay_id in the Headwaters lights
+// collection (see services/switchback-channel-sync.js). The matching MQTT
+// status topic is local/relays/<relay_id>/status where relay_id is global
+// across all switchback instances (1-8 for instance 0, 9-16 for instance 1,
+// 17-24 for instance 2 — see can-bridge.js parseRelayStatus).
+const SWITCHBACK_ID_BASE = 100;
 
 function emptyTelemetry() {
   return {
@@ -74,26 +87,53 @@ function setLights(state, list) {
   state.patch({ telemetry: { ...cur, lights: list, lightsUpdatedAt: Date.now() } });
 }
 
-// Merge a fresh authoritative list (from config snapshot or REST) with
-// any live state/brightness we've already received over MQTT.
-function mergeLightConfig(state, channels) {
+// Merge a fresh authoritative list (from a single config topic) with the
+// lights we already know about. The PDM_CHANNELS and RELAY_CHANNELS topics
+// each carry only their own slice, so we must NOT clobber the other slice
+// when one of them arrives — `sourceTag` says which slice the incoming
+// channels belong to and any prior lights with that tag get replaced
+// while the other slice is preserved. Pass sourceTag='*' (or omit) for a
+// unified snapshot (CONFIG_SYNC / REST /api/lights) that authoritatively
+// describes every light.
+function mergeLightConfig(state, channels, sourceTag) {
   if (!Array.isArray(channels)) return;
   const cur = state.get().telemetry || emptyTelemetry();
-  const byId = new Map((cur.lights || []).map((l) => [l.id, l]));
-  const merged = channels.map((ch) => {
+  const priorById = new Map((cur.lights || []).map((l) => [l.id, l]));
+
+  // Tag each incoming entry with the source slice it came from. The
+  // published payloads don't always carry a `source` field, so we infer:
+  // a `relay_channel` field means switchback; otherwise pdm.
+  function tagFor(ch) {
+    return ch.source
+      || (ch.relay_channel !== undefined ? 'switchback' : 'pdm');
+  }
+
+  const incoming = channels.map((ch) => {
     const id = ch.id ?? ch._id;
-    const prior = byId.get(id) || {};
+    const prior = priorById.get(id) || {};
     return {
       id,
       _id: id,
       name:   ch.name || prior.name || `Light ${id}`,
       icon:   ch.icon || prior.icon || 'lightbulb',
       type:   ch.type || prior.type || 'switch',
-      source: ch.source || prior.source || 'pdm',
+      source: tagFor(ch),
       state:      (typeof prior.state === 'number') ? prior.state : 0,
       brightness: (typeof prior.brightness === 'number') ? prior.brightness : 0,
     };
   });
+
+  // Build the merged list: drop any prior light whose slice we're now
+  // replacing, then add the incoming entries. With sourceTag='*' that
+  // drops everything; with a specific tag it only drops that slice.
+  const incomingIds = new Set(incoming.map((l) => l.id));
+  const survivors = (cur.lights || []).filter((l) => {
+    if (sourceTag === '*' || !sourceTag) return false;     // full replace
+    if (incomingIds.has(l.id))           return false;     // updated in place
+    return l.source !== sourceTag;                          // keep other slices
+  });
+  const merged = survivors.concat(incoming).sort((a, b) => a.id - b.id);
+
   state.patch({ telemetry: { ...cur, lights: merged, lightsUpdatedAt: Date.now() } });
 }
 
@@ -181,6 +221,9 @@ function register({ bus, state, mqtt }) {
     if (payload && typeof payload === 'object') mergeSlice(state, 'water', payload);
   });
   // local/lights/<id>/status — payload {state, brightness}
+  // Authoritative source for PDM/Torrent light state. We never patch from
+  // our own command emit — every UI update flows through here so a toggle
+  // from the PWA, a CAN bus button, or another Playbill reflects the same.
   mqtt.subscribeTopic(TOPICS.LIGHT_STATUS, (topic, payload) => {
     const parts = topic.split('/');
     const id = parseInt(parts[2], 10);
@@ -192,32 +235,45 @@ function register({ bus, state, mqtt }) {
     }
     if (Object.keys(next).length) patchLight(state, id, next);
   });
+  // local/relays/<id>/status — payload {state}
+  // Switchback hardware publishes here (via can-bridge parsing of CAN
+  // 0x028/0x029/0x02a). Headwaters' lights collection assigns these
+  // SWITCHBACK_ID_BASE + relayId in its lights table, so we translate the
+  // topic id back into the matching light id.
+  mqtt.subscribeTopic(TOPICS.RELAY_STATUS, (topic, payload) => {
+    const parts = topic.split('/');
+    const relayId = parseInt(parts[2], 10);
+    if (!Number.isFinite(relayId)) return;
+    if (!payload || typeof payload !== 'object' || typeof payload.state !== 'number') return;
+    patchLight(state, SWITCHBACK_ID_BASE + relayId, { state: payload.state });
+  });
 
   // Retained config snapshots from Headwaters carry the light NAMES that
-  // the user configured in the PWA. Subscribing to both topics is cheap:
-  // CONFIG_SYNC fires when cloud_enabled=true (and on demand via the
-  // trigger topic), PDM_CHANNELS fires on any PDM channel mutation
-  // regardless of cloud sync. Either one is sufficient for names.
+  // the user configured in the PWA. CONFIG_SYNC is the unified snapshot
+  // (cloud_enabled rigs only); PDM_CHANNELS / RELAY_CHANNELS each carry
+  // their own slice and fire regardless of cloud sync. The two slice
+  // topics are tagged so receiving one doesn't blow away the other.
   mqtt.subscribeTopic(TOPICS.CONFIG_SYNC, (_t, payload) => {
-    if (payload && Array.isArray(payload.channels)) mergeLightConfig(state, payload.channels);
+    if (payload && Array.isArray(payload.channels)) mergeLightConfig(state, payload.channels, '*');
   });
   mqtt.subscribeTopic(TOPICS.PDM_CHANNELS, (_t, payload) => {
-    if (payload && Array.isArray(payload.channels)) mergeLightConfig(state, payload.channels);
+    if (payload && Array.isArray(payload.channels)) mergeLightConfig(state, payload.channels, 'pdm');
   });
   // Switchback / relay-driven lights live on a separate retained topic.
   // Without this subscription the UI would only show PDM/Torrent lights
   // and miss any relay-driven fixtures.
   mqtt.subscribeTopic(TOPICS.RELAY_CHANNELS, (_t, payload) => {
-    if (payload && Array.isArray(payload.channels)) mergeLightConfig(state, payload.channels);
+    if (payload && Array.isArray(payload.channels)) mergeLightConfig(state, payload.channels, 'switchback');
   });
 
   // Ask Headwaters to re-publish the snapshot once we're connected. The
   // request is idempotent — multiple Playbills firing it is harmless.
-  // If 5 s after connect we still have no light list, fall back to the
-  // HTTP /api/lights endpoint (which works regardless of cloud_enabled,
-  // assuming an API key is configured).
+  // Use local/config/request (always re-publishes PDM + relay channel
+  // configs) rather than system_sync_trigger (only fires when cloud_enabled,
+  // so silent no-op on offline rigs). If 5 s after connect we still have
+  // no light list, fall back to the HTTP /api/lights endpoint.
   mqtt.onConnect(() => {
-    mqtt.publishTopic(TOPICS.CONFIG_TRIGGER, { requested_by: 'playbill', ts: Date.now() }, { qos: 1, retain: false });
+    mqtt.publishTopic(TOPICS.CONFIG_REQUEST, { requested_by: 'playbill', ts: Date.now() }, { qos: 1, retain: false });
     const t = setTimeout(() => {
       const cur = (state.get().telemetry && state.get().telemetry.lights) || [];
       if (cur.length === 0) {
@@ -258,6 +314,11 @@ function register({ bus, state, mqtt }) {
   // Toggle / set a single light. value: { id, state, brightness? }
   // Publishes to local/lights/<id>/command — the same topic the Headwaters
   // backend and PDM modules listen on. No HTTP, no API key, no middleman.
+  // We deliberately do NOT optimistically patch local state: the UI must
+  // reflect the *device's* state, not Playbill's intent. The matching
+  // status message (local/lights/<id>/status or local/relays/<id>/status
+  // for switchback) is the authoritative update path and works the same
+  // whether the toggle came from Playbill, the PWA, or a CAN button.
   bus.register('telemetry.lights.set', async (cmd) => {
     const v = cmd && cmd.value || {};
     const id = parseInt(v.id, 10);
@@ -272,7 +333,6 @@ function register({ bus, state, mqtt }) {
     const ok = mqtt.publishTopic(topic, payload, { qos: 1, retain: false });
     console.log(`[telemetry] publish ${topic} ${JSON.stringify(payload)} ok=${ok}`);
     if (!ok) throw new Error('MQTT broker not connected');
-    patchLight(state, id, payload);
     return { ok: true };
   });
 

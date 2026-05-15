@@ -3,7 +3,7 @@
    normal application launched from the GNOME dock that the user can quit,
    minimize, or alt-tab away from at any time. */
 
-const { app, BrowserWindow, screen, nativeTheme, ipcMain, globalShortcut, Menu, Notification } = require('electron');
+const { app, BrowserWindow, screen, nativeTheme, ipcMain, globalShortcut, Menu, Notification, session } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
@@ -109,6 +109,23 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
+  // Mirror every renderer console.* call into /tmp/playbill-renderer.log so
+  // we can see what's happening on the live board without rigging up remote
+  // DevTools. The line prefix says [info|warn|err|debug] + the source file +
+  // line, matching the format DevTools shows.
+  try {
+    const logFile = '/tmp/playbill-renderer.log';
+    const fmt = (lvl, msg, line, srcId) => {
+      const levels = ['debug', 'info', 'warn', 'err'];
+      const tag = levels[lvl] || ('lvl' + lvl);
+      const src = (srcId && srcId.split('/').slice(-1)[0]) || '?';
+      return `[${new Date().toISOString()}] ${tag.padEnd(5)} ${src}:${line || '?'}  ${msg}\n`;
+    };
+    mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+      try { fs.appendFileSync(logFile, fmt(level, message, line, sourceId)); } catch (_) { /* best effort */ }
+    });
+  } catch (e) { console.warn('[main] could not install console mirror:', e && e.message); }
+
   // Forward live theme changes from GNOME → renderer.
   const sendTheme = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -168,6 +185,26 @@ function handleControllerEvent(channel, payload) {
     // Remote/CAN Power → raise our own window. Wayland blocks third-party
     // raise, but Electron is allowed to raise its OWN window.
     raiseOwnWindow();
+  } else if (channel === 'cd.detected') {
+    // Audio CD just spun up. Pop the same style of notification as the
+    // DVD path — body line names the disc by its track count + runtime,
+    // since audio CDs don't carry a useful volume label.
+    if (Notification && Notification.isSupported && Notification.isSupported()) {
+      const ntracks = (payload && payload.ntracks) || '?';
+      const minutes = payload && payload.lengthSec ? Math.round(payload.lengthSec / 60) : null;
+      const sub = minutes ? `${ntracks}-track CD · ${minutes} min` : `${ntracks}-track CD`;
+      const n = new Notification({
+        title: 'Audio CD detected — add to your music library?',
+        body:  `${sub}. Click to look up the album and rip to your library.`,
+        icon:  path.join(__dirname, '..', 'packaging', 'icons', '512x512.png'),
+        urgency: 'normal',
+        silent: false,
+      });
+      n.on('click', () => { raiseOwnWindow(); });
+      n.show();
+    } else {
+      raiseOwnWindow();
+    }
   } else if (channel === 'dvd.detected') {
     // A disc just spun up. Pop a libnotify-backed desktop Notification.
     // The body line is the suggested title we got from the volume label;
@@ -266,6 +303,36 @@ ipcMain.handle('playbill.radio.probeTools',   forwardToController('radio.probeTo
 // directly with the dvbv5-zap TS path; YouTube routes the same way.)
 
 app.whenReady().then(() => {
+  // Headwaters tileserver responses don't ship CORS headers, and the
+  // Playbill renderer is loaded over file:// — so MapLibre's style.json /
+  // sprite / glyph / vector-tile fetches in the Explore screen would be
+  // blocked by Chromium's same-origin policy even though the certificate
+  // verifies. Inject permissive CORS headers on every response from the
+  // configured Headwaters host so the renderer can consume them. Scoped
+  // to the Headwaters host only — third-party hosts keep strict CORS.
+  try {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      const host = configuredHeadwatersHost();
+      if (!host) { callback({}); return; }
+      let target = null;
+      try { target = new URL(details.url).hostname; } catch (_) { /* malformed */ }
+      if (target !== host) { callback({}); return; }
+      const responseHeaders = { ...(details.responseHeaders || {}) };
+      // Replace (case-insensitively) so we don't end up with both 'Access-…'
+      // and 'access-…' on the same response — Chromium then ignores both.
+      const stripped = {};
+      for (const [k, v] of Object.entries(responseHeaders)) {
+        if (!/^access-control-/i.test(k)) stripped[k] = v;
+      }
+      stripped['Access-Control-Allow-Origin']      = ['*'];
+      stripped['Access-Control-Allow-Methods']     = ['GET, HEAD, OPTIONS'];
+      stripped['Access-Control-Allow-Headers']     = ['*'];
+      callback({ responseHeaders: stripped });
+    });
+  } catch (e) {
+    console.warn('[main] failed to install Headwaters CORS shim:', e && e.message);
+  }
+
   createWindow();
 
   // Application menu — invisible because we run frame:false, BUT the

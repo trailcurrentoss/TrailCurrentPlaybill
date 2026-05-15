@@ -47,24 +47,11 @@ function LocalView({ focus }) {
     path:  m.path,
   })) : D.movies.slice().reverse();
 
-  // Resolve a library item to a Playable and hand it to the controller.
-  // file:// URLs need encodeURI on the absolute path so spaces and parens
-  // in folder names ("Inception (2010)") stay legal.
+  // Resolve a library item to a Playable and hand it to the controller via
+  // the shared PLAYBACK helper. That helper also writes to the recent-
+  // playback list so the same item shows up in Continue Watching on Home.
   function playItem(item) {
-    if (!item || !item.path) return;
-    if (!window.playbill || !window.playbill.controller) return;
-    const url = 'file://' + encodeURI(item.path);
-    window.playbill.controller.command({
-      action: 'transport.play',
-      sourceId: 'local',
-      url,
-      mediaType: 'video',
-      metadata: {
-        title:    item.title,
-        subtitle: item.year ? String(item.year) : null,
-        artworkUrl: item.img || null,
-      },
-    }).catch((e) => console.warn('[local] transport.play failed:', e && e.message));
+    if (window.PLAYBACK) window.PLAYBACK.playLocal(item);
   }
 
   // Enter / Space while a library card is focused triggers playback.

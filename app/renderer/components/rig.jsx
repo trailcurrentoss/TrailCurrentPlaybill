@@ -1,23 +1,24 @@
 /* Rig View — live Headwaters telemetry mirrored onto the TV.
 
    Reads state.telemetry (populated by controller/src/handlers/telemetry.js
-   from the Headwaters MQTT broker + /api/lights). Renders a responsive
-   tile grid: location, energy, water, climate, air quality, and a per-
-   light toggle row. Layout uses CSS Grid auto-fit so it scales from a
-   1080p TV down to a small portrait panel without breaking.
+   from the Headwaters MQTT broker). Renders a responsive tile grid:
+   location, energy, water, climate, air quality, and a per-light toggle
+   row. Layout uses CSS Grid auto-fit so it scales from a 1080p TV down to
+   a small portrait panel without breaking.
 
-   Light names come from Headwaters configuration (modules/lights are
-   admin-named in the PWA); renaming a light there reflects here on the
-   next REST poll (30 s).
+   Light names + icons come from Headwaters configuration (modules/lights
+   are admin-named in the PWA); renaming a light there reflects here as
+   soon as Headwaters re-publishes its retained channel config.
 
-   Toggling a light dispatches telemetry.lights.set on the controller,
-   which issues PUT /api/lights/:id to Headwaters; the resulting MQTT
-   broadcast flows back through state, so we don't depend on an
-   optimistic-update path. */
+   Toggling a light publishes to local/lights/<id>/command. The device's
+   subsequent status broadcast (local/lights/<id>/status for PDM,
+   local/relays/<id>/status for switchback) is the only thing that updates
+   the visible state — there is no optimistic local patch. That way the
+   UI is identical whether the toggle came from Playbill, the PWA, or a
+   CAN bus button. */
 
 function RigView() {
   const [telemetry, setTelemetry] = useState(null);
-  const [busyLightId, setBusyLightId] = useState(null);
 
   useEffect(() => {
     if (!window.playbill || !window.playbill.controller) return;
@@ -38,16 +39,17 @@ function RigView() {
 
   async function toggleLight(light) {
     if (!light) return;
-    setBusyLightId(light.id);
+    // Capture the target state from current props — even if the user clicks
+    // again before MQTT echoes, we send a deterministic on/off, not a flip
+    // based on stale local state.
+    const next = light.state ? 0 : 1;
     try {
       await window.playbill.controller.command({
         action: 'telemetry.lights.set',
-        value:  { id: light.id, state: light.state ? 0 : 1 },
+        value:  { id: light.id, state: next },
       });
     } catch (e) {
       console.warn('[rig] toggle light failed:', e && e.message);
-    } finally {
-      setBusyLightId(null);
     }
   }
 
@@ -87,7 +89,6 @@ function RigView() {
         <ClimateTile   climate={t.climate} air={t.air} />
         <LightsTile
           lights={lights}
-          busyLightId={busyLightId}
           onToggle={toggleLight}
           onAllOn={() => setAllLights(1)}
           onAllOff={() => setAllLights(0)}
@@ -324,7 +325,7 @@ function ClimateTile({ climate, air }) {
 
 /* ─── Lights ───────────────────────────────────────────────────────── */
 
-function LightsTile({ lights, busyLightId, onToggle, onAllOn, onAllOff }) {
+function LightsTile({ lights, onToggle, onAllOn, onAllOff }) {
   if (!lights || lights.length === 0) {
     return (
       <RigTile title="Lights" icon="bulb-outline" span={4} accent="solar">
@@ -345,7 +346,7 @@ function LightsTile({ lights, busyLightId, onToggle, onAllOn, onAllOff }) {
           <ion-icon name="sunny-outline"></ion-icon>
           <span>All on</span>
         </button>
-        <button className="rig-bulk-btn" onClick={onAllOff} type="button" disabled={!anyOn}>
+        <button className="rig-bulk-btn" onClick={onAllOff} type="button">
           <ion-icon name="moon-outline"></ion-icon>
           <span>All off</span>
         </button>
@@ -355,7 +356,6 @@ function LightsTile({ lights, busyLightId, onToggle, onAllOn, onAllOff }) {
           <LightButton
             key={l.id}
             light={l}
-            busy={busyLightId === l.id}
             onToggle={() => onToggle(l)}
             isDefault={i === 0}
           />
@@ -365,25 +365,58 @@ function LightsTile({ lights, busyLightId, onToggle, onAllOn, onAllOff }) {
   );
 }
 
-function LightButton({ light, busy, onToggle, isDefault }) {
+function LightButton({ light, onToggle, isDefault }) {
   const on = !!light.state;
+  // Pick a sensible Ionicon from whatever the Headwaters config stores in
+  // `icon` (the PWA's icon picker writes its own names — 'lightbulb',
+  // 'power-outlet', etc.). Fall back to a bulb so an unrecognized value
+  // still shows something. Switching icons on toggle stays consistent with
+  // PWA visuals: outlined when off, filled when on.
+  const baseIcon = iconFromConfig(light.icon) || 'bulb';
+  const onIcon  = baseIcon;
+  const offIcon = baseIcon + '-outline';
+  // NOTE: we never set `disabled` on this button. A disabled element loses
+  // focus the instant the attribute flips, which strips the spatial-nav
+  // green-highlight on the remote toggle path; the user then has to press
+  // a key to recover. Toggling is cheap and idempotent — let the user
+  // re-press freely; MQTT-driven state is the only thing that updates the
+  // visible on/off label.
   return (
     <button
       type="button"
-      className={'rig-light' + (on ? ' on' : '') + (busy ? ' busy' : '')}
+      className={'rig-light' + (on ? ' on' : '')}
       onClick={onToggle}
-      disabled={busy}
       data-zone-default={isDefault ? 'true' : undefined}
       title={light.name || `Light ${light.id}`}
     >
       <span className="rig-light-glow"></span>
       <span className="rig-light-icon">
-        <ion-icon name={on ? 'bulb' : 'bulb-outline'}></ion-icon>
+        <ion-icon name={on ? onIcon : offIcon}></ion-icon>
       </span>
       <span className="rig-light-name">{light.name || `Light ${light.id}`}</span>
       <span className="rig-light-state">{on ? 'On' : 'Off'}</span>
     </button>
   );
+}
+
+// Map Headwaters' icon picker names → Ionicon base names. The PWA stores
+// short labels like 'lightbulb', 'power-outlet', 'flame'; Ionicons uses
+// different naming ('bulb', 'flash', etc.). Anything we don't recognize
+// gets a bulb fallback so the UI never renders a broken icon slot.
+function iconFromConfig(name) {
+  if (!name || typeof name !== 'string') return null;
+  const map = {
+    lightbulb:    'bulb',
+    bulb:         'bulb',
+    flame:        'flame',
+    flash:        'flash',
+    'power-outlet': 'flash',
+    fan:          'aperture',
+    water:        'water',
+    sunny:        'sunny',
+    moon:         'moon',
+  };
+  return map[name] || 'bulb';
 }
 
 Object.assign(window, { RigView });

@@ -250,7 +250,7 @@ If a `sudo ./image/build.sh` was killed (Ctrl-C, host shutdown, OOM, etc.), the 
 rm: cannot remove '/tmp/mmdebstrap.XXXXX/proc/.../...': Read-only file system
 ```
 
-This is leftover bind mounts from the killed mmdebstrap. **`build.sh` now auto-recovers** — it detects orphan dirs, lazy-unmounts every nested mount in reverse-depth order, then `rm -rf`s. Just re-run `sudo ./image/build.sh`.
+This is leftover bind mounts from the killed mmdebstrap. **`build.sh` now auto-recovers** — it detects orphan dirs, lazy-unmounts every nested mount in reverse-depth order, then `rm -rf`s. Just re-run `sudo ./image/build.sh 2>&1 | tee image/output/build.log` (always tee to a log so the next failure is analyzable without re-running the multi-hour build).
 
 If for any reason auto-recovery fails (e.g., the orphan dir was created with permissions the script can't traverse), the manual procedure is:
 

@@ -65,7 +65,10 @@ function scan({ adapter = 0, country = 'US' } = {}) {
       return;
     }
     const args = [
-      '-A', '1',                  // ATSC delivery system
+      // Delivery system comes from the frequency table file itself (the
+      // dtv-scan-tables ATSC table ships with DELIVERY_SYSTEM=ATSC entries).
+      // Don't pass `-A` here — Ubuntu Noble's dvbv5-scan rejects it as
+      // "invalid option" and fails the scan immediately.
       '-a', String(adapter),
       '-O', 'DVBv5',
       '-o', CHANNELS_CONF,

@@ -382,7 +382,7 @@ rm: cannot remove '/tmp/mmdebstrap.XXXXX/proc/.../task/.../ns/net':   Read-only 
 
 This is a killed mmdebstrap leaving its chroot with `/proc`, `/sys`, `/dev`, and various bind mounts still attached. `rm -rf` can't delete entries inside `/proc` because `procfs` is a kernel-virtual filesystem — the entries don't exist on disk. They appear because `/proc` is bind-mounted on top of an empty directory in the chroot.
 
-**`build.sh` now handles this automatically** in the pre-build cleanup section: it walks every `/tmp/mmdebstrap.*` directory, finds every nested mount via `mount | awk`, and `umount -l`s each one in reverse-depth order before the `rm -rf`. So a re-run of `sudo ./build.sh` should self-recover.
+**`build.sh` now handles this automatically** in the pre-build cleanup section: it walks every `/tmp/mmdebstrap.*` directory, finds every nested mount via `mount | awk`, and `umount -l`s each one in reverse-depth order before the `rm -rf`. So a re-run of `sudo ./image/build.sh 2>&1 | tee image/output/build.log` should self-recover (always tee to a log — a multi-hour build that fails without a captured log can't be analyzed without re-running).
 
 If you ever need to clean up by hand (e.g., the auto-recovery itself fails because the orphan dir was created with different permissions, or you want to inspect before deleting), the manual procedure is:
 

@@ -232,6 +232,31 @@ function(
             //                      have to walk to the rig with a paperclip
             "eject",
 
+            // ── Audio-CD ripping into the Playbill Music library ────────
+            // Mirrors the DVD path but for Red Book audio CDs. The watcher
+            // distinguishes audio CDs from filesystem-bearing discs by
+            // probing with cd-discid: an audio CD returns a valid TOC,
+            // a DVD or blank disc does not.
+            //
+            //   cd-discid        — installs /usr/bin/cd-discid. Computes
+            //                      the FreeDB-style disc id used to detect
+            //                      an audio CD insert (TOC-bearing discs
+            //                      only) and to seed the MusicBrainz TOC
+            //                      lookup the music handler issues to find
+            //                      album + artist + tracklist.
+            //   cdparanoia       — accurate per-sector CD audio ripper.
+            //                      Re-reads cycle-slipping sectors to
+            //                      produce bit-perfect WAVs (off-grid use
+            //                      means one shot at each disc, so accuracy
+            //                      beats speed).
+            //   flac             — encodes the cdparanoia WAVs into
+            //                      lossless FLAC at --best compression.
+            //                      mpv (already listed) plays .flac with
+            //                      no extra codec required.
+            "cd-discid",
+            "cdparanoia",
+            "flac",
+
             // ── OpenCL on Adreno (for llama.cpp GGML_OPENCL etc.) ───────
             // The ICD itself ships in radxa-firmware-qcs6490 (below). The
             // ocl-icd-libopencl1 dispatch library + clinfo come from Ubuntu.
@@ -674,7 +699,7 @@ function(
                            handbrake handbrake-cli lsdvd \
                            gstreamer1.0-plugins-ugly gstreamer1.0-tools \
                            gstreamer1.0-gl \
-                           ffmpeg lame flac libdvdread8 libdvdnav4 \
+                           ffmpeg lame flac libdvdread8t64 libdvdnav4 \
                            nodejs yt-dlp avahi-daemon libcap2-bin \
                            sox uxplay brave-browser; do
                     if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
@@ -1744,6 +1769,48 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
+            // Hook 13b: DVB tuner firmware (Si2168 / Si2158)
+            //
+            // Ubuntu Noble's linux-firmware does NOT ship the Silicon Labs
+            // Si2168 demodulator / Si2158 tuner firmware. The Hauppauge
+            // WinTV-dualHD DVB-T2/C variant uses these chips; the kernel
+            // driver fails with `firmware file '...' not found` and never
+            // creates /dev/dvb/adapterN without them.
+            //
+            // The ATSC variant (LGDT3306A + Si2157) does NOT need external
+            // firmware (in-driver register tables), but staging these blobs
+            // costs <50 KB and lets the same image serve international users
+            // with DVB-T2/C tuners.
+            //
+            // Blobs are fetched at image-build time by build.sh from the
+            // OpenELEC dvb-firmware mirror, cached, and installed here into
+            // the well-known /lib/firmware/ path the kernel firmware loader
+            // searches on hot-plug. Order: standalone, no deps on other hooks.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 13b] installing DVB tuner firmware (Si2168 / Si2158)"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                FW_SRC="$STAGING/files/dvb-firmware"
+                if [ ! -d "$FW_SRC" ]; then
+                    echo "  ERROR: $FW_SRC missing — build.sh did not stage DVB firmware" >&2
+                    exit 1
+                fi
+                mkdir -p "$1/lib/firmware"
+                installed=0
+                for fw in "$FW_SRC"/*.fw; do
+                    [ -f "$fw" ] || continue
+                    install -m 644 "$fw" "$1/lib/firmware/$(basename "$fw")"
+                    installed=$((installed+1))
+                done
+                if [ "$installed" -eq 0 ]; then
+                    echo "  ERROR: no DVB firmware blobs in $FW_SRC" >&2
+                    exit 1
+                fi
+                echo "  installed $installed DVB firmware files into /lib/firmware/"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
             // Hook 14: Mask appliance-only / problematic services
             //
             // CRITICAL: rsetup.service + config.automount must be masked, OR
@@ -2184,6 +2251,15 @@ function(
                 # Hook 8b additions
                 check   "$1" /etc/modules-load.d/q6a-audio.conf
                 check   "$1" /etc/firefox-esr/policies.json
+
+                # Hook 13b: DVB tuner firmware (Si2168 / Si2158) — not shipped
+                # by Ubuntu Noble's linux-firmware; needed for the Hauppauge
+                # WinTV-dualHD DVB-T2/C variant. ATSC variant works without.
+                for fw in dvb-demod-si2168-02.fw dvb-demod-si2168-a20-01.fw \
+                          dvb-demod-si2168-a30-01.fw dvb-demod-si2168-b40-01.fw \
+                          dvb-tuner-si2158-a20-01.fw; do
+                    check "$1" "/lib/firmware/$fw"
+                done
 
                 # Hook 8(c): gnome-shell mode points at viridian-dark stylesheet
                 # (recolors top bar + GDM login screen to match Yaru-viridian-dark

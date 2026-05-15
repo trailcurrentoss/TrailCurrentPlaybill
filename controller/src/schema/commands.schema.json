@@ -95,6 +95,17 @@
     { "$ref": "#/$defs/DvdValidateOmdbKey" },
     { "$ref": "#/$defs/DvdRefreshPosters" },
 
+    { "$ref": "#/$defs/MusicGetStatus" },
+    { "$ref": "#/$defs/MusicRefreshStatus" },
+    { "$ref": "#/$defs/MusicLookup" },
+    { "$ref": "#/$defs/MusicSearch" },
+    { "$ref": "#/$defs/MusicDismiss" },
+    { "$ref": "#/$defs/MusicStartRip" },
+    { "$ref": "#/$defs/MusicCancelRip" },
+    { "$ref": "#/$defs/MusicEject" },
+    { "$ref": "#/$defs/MusicLibraryList" },
+    { "$ref": "#/$defs/MusicRefreshArt" },
+
     { "$ref": "#/$defs/TelemetryGet" },
     { "$ref": "#/$defs/TelemetryLightsRefresh" },
     { "$ref": "#/$defs/TelemetryLightsSet" },
@@ -731,6 +742,109 @@
       "description": "Walk the on-disk library and download any missing poster .jpg files using the remote URL stored in each title's JSON sidecar. Used to backfill posters for rips made before poster-caching landed, and to retry titles where the original download failed (no internet at rip time).",
       "type": "object", "additionalProperties": false, "required": ["action"],
       "properties": { "action": { "const": "dvd.refreshPosters" } }
+    },
+
+    "MusicGetStatus": {
+      "x-class": "B",
+      "description": "Snapshot of the audio-CD slice: present?, discid, prompt, rip progress.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.getStatus" } }
+    },
+    "MusicRefreshStatus": {
+      "x-class": "B",
+      "description": "Force a CD-watcher probe right now. Mirrors dvd.refreshStatus.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.refreshStatus" } }
+    },
+    "MusicLookup": {
+      "x-class": "B",
+      "description": "MusicBrainz TOC-based lookup using the currently-loaded disc's table of contents. Returns ok:false if the disc isn't in MB (rare/promo pressings); the GUI then falls back to music.search.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.lookup" } }
+    },
+    "MusicSearch": {
+      "x-class": "B",
+      "description": "MusicBrainz text search by album + artist. Used when music.lookup returned not-found and the user types a guess.",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "music.search" },
+        "value": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "album":  { "type": "string", "minLength": 1 },
+            "artist": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "MusicDismiss": {
+      "x-class": "B",
+      "description": "User clicked 'Not now' on the music prompt. Suppresses re-prompting until the disc is ejected.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.dismiss" } }
+    },
+    "MusicStartRip": {
+      "x-class": "B",
+      "description": "Begin ripping the inserted audio CD to the Music Library. Fire-and-forget — per-track progress arrives via state.music.ripping patches.",
+      "type": "object", "additionalProperties": false, "required": ["action", "value"],
+      "properties": {
+        "action": { "const": "music.startRip" },
+        "value": {
+          "type": "object", "additionalProperties": false, "required": ["metadata"],
+          "properties": {
+            "metadata": {
+              "type": "object", "additionalProperties": true, "required": ["title", "tracks"],
+              "properties": {
+                "title":   { "type": "string", "minLength": 1 },
+                "artist":  { "type": "string" },
+                "year":    { "type": "string" },
+                "mbid":    { "type": "string" },
+                "coverArtUrl": { "type": "string" },
+                "country": { "type": "string" },
+                "barcode": { "type": "string" },
+                "tracks": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object", "additionalProperties": true,
+                    "required": ["number", "title"],
+                    "properties": {
+                      "number":     { "type": "integer", "minimum": 1 },
+                      "title":      { "type": "string" },
+                      "artist":     { "type": "string" },
+                      "durationMs": { "type": ["integer", "null"], "minimum": 0 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "MusicCancelRip": {
+      "x-class": "B",
+      "description": "SIGTERM the in-flight cdparanoia/flac. Tracks already ripped stay on disk; the library scanner surfaces them as a partial album.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.cancelRip" } }
+    },
+    "MusicEject": {
+      "x-class": "B",
+      "description": "eject(1) the optical drive. Fires after rip completion if the user opts in via the GUI.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.eject" } }
+    },
+    "MusicLibraryList": {
+      "x-class": "B",
+      "description": "Return the on-disk music library — { albums: [...] }. Scanned every call.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.libraryList" } }
+    },
+    "MusicRefreshArt": {
+      "x-class": "B",
+      "description": "Walk the on-disk music library and download any missing cover.jpg files using the remote coverArtUrl stored in each album's sidecar. Used to backfill albums that were ripped offline.",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "music.refreshArt" } }
     },
 
     "TelemetryGet": {
