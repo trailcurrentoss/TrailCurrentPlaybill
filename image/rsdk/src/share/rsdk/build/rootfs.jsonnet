@@ -2224,11 +2224,23 @@ function(
                 check   "$1" /usr/share/applications/trailcurrent-playbill.desktop
                 check   "$1" /usr/share/icons/hicolor/512x512/apps/trailcurrent-playbill.png
 
-                # Playbill controller daemon (Hook 5a)
+                # Playbill controller daemon (now installed by the
+                # trailcurrent-playbill deb in hook 5). The unit file
+                # ships in vendor space (/usr/lib/systemd/user/) but the
+                # auto-enable symlink is created by the deb postinst's
+                # `systemctl --global enable` which writes to admin space
+                # (/etc/systemd/user/default.target.wants/) per dpkg /
+                # systemd conventions for apt-installed user units.
                 check   "$1" /opt/trailcurrent-playbill/controller/src/index.js
                 check   "$1" /opt/trailcurrent-playbill/controller/node_modules
                 check   "$1" /usr/lib/systemd/user/playbill-controller.service
-                check   "$1" /usr/lib/systemd/user/default.target.wants/playbill-controller.service
+                if [ -L "$1/etc/systemd/user/default.target.wants/playbill-controller.service" ] \
+                || [ -L "$1/usr/lib/systemd/user/default.target.wants/playbill-controller.service" ]; then
+                    echo "  ✓ playbill-controller.service auto-enabled (default.target.wants symlink)"
+                else
+                    echo "  ✗ MISSING: playbill-controller auto-enable symlink under default.target.wants/" >&2
+                    FAIL=$((FAIL+1))
+                fi
                 check_x "$1" /usr/bin/node
                 check_x "$1" /usr/bin/yt-dlp                # apt fallback
                 check_x "$1" /usr/local/bin/yt-dlp          # fresh GH release (Hook 5a)

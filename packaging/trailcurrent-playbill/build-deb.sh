@@ -130,7 +130,7 @@ Priority: optional
 Architecture: arm64
 Maintainer: TrailCurrent <trailcurrentopensource@gmail.com>
 Installed-Size: ${INSTALLED_SIZE}
-Depends: trailcurrent-playbill-dkms (>= ${DKMS_MIN_VERSION}), nodejs (>= 20), libcap2-bin, dvb-tools, dtv-scan-tables, mpv, rtl-sdr, libsox-fmt-all, sox, ffmpeg, lame, flac, libdvdread8, libdvdnav4, handbrake-cli, lsdvd, cd-discid, libcdio-utils
+Depends: trailcurrent-playbill-dkms (>= ${DKMS_MIN_VERSION}), nodejs (>= 18), libcap2-bin, dvb-tools, dtv-scan-tables, mpv, rtl-sdr, libsox-fmt-all, sox, ffmpeg, lame, flac, libdvdread8, libdvdnav4, handbrake-cli, lsdvd, cd-discid, libcdio-utils
 Recommends: handbrake
 Description: TrailCurrent Playbill — in-rig entertainment center for the Q6A
  Playbill turns a TrailCurrent rig's Linux desktop into a 10-foot
@@ -168,8 +168,25 @@ case "$1" in
         # has a systemd user instance (i.e. globally-enable the unit).
         # `--global` is per-user-but-applies-to-all without needing each
         # user to be logged in.
+        #
+        # In a build chroot (mmdebstrap during image build) systemctl can
+        # still create the filesystem symlink but sometimes silently no-
+        # ops if it can't reach a running systemd. Belt-and-suspenders:
+        # always also create the symlink ourselves under
+        # /etc/systemd/user/default.target.wants/ (the canonical
+        # admin-space location for apt-installed user units). systemd
+        # accepts either /etc or /usr/lib path; /etc wins on read order
+        # if both exist.
+        SYMLINK_DIR="/etc/systemd/user/default.target.wants"
+        mkdir -p "$SYMLINK_DIR"
+        ln -sf /usr/lib/systemd/user/playbill-controller.service \
+            "$SYMLINK_DIR/playbill-controller.service"
         if command -v systemctl >/dev/null 2>&1; then
             systemctl --global enable playbill-controller.service 2>/dev/null || true
+            # daemon-reload only if systemd is actually running (avoids
+            # "Failed to connect to bus" noise in chroot).
+            [ -d /run/systemd/system ] && \
+                systemctl daemon-reload 2>/dev/null || true
         fi
         # The controller binary needs cap_net_bind_service so the onboarding
         # claim listener can bind port 80 without root. Match the image
