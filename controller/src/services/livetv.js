@@ -32,7 +32,7 @@ const { CHANNELS_CONF, RUNTIME_DIR, ensureDirs } = require('../paths');
 
 const DVB_ROOT = '/dev/dvb';
 const tuneSessions = new Map(); // adapterIdx → { proc, tsPath, channel }
-let scanProc = null; // single dvbv5-scan process (only one scan at a time)
+const scanProcs = new Set(); // every in-flight dvbv5-scan (1 per adapter)
 
 /* Poll-open the frontend device until it accepts an exclusive R/W open,
    or until timeout. After SIGTERMing dvbv5-scan the kernel needs a beat
@@ -86,16 +86,14 @@ function readFrontendName(idx) {
   return `Adapter ${idx}`;
 }
 
-/* ATSC channel scan — runs dvbv5-scan against the installed US ATSC
-   frequency table. Result is parsed and saved as DVBv5 channels.conf. */
-function scan({ adapter = 0, country = 'US' } = {}) {
+/* Private worker — spawn one dvbv5-scan against the given freqTable +
+   outputPath on the given adapter. Resolves on natural completion with
+   the raw outputPath written to disk (caller parses or merges). Rejects
+   on non-zero exit. SIGTERM/SIGKILL resolves successfully (caller-aborted)
+   so scanAuto's Promise.all doesn't throw when stopScan() kills siblings. */
+function _runScan({ adapter, freqTable, outputPath, tag = 'livetv.scan' }) {
   ensureDirs();
   return new Promise((resolve, reject) => {
-    const freqTable = locateFreqTable(country);
-    if (!freqTable) {
-      reject(new Error(`No ATSC frequency table found for ${country}. Install dvb-tools / dtv-scan-tables.`));
-      return;
-    }
     const args = [
       // Delivery system comes from the frequency table file itself (the
       // dtv-scan-tables ATSC table ships with DELIVERY_SYSTEM=ATSC entries).
@@ -104,18 +102,21 @@ function scan({ adapter = 0, country = 'US' } = {}) {
       '-a', String(adapter),
       '-v',                  // verbose — emits per-channel progress on stderr
       '-O', 'DVBv5',
-      '-o', CHANNELS_CONF,
+      '-o', outputPath,
+      // -T multiplies userspace polling caps. The LGDT3306A driver has its
+      // own ~10-15 s per-frequency lock-acquisition wait that ignores -T,
+      // so this is mostly cosmetic — the real win came from trimming the
+      // frequency table (see locateFreqTable / us-ATSC-modern-8VSB).
+      '-T', '0.3',
       freqTable,
     ];
     const proc = spawn('dvbv5-scan', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    scanProc = proc;
+    scanProcs.add(proc);
     let stderr = '';
-    // Stream stderr to the controller journal in real time so an operator
-    // running `journalctl --user -u trailcurrent-playbill-controller -f`
-    // sees scan progress (which frequency is being tried, whether it
-    // locked, etc.) instead of waiting blind for completion. Without
-    // this, dvbv5-scan looks indistinguishable from "hung" until the
-    // 1-3 minute (sometimes much longer) full pass finishes.
+    // Stream stderr to the controller journal a line at a time so an
+    // operator running `journalctl --user -u playbill-controller -f`
+    // sees real-time per-frequency lock progress. Without this, scan
+    // looks indistinguishable from "hung" for several minutes.
     let logBuf = '';
     proc.stderr.on('data', (b) => {
       const s = b.toString();
@@ -125,36 +126,125 @@ function scan({ adapter = 0, country = 'US' } = {}) {
       while ((nl = logBuf.indexOf('\n')) >= 0) {
         const line = logBuf.slice(0, nl).trimEnd();
         logBuf = logBuf.slice(nl + 1);
-        if (line) console.log('[livetv.scan]', line);
+        if (line) console.log(`[${tag} a${adapter}]`, line);
       }
     });
-    proc.on('error', (err) => { if (scanProc === proc) scanProc = null; reject(err); });
+    proc.on('error', (err) => { scanProcs.delete(proc); reject(err); });
     proc.on('close', async (code, signal) => {
-      if (scanProc === proc) scanProc = null;
-      if (logBuf) { console.log('[livetv.scan]', logBuf.trimEnd()); logBuf = ''; }
-      // Wait for the frontend device to fully release before resolving.
-      // dvbv5-scan closes its fd as part of exit, but the kernel takes
-      // ~100-500 ms before the device accepts another exclusive open.
-      // Resolving early means the renderer thinks "scan done" → fires a
-      // tune → dvbv5-zap gets EBUSY → user sees "Device or resource busy."
+      scanProcs.delete(proc);
+      if (logBuf) { console.log(`[${tag} a${adapter}]`, logBuf.trimEnd()); logBuf = ''; }
+      // Wait for the frontend to fully release before resolving so a
+      // subsequent tune doesn't see EBUSY.
       await waitForFrontendFree(adapter);
-      // SIGTERM/SIGKILL exits cleanly as a "scan aborted by user" — return
-      // whatever channels.conf has (may be empty / partial) without throwing.
-      // This lets the renderer's stopScan() path resolve naturally.
       if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-        console.log('[livetv.scan] aborted by signal', signal);
-        try { resolve(listChannels()); }
-        catch (e) { resolve([]); }
+        console.log(`[${tag} a${adapter}] aborted by signal`, signal);
+        resolve({ aborted: true, outputPath });
         return;
       }
       if (code !== 0) {
-        reject(new Error(`dvbv5-scan exited ${code}: ${stderr.slice(-400)}`));
+        reject(new Error(`dvbv5-scan(a${adapter}) exited ${code}: ${stderr.slice(-400)}`));
         return;
       }
-      try { resolve(listChannels()); }
-      catch (e) { reject(e); }
+      resolve({ aborted: false, outputPath });
     });
   });
+}
+
+/* ATSC channel scan on a single adapter. Writes the canonical
+   channels.conf. Used when the caller pinned a specific adapter. */
+function scan({ adapter = 0, country = 'US' } = {}) {
+  const freqTable = locateFreqTable(country);
+  if (!freqTable) {
+    return Promise.reject(new Error(
+      `No ATSC frequency table found for ${country}. Install dvb-tools / dtv-scan-tables.`));
+  }
+  return _runScan({ adapter, freqTable, outputPath: CHANNELS_CONF })
+    .then(() => { try { return listChannels(); } catch (e) { return []; } });
+}
+
+/* Parallel ATSC scan across every available adapter. Splits the
+   frequency table into N equal-ish parts, spawns one dvbv5-scan per
+   adapter (each on its own slice of the spectrum), then merges the
+   per-adapter result files into the canonical channels.conf.
+
+   On the Hauppauge WinTV-dualHD (two independent LGDT3306A demods on
+   one USB bridge) this roughly halves scan time. Falls through to a
+   single-adapter scan() if only one adapter exists or if any per-
+   adapter scan fails — never strands the user without a list. */
+async function scanAuto({ country = 'US' } = {}) {
+  ensureDirs();
+  const adapters = listAdapters();
+  if (!adapters.length) {
+    throw new Error('No DVB adapter present.');
+  }
+  if (adapters.length === 1) {
+    return scan({ adapter: adapters[0].index, country });
+  }
+  const freqTable = locateFreqTable(country);
+  if (!freqTable) {
+    throw new Error(`No ATSC frequency table found for ${country}.`);
+  }
+  const entries = readFreqTableEntries(freqTable);
+  if (entries.length === 0) {
+    throw new Error(`Frequency table ${freqTable} contains no [CHANNEL] entries.`);
+  }
+
+  // Interleave entries across adapters so each gets a comparable mix of
+  // VHF-high (fast lock) and high-UHF (often dead). A naive front/back
+  // split would leave one adapter stuck on the dead high-UHF tail while
+  // the other finished in 90 s.
+  const chunks = adapters.map(() => []);
+  entries.forEach((e, i) => chunks[i % adapters.length].push(e));
+
+  const RUN = RUNTIME_DIR;
+  const perAdapter = adapters.map((a, i) => {
+    const tablePath  = path.join(RUN, `scan-table-a${a.index}.conf`);
+    const outputPath = path.join(RUN, `scan-channels-a${a.index}.conf`);
+    fs.writeFileSync(tablePath, chunks[i].join(''));
+    try { fs.unlinkSync(outputPath); } catch (_) { /* fresh */ }
+    return { adapter: a.index, tablePath, outputPath };
+  });
+
+  console.log(`[livetv.scanAuto] splitting ${entries.length} freqs across ${adapters.length} adapters`);
+
+  let results;
+  try {
+    results = await Promise.all(perAdapter.map(p =>
+      _runScan({ adapter: p.adapter, freqTable: p.tablePath, outputPath: p.outputPath, tag: 'livetv.scanAuto' })
+    ));
+  } finally {
+    // Always clean up per-adapter temp tables.
+    for (const p of perAdapter) {
+      try { fs.unlinkSync(p.tablePath); } catch (_) {}
+    }
+  }
+
+  // Merge per-adapter outputs into the canonical channels.conf. If a
+  // scan was aborted (SIGTERM) its outputPath may be empty or missing;
+  // skip it gracefully. We dedupe by [SectionName] header so a station
+  // that happened to fall on the boundary frequency and was captured by
+  // both adapters lands as one entry.
+  const seen = new Set();
+  const merged = [];
+  for (const p of perAdapter) {
+    let txt = '';
+    try { txt = fs.readFileSync(p.outputPath, 'utf8'); }
+    catch (_) { continue; }
+    const blocks = txt.split(/\n(?=\[)/);
+    for (let b of blocks) {
+      const m = b.match(/^\s*\[([^\]]+)\]/);
+      if (!m) continue;
+      const name = m[1];
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (!b.endsWith('\n')) b += '\n';
+      merged.push(b);
+    }
+    try { fs.unlinkSync(p.outputPath); } catch (_) {}
+  }
+  fs.writeFileSync(CHANNELS_CONF, merged.join(''));
+  console.log(`[livetv.scanAuto] merged ${merged.length} channels into ${CHANNELS_CONF}`);
+  return listChannels();
 }
 
 /* Abort an in-progress scan. SIGTERM gives dvbv5-scan a chance to clean
@@ -166,23 +256,34 @@ function scan({ adapter = 0, country = 'US' } = {}) {
    close event fires here, the same handler upstairs has already drained
    the frontend; we just wait for the close event. */
 function stopScan() {
-  if (!scanProc) return Promise.resolve({ ok: true, wasRunning: false });
-  const proc = scanProc;
-  return new Promise((resolve) => {
+  if (scanProcs.size === 0) return Promise.resolve({ ok: true, wasRunning: false });
+  // Take a snapshot — _runScan's close handler removes entries from the
+  // set asynchronously, and we want to await every single one.
+  const procs = [...scanProcs];
+  return Promise.all(procs.map((proc) => new Promise((resolve) => {
     const onExit = async () => {
-      // Defense-in-depth: also wait here, in case scan()'s close handler
-      // hasn't finished its waitForFrontendFree() yet.
+      // Defense-in-depth: also wait here, in case _runScan's close
+      // handler hasn't finished its waitForFrontendFree() yet.
       await waitForFrontendFree(0);
-      resolve({ ok: true, wasRunning: true });
+      resolve();
     };
     proc.once('close', onExit);
     try { proc.kill('SIGTERM'); } catch (_) {}
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch (_) {} }, 1000);
-  });
+  }))).then(() => ({ ok: true, wasRunning: true }));
 }
 
 function locateFreqTable(country) {
+  // Prefer our bundled trimmed US ATSC table — modern post-2017 plan,
+  // 30 entries (RF ch 7-36) vs the upstream dtv-scan-tables 68-entry
+  // table. The LGDT3306A driver has an irreducible ~10-15 s per-
+  // frequency lock-acquisition wait, so cutting the table in half cuts
+  // scan time roughly in half (with no real-world impact — we omit
+  // VHF-low and the 614-698 MHz post-auction-cleared band where no
+  // US ATSC stations broadcast).
+  const bundled = path.join(__dirname, '..', '..', 'data', 'us-ATSC-modern-8VSB');
   const candidates = [
+    bundled,
     `/usr/share/dvb/atsc/us-Center-frequencies-8VSB`,
     `/usr/share/dvb/atsc/us-ATSC-center-frequencies-8VSB`,
     `/usr/share/dvb-tools/atsc/us-Center-frequencies-8VSB`,
@@ -192,6 +293,32 @@ function locateFreqTable(country) {
     // Future: CA, MX. Same 8VSB table works in practice for OTA in those markets.
   }
   return candidates.find(p => fs.existsSync(p)) || null;
+}
+
+/* Read an 8VSB frequency table file and return one string per [CHANNEL]
+   entry (full block, header+body, ready to concat back into a child
+   table). Used by scanAuto() to split work across adapters. */
+function readFreqTableEntries(filePath) {
+  const txt = fs.readFileSync(filePath, 'utf8');
+  const entries = [];
+  let cur = null;
+  for (const rawLine of txt.split(/\r?\n/)) {
+    const line = rawLine;
+    const trimmed = line.trim();
+    if (/^\[CHANNEL\]/i.test(trimmed)) {
+      if (cur) entries.push(cur);
+      cur = line + '\n';
+      continue;
+    }
+    if (trimmed.startsWith('#') || trimmed === '') {
+      // Drop comments/blanks — keep entries clean for re-emission.
+      if (cur) cur += line + '\n';
+      continue;
+    }
+    if (cur) cur += line + '\n';
+  }
+  if (cur) entries.push(cur);
+  return entries;
 }
 
 /* Parse DVBv5 channels.conf into a structured list.
@@ -254,21 +381,65 @@ function tune({ adapter = 0, channel }) {
     let stderr = '';
     let lockSeen = false;
     let resolved = false;
+    const spawnedAt = Date.now();
+    console.log(`[livetv.tune] spawning dvbv5-zap for "${channel}" on adapter ${adapter}`);
+    // Stream stderr to the journal a line at a time so an operator can see
+    // lock progression (Carrier(0x03)... Lock(0x1f)) without needing to
+    // strace the running process. Mirrors the scan() pattern. Without this
+    // a slow lock looks like "the controller is hung" — until the IPC
+    // timeout fires, the user gets no feedback at all.
+    let logBuf = '';
     proc.stderr.on('data', (b) => {
       const s = b.toString();
       stderr += s;
+      logBuf += s;
+      let nl;
+      while ((nl = logBuf.indexOf('\n')) >= 0) {
+        const line = logBuf.slice(0, nl).trimEnd();
+        logBuf = logBuf.slice(nl + 1);
+        if (line) console.log('[livetv.tune]', line);
+      }
       // dvbv5-zap prints "Lock   (0x1f)" when the frontend has signal.
       if (!lockSeen && /Lock\s*\(/i.test(s)) {
         lockSeen = true;
-        // Wait one short beat for the file to start growing, then resolve.
-        setTimeout(() => {
-          if (!resolved) { resolved = true; resolve({ tsPath, channel, adapter }); }
-        }, 250);
+        const lockMs = Date.now() - spawnedAt;
+        console.log(`[livetv.tune] lock acquired for "${channel}" after ${lockMs} ms`);
+        // After Lock, wait until the TS file has enough data for mpv to
+        // find a PAT/PMT and at least one keyframe — otherwise mpv opens
+        // a near-empty file, can't parse a program, and either renders
+        // nothing or exits with "mpv exited 2 before becoming ready".
+        // 256 KB of ATSC TS (~330 ms at 6 Mbps) reliably contains the
+        // initial PAT and at least one PMT pass. Hard ceiling at 2 s
+        // even if the file isn't growing as fast as expected so a
+        // marginal signal can't hold the renderer indefinitely.
+        const MIN_BYTES = 256 * 1024;
+        const MAX_WAIT_MS = 2000;
+        const waitStart = Date.now();
+        const pollFile = () => {
+          if (resolved) return;
+          let size = 0;
+          try { size = fs.statSync(tsPath).size; } catch (_) { size = 0; }
+          if (size >= MIN_BYTES) {
+            console.log(`[livetv.tune] TS file has ${size} bytes — resolving`);
+            resolved = true;
+            resolve({ tsPath, channel, adapter });
+            return;
+          }
+          if (Date.now() - waitStart >= MAX_WAIT_MS) {
+            console.warn(`[livetv.tune] TS only ${size} bytes after ${MAX_WAIT_MS} ms — resolving anyway`);
+            resolved = true;
+            resolve({ tsPath, channel, adapter });
+            return;
+          }
+          setTimeout(pollFile, 80);
+        };
+        setTimeout(pollFile, 80);
       }
     });
     proc.on('error', reject);
     proc.on('close', (code) => {
       tuneSessions.delete(adapter);
+      if (logBuf) { console.log('[livetv.tune]', logBuf.trimEnd()); logBuf = ''; }
       if (!resolved) {
         resolved = true;
         reject(new Error(`dvbv5-zap exited ${code} before lock: ${stderr.slice(-400)}`));
@@ -294,6 +465,58 @@ function stopAll() {
   return Promise.all([...tuneSessions.keys()].map((a) => stopTune({ adapter: a })));
 }
 
+/* tuneAuto — iterate every adapter the Hauppauge WinTV-dualHD exposes
+   (two independent LGDT3306A demods sharing a single USB bridge), trying
+   each with a short per-adapter timeout, and return the first one that
+   achieves Lock. Use when the caller doesn't care which physical demod
+   ends up backing the session — i.e. always in the single-output Playbill
+   UI.
+
+   Field-observed motivation: one of our test units has a flaky LGDT3306A
+   on adapter 0 — it reports Carrier(0x03) at ~-82 dBm but never advances
+   to VITERBI/SYNC/LOCK, while adapter 1 on the SAME antenna locks
+   instantly at -65 dBm / 21 dB C/N. Without failover the renderer is
+   stuck pointing at the dead demod, so every tune times out and the
+   occasional fragile lock leaves mpv showing nothing because the TS is
+   corrupt. With failover we try adapter 0 briefly, fall over to adapter 1
+   when it doesn't lock fast, and the user sees a working channel.
+
+   perAdapterTimeoutMs defaults to 15 s — generous enough that a healthy
+   demod with a marginal antenna will still acquire lock, tight enough
+   that a dead demod doesn't burn the user's whole patience budget. */
+async function tuneAuto({ channel, perAdapterTimeoutMs = 15000 } = {}) {
+  if (!channel) throw new Error('channel name required');
+  const adapters = listAdapters();
+  if (!adapters.length) throw new Error('no DVB adapter present');
+  let lastErr = null;
+  for (const a of adapters) {
+    console.log(`[livetv.tuneAuto] trying adapter ${a.index} for "${channel}"`);
+    let timer;
+    const timeoutPromise = new Promise((_, rej) => {
+      timer = setTimeout(() => rej(new Error(
+        `adapter ${a.index} did not lock within ${perAdapterTimeoutMs} ms`)), perAdapterTimeoutMs);
+    });
+    try {
+      const result = await Promise.race([
+        tune({ adapter: a.index, channel }),
+        timeoutPromise,
+      ]);
+      clearTimeout(timer);
+      console.log(`[livetv.tuneAuto] adapter ${a.index} locked for "${channel}"`);
+      return result;
+    } catch (e) {
+      clearTimeout(timer);
+      lastErr = e;
+      console.warn(`[livetv.tuneAuto] adapter ${a.index} failed: ${e.message}`);
+      // Ensure this adapter's dvbv5-zap is killed so the next iteration
+      // (or any later tune call) doesn't see EBUSY. stopTune is async
+      // and waits for the frontend to release.
+      try { await stopTune({ adapter: a.index }); } catch (_) { /* noop */ }
+    }
+  }
+  throw lastErr || new Error('no adapter locked');
+}
+
 /* Capability probe — does the host even have DVB userspace tools installed?
    Helps the UI distinguish "no hardware connected" from "tools missing". */
 function probeTools() {
@@ -311,9 +534,11 @@ function probeTools() {
 module.exports = {
   listAdapters,
   scan,
+  scanAuto,
   stopScan,
   listChannels,
   tune,
+  tuneAuto,
   stopTune,
   stopAll,
   probeTools,

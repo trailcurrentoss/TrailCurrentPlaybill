@@ -22,10 +22,17 @@
         if drift re-exceeds tolerance after the cooldown.
 
    Permissions:
-     The trailcurrent user has NOPASSWD sudo (rootfs.jsonnet hook 2c).
-     We `sudo -n timedatectl …` accordingly. If sudo refuses for any
-     reason (e.g. dev environment with a different sudoers) we log and
-     keep running — clock discipline is non-fatal. */
+     This handler is intentionally NOT registered in index.js — see the
+     comment block there. It remains here for the day GNSS time-sync is
+     wired back in.
+
+     If/when it IS re-enabled, sudo is NOT passwordless on the production
+     image (was removed for security — well-known default password + open
+     sudo = trivial privesc). A narrow sudoers drop-in for the
+     trailcurrent user limited to `/usr/bin/timedatectl set-time` and
+     `set-ntp` would be the right way to grant the two specific commands
+     without re-opening sudo wholesale. Today this code's `sudo -n …`
+     calls will fail at runtime — that's fine, the handler isn't loaded. */
 
 'use strict';
 

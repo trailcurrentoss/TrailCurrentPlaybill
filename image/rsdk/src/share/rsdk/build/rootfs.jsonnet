@@ -445,9 +445,12 @@ function(
             // ════════════════════════════════════════════════════════════
             // Hook 3: Default user `trailcurrent` (password: trailcurrent)
             //
-            // The user logs into GNOME with this account. Passwordless sudo
-            // lets the user run the standard "Software Updater" GUI without
-            // a sudo prompt loop.
+            // The user logs into GNOME with this account. Sudo IS gated by
+            // password — there is intentionally NO NOPASSWD drop-in. The
+            // well-known default password (`trailcurrent`) plus open sudo
+            // would have made any shell access (SSH, console, escaped
+            // browser sandbox) trivially-rootable. The "Software Updater"
+            // GUI prompts via polkit, which is fine.
             //
             // PRIOR BUG (force-password-change vs gnome-keyring): we used to
             // call `chage -d 0 trailcurrent` here so GDM forced a password
@@ -493,9 +496,11 @@ function(
                 # See the comment block above the hook.
                 chroot "$1" passwd -l root || true
 
-                echo "trailcurrent ALL=(ALL) NOPASSWD: ALL" \
-                    > "$1/etc/sudoers.d/010_trailcurrent-nopasswd"
-                chmod 440 "$1/etc/sudoers.d/010_trailcurrent-nopasswd"
+                # Defensive: a previous revision of this hook shipped a
+                # NOPASSWD drop-in. If an in-place upgrade dropped a fresh
+                # rootfs over an older one (or the file was hand-added
+                # during debugging), wipe it so sudo always prompts.
+                rm -f "$1/etc/sudoers.d/010_trailcurrent-nopasswd"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -2542,12 +2547,15 @@ function(
                     FAIL=$((FAIL+1))
                 fi
 
-                # NOPASSWD sudoers drop-in
+                # Security: ensure NO passwordless-sudo drop-in is present.
+                # Hook 3 used to create one; we removed it because the
+                # default password is well-known and NOPASSWD ALL turned any
+                # shell access into trivial root.
                 if [ -f "$1/etc/sudoers.d/010_trailcurrent-nopasswd" ]; then
-                    echo "  ✓ sudoers NOPASSWD drop-in present"
-                else
-                    echo "  ✗ sudoers NOPASSWD drop-in missing"
+                    echo "  ✗ /etc/sudoers.d/010_trailcurrent-nopasswd present — image is insecure"
                     FAIL=$((FAIL+1))
+                else
+                    echo "  ✓ no NOPASSWD sudoers drop-in (sudo will prompt)"
                 fi
 
                 # DT overlays staged + referenced by loader entry

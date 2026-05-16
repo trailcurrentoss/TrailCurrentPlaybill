@@ -1,0 +1,181 @@
+# US ATSC 8VSB center-frequency table — modern post-2017 plan
+#
+# Trimmed subset of the upstream dtv-scan-tables file
+# (us-ATSC-center-frequencies-8VSB / us-Center-frequencies-8VSB).
+#
+# Removed:
+#   * VHF-low: RF channels 2-6 (57-87 MHz). Almost no US digital
+#     ATSC stations operate here — the digital transition mostly
+#     vacated them, and the LGDT3306A demod takes ~10-15 s per
+#     dead frequency in the kernel driver. Scanning these wastes
+#     ~1.5 minutes per pass for essentially zero hit rate.
+#   * Cleared spectrum: RF channels 38-51 (614-698 MHz). Vacated
+#     by the 2017 FCC incentive auction; the band is now licensed
+#     to mobile carriers (T-Mobile et al). Guaranteed no ATSC.
+#   * 700 MHz wireless / channels > 51: cleared decades ago.
+#
+# Kept (30 entries):
+#   * VHF-high: RF channels 7-13  (174-216 MHz)
+#   * UHF:      RF channels 14-36 (470-608 MHz, current US ATSC max)
+#
+# Service ID 37 is reserved for radio astronomy and never carries
+# ATSC, so it's not in this list either.
+#
+# Net effect: dvbv5-scan walks 30 frequencies instead of 68. With
+# the LGDT3306A's ~10-15 s per-frequency lock-acquisition driver
+# wait (irreducible from userspace — dvbv5-scan's -T multiplier
+# can't shorten it), this halves the scan time from ~17 min to
+# ~7-8 min. Pair with parallel scanning across both Hauppauge
+# WinTV-dualHD tuners to halve again.
+
+# VHF-high — RF channels 7-13
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 177028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 183028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 189028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 195028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 201028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 207028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 213028615
+	MODULATION = VSB/8
+
+# UHF — RF channels 14-36 (post-auction US ATSC range)
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 473028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 479028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 485028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 491028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 497028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 503028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 509028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 515028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 521028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 527028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 533028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 539028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 545028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 551028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 557028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 563028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 569028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 575028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 581028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 587028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 593028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 599028615
+	MODULATION = VSB/8
+
+[CHANNEL]
+	DELIVERY_SYSTEM = ATSC
+	FREQUENCY = 605028615
+	MODULATION = VSB/8

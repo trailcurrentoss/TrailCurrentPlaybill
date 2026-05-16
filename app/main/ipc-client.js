@@ -43,16 +43,27 @@ const COMMAND_TIMEOUT_MS   = 10000;
 // catch a genuinely-stuck controller; ballooning every action's timeout
 // to 5 min would defeat that.
 const PER_ACTION_TIMEOUT_MS = {
-  'livetv.scan':  5 * 60 * 1000,
+  // 15 min: dvbv5-scan with -T 0.3 normally finishes a US ATSC sweep in
+  // ~5-6 min, but the unmodified ceiling we want to tolerate is the
+  // default (no -T) ~17 min plus headroom for marginal signal retries.
+  'livetv.scan':  15 * 60 * 1000,
   'radio.scan':   3 * 60 * 1000,
-  // dvbv5-zap with the LGDT3306A demod can take 8-12 s to acquire lock on
-  // marginal ATSC signals (the controller's tune() resolves once "Lock"
-  // appears in dvbv5-zap stderr). At the default 10 s we raced the lock
-  // and the renderer rejected the tune promise WHILE the controller was
-  // still mid-resolve — leaving an orphaned dvbv5-zap holding the
-  // frontend and a confusing "Tuned but nothing plays" state. 30 s gives
-  // plenty of headroom; failed locks bail in ~5-8 s on their own anyway.
-  'livetv.tune':  30 * 1000,
+  // dvbv5-zap with the LGDT3306A demod can take 60-90 s to acquire lock
+  // on a marginal ATSC signal (the controller's tune() resolves once
+  // "Lock" appears in dvbv5-zap stderr). Field observation on an indoor
+  // antenna pulling -93 dBm: cold-boot first tune locked at ~70 s. At
+  // the prior 30 s cap the renderer rejected the tune promise while the
+  // controller was still mid-resolve — leaving a working dvbv5-zap
+  // recording into tuner0.ts but mpv never started, so state.livetv
+  // flipped to tuned:true with state.player:{} and the user saw
+  // "controller command timed out: livetv.tune". 90 s covers the worst
+  // case we've observed; failed locks bail much sooner.
+  //
+  // Also see: live.jsx watch() has a state-watcher fallback that fires
+  // transport.play if the IPC times out but state.livetv.tuned arrives
+  // afterward, so this timeout is the primary safety net, not the only
+  // one.
+  'livetv.tune':  90 * 1000,
 };
 
 class ControllerClient extends EventEmitter {

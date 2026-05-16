@@ -46,7 +46,14 @@ function register({ bus, state }) {
     try { await radio.stop(); state.patch({ radio: null }); }
     catch (e) { console.warn('[livetv.tune] radio.stop failed:', e.message); }
 
-    const result = await livetv.tune({ adapter, channel });
+    // If the caller didn't pin a specific adapter, iterate through
+    // adapters and use whichever locks first. The dualHD has two
+    // independent demods; on some units adapter 0 is flaky while
+    // adapter 1 locks instantly — see services/livetv.js tuneAuto().
+    const isAuto = adapter == null || adapter === 'auto';
+    const result = isAuto
+      ? await livetv.tuneAuto({ channel })
+      : await livetv.tune({ adapter, channel });
     setLivetvState({
       tuned:       true,
       adapter:     result.adapter,
@@ -60,7 +67,11 @@ function register({ bus, state }) {
 
   bus.register('livetv.stopTune', async (cmd) => {
     const v = cmd.value || cmd;
-    await livetv.stopTune({ adapter: v.adapter });
+    // No-adapter stop = stop everything. tuneAuto may have landed on
+    // either adapter, and the renderer no longer tracks which one, so
+    // "stop whatever is tuned" is the right semantics.
+    if (v.adapter == null) await livetv.stopAll();
+    else                   await livetv.stopTune({ adapter: v.adapter });
     setLivetvState({ tuned: false, tsPath: null });
     if (state.get().source === 'livetv') state.patch({ source: null });
     return { ok: true };
@@ -68,9 +79,25 @@ function register({ bus, state }) {
 
   bus.register('livetv.scan', async (cmd) => {
     const v = cmd.value || cmd || {};
-    setLivetvState({ scanning: true, scanAdapter: v.adapter ?? 0 });
+    // dvbv5-scan needs exclusive access to the frontend. If the user
+    // hit "Rescan" while a channel was playing, the active dvbv5-zap
+    // (and mpv reading its TS file) are still holding adapter 0 — the
+    // scan would fail instantly with "Device or resource busy while
+    // opening /dev/dvb/adapter0/frontend0" before printing anything
+    // useful. Stop mpv + every tune session first.
+    try { await player.stop(); state.patch({ nowPlaying: null }); }
+    catch (e) { console.warn('[livetv.scan] player.stop failed:', e.message); }
+    try { await livetv.stopAll(); }
+    catch (e) { console.warn('[livetv.scan] livetv.stopAll failed:', e.message); }
+    setLivetvState({ scanning: true, tuned: false, tsPath: null, scanAdapter: v.adapter ?? null });
+    if (state.get().source === 'livetv') state.patch({ source: null });
+    // Auto-mode (no adapter pinned) → fan the scan across every
+    // available adapter for ~2× speedup on the dual-tuner WinTV-dualHD.
+    const isAuto = v.adapter == null || v.adapter === 'auto';
     try {
-      const channels = await livetv.scan(v);
+      const channels = isAuto
+        ? await livetv.scanAuto({ country: v.country })
+        : await livetv.scan(v);
       setLivetvState({
         scanning:   false,
         lastScan:   { completedAt: Date.now(), channelCount: channels.length },
