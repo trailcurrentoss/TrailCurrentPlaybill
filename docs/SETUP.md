@@ -270,13 +270,13 @@ The standard "wipe and reflash" workflow assumes the board is disposable. If you
 
 ```bash
 # Back up /home/trailcurrent
-ssh trailcurrent@trailcurrent-playbill.local 'tar czf - /home/trailcurrent' > home-backup.tar.gz
+ssh trailcurrent@playbill.local 'tar czf - /home/trailcurrent' > home-backup.tar.gz
 ```
 
 After reflashing, restore:
 
 ```bash
-ssh trailcurrent@trailcurrent-playbill.local 'tar xzf - -C /' < home-backup.tar.gz
+ssh trailcurrent@playbill.local 'tar xzf - -C /' < home-backup.tar.gz
 ```
 
 There is no current OTA pipeline — kernel + mesa + linux-firmware updates require a full image rebuild and reflash. That changes in Stage 3+ when we borrow Headwaters' `deployment-watcher` pattern.

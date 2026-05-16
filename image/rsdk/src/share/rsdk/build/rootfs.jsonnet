@@ -59,7 +59,7 @@ function(
         mode:          mode,
         target:        rootfs,
         variant:       variant,
-        hostname:      "trailcurrent-playbill",
+        hostname:      "playbill",
 
         // NOTE on packages+: this list is the *intended* desktop image
         // contents, but mmdebstrap's `--include` mechanism silently rolls
@@ -332,14 +332,13 @@ function(
 
             // ── Browser ─────────────────────────────────────────────────
             // Ubuntu's `firefox` package is a transitional package that pulls
-            // in Firefox via snap. snapd in our image is incomplete (we don't
-            // use snaps for anything else), so the snap install fails silently
-            // and we end up with /usr/bin/firefox as a wrapper that errors
-            // out with "xdg-settings: not found / libpxbackend missing" at
-            // launch. Drop the transitional shim and install Firefox ESR
-            // from Ubuntu universe (a real .deb, no snap dependency).
-            //
-            // The snap-shim is removed by hook 3a below; firefox-esr is a
+            // in Firefox via snap. We install snapd in hook 3a so user-driven
+            // `snap install <app>` works post-flash, but Firefox specifically
+            // is shipped as Firefox-ESR from universe (a real .deb): the snap
+            // version is slow to first-launch, ~200MB heavier on /, and its
+            // .desktop file shows up under a generic "Firefox" name rather
+            // than tracking our default-apps wiring. Hook 4a removes the
+            // snap-shim transitional `firefox` package; firefox-esr is the
             // real install here.
             "firefox-esr",
 
@@ -395,7 +394,7 @@ function(
             // ════════════════════════════════════════════════════════════
             // Hook 0: rsdk standard prologue (hostname, fingerprint, initramfs)
             // ════════════════════════════════════════════════════════════
-            'echo "127.0.1.1\ttrailcurrent-playbill" >> "$1/etc/hosts"',
+            'echo "127.0.1.1\tplaybill" >> "$1/etc/hosts"',
             'cp "%(output_dir)s/config.yaml" "$1/etc/rsdk/"' % {output_dir: output_dir},
             'echo "FINGERPRINT_VERSION=\'2\'" > "$1/etc/radxa_image_fingerprint"',
             'echo "RSDK_BUILD_DATE=\'$(date -R)\'" >> "$1/etc/radxa_image_fingerprint"',
@@ -424,9 +423,9 @@ function(
             |||
                 set -e
                 echo "[hook 1] hostname"
-                echo "trailcurrent-playbill" > "$1/etc/hostname"
-                grep -q "127.0.1.1.*trailcurrent-playbill" "$1/etc/hosts" || \
-                    echo "127.0.1.1   trailcurrent-playbill" >> "$1/etc/hosts"
+                echo "playbill" > "$1/etc/hostname"
+                grep -q "127.0.1.1.*playbill" "$1/etc/hosts" || \
+                    echo "127.0.1.1   playbill" >> "$1/etc/hosts"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -650,7 +649,8 @@ function(
                         libcap2-bin \
                         sox \
                         uxplay \
-                        brave-browser
+                        brave-browser \
+                        snapd
                 # Note on yt-dlp: apt's package can lag YouTube's extractor
                 # changes by months. Hook 5a installs a fresh release blob
                 # (fetched by build.sh) to /usr/local/bin/yt-dlp; that path
@@ -687,6 +687,34 @@ function(
                 # stayed black; installing gstreamer1.0-gl + switching to
                 # explicit `-vs glimagesink` fixed it.
                 #
+                # Note on snapd: shipped so the user can `snap install <app>`
+                # post-flash (codium, freecad, kdenlive, etc. — apt PPAs for
+                # those are largely amd64-only). The snapd deb installs:
+                #   /usr/lib/environment.d/990-snapd.conf
+                #     → systemd's user-environment-d generator reads this at
+                #       systemd --user startup and adds /var/lib/snapd/desktop
+                #       to XDG_DATA_DIRS, making snap apps' .desktop files
+                #       visible in the GNOME launcher.
+                #   /etc/profile.d/apps-bin-path.sh → adds /snap/bin to $PATH
+                #     (login shells only — Wayland GDM doesn't source this,
+                #     but $PATH for /snap/bin is also set via /etc/environment
+                #     already by an unrelated upstream change).
+                # Because snapd is installed BEFORE GDM ever starts a session,
+                # the env-d file is in place from the first boot and snap apps
+                # appear in the launcher with no further intervention.
+                #
+                # Post-install snapd on a hand-modified board is a different
+                # animal: the user must do a full clean session restart
+                # (`loginctl terminate-user $USER && systemctl stop gdm &&
+                # systemctl start gdm`) — a simple logout/login can leave a
+                # stale session attached to a duplicate dbus-daemon and
+                # wedge gnome-shell. See feedback memory for the recipe.
+                #
+                # We deliberately do NOT pre-seed any snaps in the image.
+                # snapd.seeded.service therefore no-ops on every boot; it's
+                # left unmasked (see hook 14) so the user's first
+                # `snap install` works without manual `systemctl unmask`.
+                #
                 # Note on sox: per-band loudness trim for the radio pipeline.
                 # rtl_fm has no audio-level control and aplay is a pass-through;
                 # without sox in the middle, FM stations land ~8 dB hotter than
@@ -721,7 +749,7 @@ function(
                            gstreamer1.0-gl \
                            ffmpeg lame flac libdvdread8t64 libdvdnav4 \
                            nodejs yt-dlp avahi-daemon libcap2-bin \
-                           sox uxplay brave-browser; do
+                           sox uxplay brave-browser snapd; do
                     if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
                         MISSING="$MISSING $pkg"
                     fi
@@ -1861,8 +1889,13 @@ function(
                       cloud-init-network.service \
                       multipathd.service \
                       multipathd.socket \
-                      snapd.seeded.service \
                       systemd-time-wait-sync.service"
+                # snapd.seeded.service is intentionally NOT masked. We ship
+                # snapd (see hook 3a) without pre-seeded snaps, so the unit
+                # no-ops on boot. Masking it would force the user to manually
+                # `systemctl unmask snapd.seeded.service` before their first
+                # `snap install <app>` — a footgun for a service that costs
+                # nothing to leave running.
                 for svc in $MASK; do
                     chroot "$1" systemctl mask "$svc" 2>/dev/null || true
                 done

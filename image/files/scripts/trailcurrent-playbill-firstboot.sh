@@ -23,7 +23,7 @@ set -euo pipefail
 
 SENTINEL_DIR=/var/lib/trailcurrent-playbill
 SENTINEL=${SENTINEL_DIR}/.firstboot-done
-HOSTNAME=trailcurrent-playbill
+HOSTNAME=playbill
 
 log() { echo "[playbill-firstboot] $*"; }
 

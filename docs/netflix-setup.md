@@ -50,7 +50,7 @@ Kick the browser off via SSH, with the window appearing on the board's
 display (you still walk over to click the info-bar):
 
 ```bash
-ssh trailcurrent@trailcurrent-playbill.local \
+ssh trailcurrent@playbill.local \
   'WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 \
    nohup brave-browser \
      --user-data-dir="$HOME/.config/trailcurrent-playbill/sources/netflix/profile" \
@@ -85,7 +85,7 @@ The Brave window appears on the board's physical display.
    kiosk to confirm:
 
    ```bash
-   ssh trailcurrent@trailcurrent-playbill.local 'node -e "
+   ssh trailcurrent@playbill.local 'node -e "
    const net = require(\"net\");
    const s = net.createConnection(\"/run/user/1000/playbill-controller.sock\");
    s.on(\"data\", (c) => { console.log(c.toString().trim()); s.end(); });
