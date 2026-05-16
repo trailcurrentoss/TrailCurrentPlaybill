@@ -354,6 +354,8 @@ function CdMetadataSearchForm({ form, onChange }) {
           onChange={(e) => set('album', e.target.value)}
           autoFocus
           placeholder="Kind of Blue"
+          data-osk="text"
+          data-osk-title="Album title"
         />
       </label>
       <label>
@@ -363,6 +365,8 @@ function CdMetadataSearchForm({ form, onChange }) {
           value={form.artist}
           onChange={(e) => set('artist', e.target.value)}
           placeholder="Miles Davis"
+          data-osk="text"
+          data-osk-title="Artist"
         />
       </label>
     </div>

@@ -160,7 +160,8 @@ function ConnectionForm({ initial, onSave, busy }) {
         <label style={labelStyle}>Username</label>
         <input style={inputStyle(!!fieldErrs.username)} type="text" placeholder="rig MQTT username"
                value={username} onChange={(e) => setUsername(e.target.value)}
-               autoComplete="username" />
+               autoComplete="username"
+               data-osk="text" data-osk-title="MQTT username" />
         <FieldError>{fieldErrs.username}</FieldError>
       </div>
       <div>
@@ -168,7 +169,8 @@ function ConnectionForm({ initial, onSave, busy }) {
         <input style={inputStyle(!!fieldErrs.password)} type="password"
                placeholder={initial ? '••••••••' : 'rig MQTT password'}
                value={password} onChange={(e) => setPassword(e.target.value)}
-               autoComplete="current-password" />
+               autoComplete="current-password"
+               data-osk="text" data-osk-title="MQTT password" />
         <FieldError>{fieldErrs.password}</FieldError>
       </div>
       <div>
@@ -489,7 +491,8 @@ function HeadwatersScreen({ ctrlState }) {
                    type="password"
                    placeholder={apiKeySet ? '••••••••' : 'rv_...'}
                    value={apiKey} onChange={(e) => { setApiKey(e.target.value); setApiKeyFieldErr(null); }}
-                   autoComplete="off" spellCheck="false" />
+                   autoComplete="off" spellCheck="false"
+                   data-osk="text" data-osk-title="Headwaters API key" />
             <FieldError>{apiKeyFieldErr}</FieldError>
           </div>
           <div style={{display:'flex', gap:12}}>
@@ -547,7 +550,8 @@ function DeviceScreen({ ctrlState }) {
           <input type="text" value={name} onChange={(e) => setName(e.target.value)}
                  style={{width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
                           border:'1px solid rgba(255,255,255,0.1)', borderRadius:8, color:'#fff',
-                          font:'14px var(--font-sans)'}} />
+                          font:'14px var(--font-sans)'}}
+                 data-osk="text" data-osk-title="Device name" />
         </div>
         <div>
           <label style={{display:'block', fontSize:12, letterSpacing:1, textTransform:'uppercase',
@@ -930,7 +934,8 @@ function LibraryScreen({ ctrlState }) {
                    type="password"
                    placeholder={omdbKeySet ? '••••••••' : '8-character hex key'}
                    value={key} onChange={(e) => { setKey(e.target.value); setFieldErr(null); }}
-                   autoComplete="off" spellCheck="false" />
+                   autoComplete="off" spellCheck="false"
+                   data-osk="text" data-osk-title="OMDb API key" />
             <FieldError>{fieldErr}</FieldError>
           </div>
           <div style={{display:'flex', gap:12}}>

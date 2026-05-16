@@ -153,6 +153,9 @@ function YoutubeView() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             disabled={searching}
+            data-osk="text"
+            data-osk-submit
+            data-osk-title="Search YouTube"
           />
           <button type="submit" className="tv-btn primary" disabled={searching || !query.trim()}>
             {searching ? 'Searching…' : 'Search'}

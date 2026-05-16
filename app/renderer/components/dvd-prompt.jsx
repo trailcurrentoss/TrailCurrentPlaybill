@@ -312,11 +312,13 @@ function DvdMetadataForm({ form, onChange }) {
     <div className="dvd-prompt-form">
       <label>
         Title
-        <input type="text" value={form.title} onChange={(e) => set('title', e.target.value)} autoFocus />
+        <input type="text" value={form.title} onChange={(e) => set('title', e.target.value)} autoFocus
+               data-osk="text" data-osk-title="Movie or show title" />
       </label>
       <label>
         Year
-        <input type="text" value={form.year} onChange={(e) => set('year', e.target.value)} placeholder="2010" />
+        <input type="text" value={form.year} onChange={(e) => set('year', e.target.value)} placeholder="2010"
+               data-osk="numeric" data-osk-title="Release year" />
       </label>
       <label>
         Type
@@ -329,15 +331,18 @@ function DvdMetadataForm({ form, onChange }) {
         <>
           <label>
             Show
-            <input type="text" value={form.show} onChange={(e) => set('show', e.target.value)} />
+            <input type="text" value={form.show} onChange={(e) => set('show', e.target.value)}
+                   data-osk="text" data-osk-title="Show name" />
           </label>
           <label>
             Season
-            <input type="number" min="1" value={form.season} onChange={(e) => set('season', e.target.value)} />
+            <input type="number" min="1" value={form.season} onChange={(e) => set('season', e.target.value)}
+                   data-osk="numeric" data-osk-title="Season number" />
           </label>
           <label>
             Episode
-            <input type="number" min="1" value={form.episode} onChange={(e) => set('episode', e.target.value)} />
+            <input type="number" min="1" value={form.episode} onChange={(e) => set('episode', e.target.value)}
+                   data-osk="numeric" data-osk-title="Episode number" />
           </label>
         </>
       )}

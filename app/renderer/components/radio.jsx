@@ -345,6 +345,9 @@ function RadioView() {
                     onChange={onZipChange}
                     className="radio-zip-input-hidden"
                     aria-label="ZIP code"
+                    data-osk="numeric"
+                    data-osk-submit
+                    data-osk-title="Enter US ZIP code"
                   />
                   <div className="radio-zip-digits" aria-hidden="true">
                     {[0, 1, 2, 3, 4].map((i) => (

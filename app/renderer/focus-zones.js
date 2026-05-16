@@ -258,6 +258,21 @@
     if (!el) return false;
     const t = el.tagName;
     if (t === 'BUTTON' || t === 'A') { el.click(); return true; }
+    // data-osk inputs pop the on-screen keyboard on activation instead of
+    // submitting their form. The OSK is the primary entry path for remote
+    // users; pressing Enter on an empty field with a real keyboard also
+    // brings it up, which is harmless (the user can dismiss with Back and
+    // press Enter again to submit). The OSK itself has its own "Submit"
+    // key for data-osk-submit inputs that should also fire form.submit on
+    // close. See app/renderer/components/osk.jsx for the receiver side.
+    if ((t === 'INPUT' || t === 'TEXTAREA') && el.hasAttribute &&
+        el.hasAttribute('data-osk')) {
+      const layout = el.getAttribute('data-osk') || 'text';
+      window.dispatchEvent(new CustomEvent('playbill:osk-open', {
+        detail: { target: el, layout },
+      }));
+      return true;
+    }
     if ((t === 'INPUT' || t === 'TEXTAREA') &&
         el.form && typeof el.form.requestSubmit === 'function') {
       el.form.requestSubmit();
@@ -403,6 +418,17 @@
       // synthetic dispatches from the controller bus are still able to
       // activate a non-input element — they just can't punch through a
       // focused text field, which is the right behavior.
+      //
+      // EXCEPTION: an input tagged with `data-osk` is a remote-friendly
+      // text field whose Enter/Select should pop the on-screen keyboard
+      // (see app/renderer/components/osk.jsx). For those we route Enter
+      // through activate(), which dispatches `playbill:osk-open`. Space
+      // still falls through to the browser so a USB keyboard's literal
+      // space character lands in the field unchanged.
+      if (inText && e.key === 'Enter' && active.hasAttribute &&
+          active.hasAttribute('data-osk')) {
+        if (activate(active)) { e.preventDefault(); return true; }
+      }
       if (inText) return false;
       if (activate(active)) { e.preventDefault(); return true; }
     }

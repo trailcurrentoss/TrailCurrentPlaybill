@@ -694,6 +694,7 @@ function TVApp() {
       <RemoteHint />
       <DvdPrompt />
       <CdPrompt />
+      <OnScreenKeyboard />
     </div>
   );
 }
