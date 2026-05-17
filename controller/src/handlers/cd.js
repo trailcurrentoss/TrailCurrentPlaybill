@@ -1,6 +1,6 @@
 /* music.* command handlers — owns the audio-CD insertion → rip → library
    lifecycle. Mirrors the DVD handler one-for-one but uses MusicBrainz
-   for metadata instead of OMDb, and writes to ~/Music/Playbill Library.
+   for metadata instead of OMDb, and writes to ~/Playbill/Music.
 
    Bus actions registered:
      music.getStatus, music.refreshStatus

@@ -129,12 +129,12 @@ generic MQTT bridge behaviour, not DVD-specific — see
 
 | Path | Owner | What |
 |---|---|---|
-| `~/Videos/Playbill Library/Movies/<Title (Year)>/<Title (Year)>.mkv` | user | the ripped movie |
-| `~/Videos/Playbill Library/Movies/<Title (Year)>/<Title (Year)>.jpg` | user | cached poster (off-grid playback). Absent if rip happened off-grid — backfill via `dvd.refreshPosters`. |
-| `~/Videos/Playbill Library/Movies/<Title (Year)>/<Title (Year)>.json` | user | metadata sidecar |
-| `~/Videos/Playbill Library/Shows/<Show>/<Show> - SnnEnn.mkv` | user | one ripped episode |
-| `~/Videos/Playbill Library/Shows/<Show>/<Show> - SnnEnn.jpg` | user | cached poster |
-| `~/Videos/Playbill Library/Shows/<Show>/<Show> - SnnEnn.json` | user | metadata sidecar |
+| `~/Playbill/Movies/<Title (Year)>/<Title (Year)>.mkv` | user | the ripped movie |
+| `~/Playbill/Movies/<Title (Year)>/<Title (Year)>.jpg` | user | cached poster (off-grid playback). Absent if rip happened off-grid — backfill via `dvd.refreshPosters`. |
+| `~/Playbill/Movies/<Title (Year)>/<Title (Year)>.json` | user | metadata sidecar |
+| `~/Playbill/Shows/<Show>/<Show> - SnnEnn.mkv` | user | one ripped episode |
+| `~/Playbill/Shows/<Show>/<Show> - SnnEnn.jpg` | user | cached poster |
+| `~/Playbill/Shows/<Show>/<Show> - SnnEnn.json` | user | metadata sidecar |
 | `~/.config/trailcurrent-playbill/headwaters.json` | user, mode 0600 | shared with the Headwaters integration; carries `omdbApiKey` alongside the existing `apiKey` |
 
 Sidecar shape (`<title>.json`):

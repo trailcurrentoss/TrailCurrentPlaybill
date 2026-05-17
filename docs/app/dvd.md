@@ -45,7 +45,7 @@ This page documents the feature end-to-end. Related docs:
 | Device | Notes |
 |---|---|
 | Optical drive | Any USB DVD/Blu-ray drive that exposes `/dev/sr0`. Tested with bus-powered USB-DVD writers. |
-| Storage | Library is written to `~/Videos/Playbill Library/` on the local NVMe. A typical DVD rip is 2–5 GB. |
+| Storage | Library is written to `~/Playbill/` on the local NVMe. A typical DVD rip is 2–5 GB. |
 | CPU | Rip rate ≈ 0.6× realtime on the Q6A's A78s — a 2-hour DVD rips in ~3 hours. HandBrake's "Fast 1080p30" preset is x264-veryfast, so the bottleneck is single-threaded encode, not I/O. |
 
 ## Software (already in the image)
@@ -107,7 +107,7 @@ When OMDb returns a poster URL, the controller downloads the JPG to
 ## On-disk layout
 
 ```
-~/Videos/Playbill Library/
+~/Playbill/
 ├── Movies/
 │   └── Inception (2010)/
 │       ├── Inception (2010).mkv      ← H.264 + AC3 passthrough

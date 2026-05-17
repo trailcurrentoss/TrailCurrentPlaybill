@@ -41,11 +41,14 @@ function register({ bus, state }) {
 
     state.patch({
       youtube: {
-        // canSignIn is the real gate: true iff either the build embedded a
-        // default OAuth client or an admin set per-user credentials via
-        // youtube.setSettings. The renderer reads this to decide whether
-        // the Sign In button is enabled; it never sees the credential
-        // values themselves.
+        // `configured` is the PWA's gate for swapping the credentials
+        // form for the Sign In screen — true iff we have a usable
+        // clientId+clientSecret pair, whether that came from the dev's
+        // default client (dev rigs only) or per-rig credentials the
+        // user pasted in via the PWA. `canSignIn` is the same signal
+        // under the controller-side name; both are published for
+        // back-compat. The renderer never sees the credential values.
+        configured:    settings.canSignIn,
         canSignIn:     settings.canSignIn,
         defaultClient: settings.defaultClient,
         signedIn:      auth.isSignedIn(),

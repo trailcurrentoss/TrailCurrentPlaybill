@@ -99,7 +99,7 @@ Shells out to `HandBrakeCLI`:
 ```
 HandBrakeCLI
   -i /dev/sr0
-  -o '~/Videos/Playbill Library/Movies/Inception (2010)/Inception (2010).mkv'
+  -o '~/Playbill/Movies/Inception (2010)/Inception (2010).mkv'
   --preset 'Fast 1080p30'
   --main-feature
   -m
@@ -235,7 +235,7 @@ under `Movies/` or `Shows/`.
 
 ## Library scan — `services/dvd-library.js`
 
-Folder-walk over `~/Videos/Playbill Library/{Movies,Shows}`. For each
+Folder-walk over `~/Playbill/{Movies,Shows}`. For each
 subfolder, pairs every `.mkv` with its `.json` sidecar and returns a
 flat list per category.
 

@@ -83,36 +83,25 @@ Still on the OAuth consent screen page:
 4. **Name:** anything (e.g., `Playbill TV client`). Click **CREATE**.
 5. A modal pops up with your **Client ID** and **Client secret**.
 
-   **Leave that modal open.** You'll copy both values into Playbill in step 7.
+   **Leave that modal open.** You'll copy both values into Playbill in the
+   next step.
 
-### 6 · Create an API Key
+> Playbill talks to YouTube using your OAuth tokens once you're signed in,
+> so a separate "API key" credential is **not** required — you can skip
+> the API key credential type entirely.
 
-(You can do this in the same browser tab while the OAuth modal is open.)
-
-1. Open a new browser tab to the same Credentials page:
-   <https://console.cloud.google.com/apis/credentials>.
-2. Click **+ CREATE CREDENTIALS → API key**.
-3. A modal pops up with your **API key**. Copy it.
-4. Click **EDIT API KEY** in that modal (or close it and click the pencil
-   icon next to the new key in the list).
-5. Under **API restrictions**:
-   - Select **Restrict key**.
-   - In the dropdown, choose **YouTube Data API v3**.
-6. Click **SAVE**.
-
-### 7 · Paste the three values into Playbill
+### 6 · Paste the two values into Playbill
 
 You should now have:
 - A **Client ID** (long string ending in `.apps.googleusercontent.com`)
 - A **Client secret** (~24-character string)
-- An **API key** (~39-character string starting with `AIza`)
 
 Two ways to give these to Playbill — pick whichever is more convenient:
 
 **From the Headwaters PWA on your phone:**
 1. Open the PWA, tap the **Playbill** nav icon.
 2. Tap the **YouTube** tab.
-3. Paste all three values into the form.
+3. Paste both values into the form.
 4. Tap **Save**.
 5. Tap **Sign in**. A 6-digit code appears. On your phone (or any other
    device), open <https://youtube.com/activate> and enter that code, then
@@ -177,7 +166,7 @@ project, then sign in/out from Playbill's YouTube tab as needed.
 ### Multiple Playbills
 
 If you have more than one Playbill on the rig, **each Playbill needs its own
-credential entry** — you paste the same three values into each. The quota is
+credential entry** — you paste the same two values into each. The quota is
 shared across all of them because they share one Google Cloud project.
 
 ---
@@ -202,12 +191,6 @@ Double-check the Client ID was pasted in full and ends in
 `.apps.googleusercontent.com`. The Cloud Console truncates the display in
 some views; click the row in the Credentials list to see the full value.
 
-**"API key invalid"**
-Check that the API key starts with `AIza`. Confirm that under "API
-restrictions" you selected **YouTube Data API v3** (not "Don't restrict
-key"). If the key is unrestricted, Google sometimes rejects requests with a
-"key is not restricted" error.
-
 **The YouTube tab in Playbill says "Configure your Google Cloud credentials"
 but I already pasted them**
 Each Playbill stores its own credentials. If you set them up on Playbill A
@@ -220,8 +203,8 @@ Playbill B too.
 
 | Where               | What                                              |
 |---------------------|---------------------------------------------------|
-| Google Cloud Console (yours) | OAuth client, API key, your project quota |
-| Playbill, file mode 0600 | `~/.config/trailcurrent-playbill/sources/youtube/client.json` — clientId, clientSecret, apiKey |
+| Google Cloud Console (yours) | OAuth client and your project quota |
+| Playbill, file mode 0600 | `~/.config/trailcurrent-playbill/sources/youtube/client.json` — clientId, clientSecret |
 | Playbill, file mode 0600 | `~/.config/trailcurrent-playbill/sources/youtube/tokens.json` — OAuth refresh + access tokens after sign-in |
 | Headwaters (cloud)  | Nothing. We don't see, touch, or sync any of this. |
 

@@ -1,19 +1,32 @@
-/* YouTube source plugin (Phase 6a — anonymous browse + resolve).
+/* YouTube source plugin.
 
    Implements the source-plugin contract from architecture-v2 §5. The
    generic handlers/source.js dispatcher invokes these methods by name
    based on the {action, sourceId} envelope from the bus.
 
-   Phase 6a scope: anonymous (no sign-in). Search and direct video play
-   work without OAuth. Browse hierarchy is intentionally minimal — just a
-   "/search/<query>" route. Subscriptions, history, watch later land in
-   Phase 6c when device-flow OAuth comes online.
+   Two parallel paths:
+     • Anonymous: search + playback. No sign-in needed; yt-dlp scrapes the
+       public web frontend. Works on every device with no setup.
+     • Signed-in (optional): four personalized lists exposed via the
+       YouTube Data API — Subscriptions, Your Videos (uploads), Liked
+       Videos, Created Playlists. We intentionally do NOT surface
+       Recommended / Watch History / Watch Later because Google removed
+       Data-API read access for those (HL/WL playlists return empty;
+       there's no personalized-home endpoint at all). Adding them would
+       require a parallel yt-dlp-with-cookies path that the user explicitly
+       opted out of.
 
    Path conventions (UI navigates by passing path into list()):
-     /                        landing — recommends searching
-     /search/<query>          search results
-     /watch/<videoId>         single video (not really a "list" — used as
-                              a deep link target by source.launch) */
+     /                              landing — search + signed-in tiles
+     /search/<query>                search results (yt-dlp, no sign-in)
+     /subscriptions                 channels the user follows
+     /uploads                       the signed-in user's own uploads
+     /likes                         videos the user has liked
+     /playlists                     playlists the user has created
+     /playlist/<id>                 videos in a specific playlist
+     /channel/<channelId>/uploads   recent uploads from a specific channel
+     /watch/<videoId>               single video (used as deep-link target
+                                    by source.launch) */
 
 'use strict';
 
@@ -26,23 +39,39 @@ const displayName = 'YouTube';
 const icon        = 'logo-youtube';
 const capabilities = ['browse', 'search', 'signin'];
 
+async function _myChannel() {
+  const r = await dataApi.getMyChannel();
+  if (!r) throw new Error('Could not load your YouTube channel — try signing out and back in.');
+  return r;
+}
+
 async function list(rawPath) {
   const p = String(rawPath || '/').replace(/\/+$/, '') || '/';
 
   if (p === '/') {
-    const items = [
-      {
-        id: 'search', type: 'directory', sourceId: id,
-        title: 'Search YouTube', subtitle: 'Find videos by keyword',
-        targetPath: '/search/',
-      },
-    ];
+    // Landing page tiles. Only the four personalized lists; search has
+    // its own always-visible input at the top of the YouTube screen so
+    // a tile for it would just duplicate the same entry point. When the
+    // user is signed out we return an empty list — the renderer falls
+    // through to the search-only layout. Search is identical signed-in
+    // or signed-out (always yt-dlp scraping; the Data API's search
+    // endpoint costs 100 quota units per call and we never use it).
+    const items = [];
     if (auth.isSignedIn()) {
-      items.unshift({
-        id: 'subscriptions', type: 'directory', sourceId: id,
-        title: 'My Subscriptions', subtitle: 'Channels you follow',
-        targetPath: '/subscriptions',
-      });
+      items.push(
+        { id: 'subscriptions', type: 'directory', sourceId: id,
+          title: 'Subscriptions', subtitle: 'Channels you follow',
+          targetPath: '/subscriptions' },
+        { id: 'uploads', type: 'directory', sourceId: id,
+          title: 'Your Videos', subtitle: 'Videos you uploaded',
+          targetPath: '/uploads' },
+        { id: 'likes', type: 'directory', sourceId: id,
+          title: 'Liked Videos', subtitle: 'Videos you liked',
+          targetPath: '/likes' },
+        { id: 'playlists', type: 'directory', sourceId: id,
+          title: 'Playlists', subtitle: 'Playlists you created',
+          targetPath: '/playlists' },
+      );
     }
     return { path: '/', items };
   }
@@ -57,6 +86,36 @@ async function list(rawPath) {
   if (p === '/subscriptions') {
     if (!auth.isSignedIn()) throw new Error('Sign in to YouTube to see your subscriptions');
     const r = await dataApi.listSubscriptions();
+    return { path: p, items: r.items };
+  }
+
+  if (p === '/uploads') {
+    if (!auth.isSignedIn()) throw new Error('Sign in to YouTube to see your uploads');
+    const me = await _myChannel();
+    if (!me.uploads) return { path: p, items: [] };
+    const r = await dataApi.listPlaylistItems(me.uploads);
+    return { path: p, items: r.items };
+  }
+
+  if (p === '/likes') {
+    if (!auth.isSignedIn()) throw new Error('Sign in to YouTube to see your liked videos');
+    const me = await _myChannel();
+    if (!me.likes) return { path: p, items: [] };
+    const r = await dataApi.listPlaylistItems(me.likes);
+    return { path: p, items: r.items };
+  }
+
+  if (p === '/playlists') {
+    if (!auth.isSignedIn()) throw new Error('Sign in to YouTube to see your playlists');
+    const r = await dataApi.listMyPlaylists();
+    return { path: p, items: r.items };
+  }
+
+  // /playlist/<id> — items inside any playlist (user-created or otherwise).
+  const playlistMatch = p.match(/^\/playlist\/([^\/]+)$/);
+  if (playlistMatch) {
+    if (!auth.isSignedIn()) throw new Error('Sign in to YouTube to browse playlists');
+    const r = await dataApi.listPlaylistItems(playlistMatch[1]);
     return { path: p, items: r.items };
   }
 

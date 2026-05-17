@@ -10,7 +10,7 @@
 function LocalView() {
   const [filter, setFilter] = useState('movies');
   // Library is read from the controller (dvd.libraryList scans the on-disk
-  // ~/Videos/Playbill Library tree). We refresh on mount and whenever
+  // ~/Playbill tree). We refresh on mount and whenever
   // state.dvd.status transitions to 'done' so a freshly-ripped title shows
   // up without a reload.
   const [ripped, setRipped] = useState({ movies: [], shows: [] });

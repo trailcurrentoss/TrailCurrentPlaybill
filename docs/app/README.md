@@ -62,7 +62,7 @@ Per-screen extras (e.g. **B** to swap FM/AM bands inside the Radio dial) are doc
 | `~/.config/trailcurrent-playbill/radio-presets.json` | Saved AM/FM preset slots. |
 | `/tmp/playbill-runtime/tunerN.ts` | Live MPEG-TS capture from the active tuner. mpv reads from here while watching. |
 | `/tmp/playbill-runtime/mpv.sock` | mpv's JSON IPC socket while a video is playing — used by Playbill for stop / volume / mute. |
-| `~/Videos/Playbill Library/{Movies,Shows}/<Title>/` | DVD rips. One folder per title containing the `.mkv` + a `.json` sidecar. See [dvd-data.md](./dvd-data.md) for the layout. |
+| `~/Playbill/{Movies,Shows}/<Title>/` | DVD rips. One folder per title containing the `.mkv` + a `.json` sidecar. See [dvd-data.md](./dvd-data.md) for the layout. |
 
 Deleting `~/.config/trailcurrent-playbill/` resets the app to a fresh state (next launch will re-prompt for a channel scan and start with empty radio presets).
 

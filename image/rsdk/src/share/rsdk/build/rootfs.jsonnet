@@ -1943,10 +1943,25 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 18: chown /home/trailcurrent
+            // Hook 18: Pre-create Playbill library tree + chown /home/trailcurrent
+            //
+            // The Playbill library lives at ~/Playbill (not ~/Videos — the
+            // library mixes video and audio, so the parent folder is named
+            // after the app instead of the media type). DVD rips land in
+            // Movies/Shows; CD rips land in Music/<Artist>/<Album>.
+            //
+            // We pre-create the tree here so the user sees an empty library
+            // folder in their home before any rip — handy for "where will
+            // these movies go?" without first inserting a disc. The rippers
+            // also mkdir -p on demand, so this is a UX nicety, not a
+            // correctness requirement.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
+                echo "[hook 18] pre-creating ~/Playbill library tree"
+                mkdir -p "$1/home/trailcurrent/Playbill/Movies" \
+                         "$1/home/trailcurrent/Playbill/Shows" \
+                         "$1/home/trailcurrent/Playbill/Music"
                 echo "[hook 18] fixing ownership of /home/trailcurrent"
                 chroot "$1" chown -R trailcurrent:trailcurrent /home/trailcurrent
             |||,

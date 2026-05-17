@@ -21,8 +21,8 @@
        in ~30min on a modern x86 box. That's a good "kick it off and go
        watch something else" experience.
 
-   Output:  ~/Videos/Playbill Library/Movies/<Title (Year)>/<Title (Year)>.mkv
-            ~/Videos/Playbill Library/Shows/<Show>/<Show> - S00E00.mkv
+   Output:  ~/Playbill/Movies/<Title (Year)>/<Title (Year)>.mkv
+            ~/Playbill/Shows/<Show>/<Show> - S00E00.mkv
    Sidecar: <basename>.json containing the metadata payload the GUI
             collected (title, year, poster, plot, ...). The LocalView's
             library scanner reads sidecars for poster/year/etc. */
@@ -36,7 +36,7 @@ const { spawn, execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const { downloadPoster } = require('./dvd-poster');
 
-const LIBRARY_ROOT = path.join(os.homedir(), 'Videos', 'Playbill Library');
+const LIBRARY_ROOT = path.join(os.homedir(), 'Playbill');
 const HANDBRAKE_BIN = 'HandBrakeCLI';     // resolved via PATH
 
 // Strip filesystem-hostile characters but keep spaces and Unicode letters

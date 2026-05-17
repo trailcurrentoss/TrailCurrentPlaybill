@@ -105,14 +105,15 @@ async function _ensureStores() {
 }
 
 function _creds() {
-  // Per-user override wins (kept for admin tooling), then fall back to the
-  // OAuth client baked into the build at <repo>/.env time. Renderer never
-  // sees either set of values.
+  // Per-rig pasted credentials win. The optional default client is a
+  // dev-only convenience for the maintainer's own Playbill — shipped
+  // images deliberately leave it empty (see default-client.js). Renderer
+  // never sees either set of values.
   const c = credsStore && credsStore.get();
   if (c && c.clientId && c.clientSecret) return c;
   const d = defaultClient.getDefaultClient();
   if (d) return d;
-  throw new Error('YouTube OAuth not configured: the build is missing default-client.local.js (run `npm run embed-creds` with a valid .env)');
+  throw new Error('YouTube is not configured for this Playbill. Open the Headwaters PWA → Playbill → YouTube and follow the setup guide to paste your own Google Cloud OAuth credentials.');
 }
 
 // ── Device flow ───────────────────────────────────────────────────────

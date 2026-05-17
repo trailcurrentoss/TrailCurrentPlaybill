@@ -42,7 +42,17 @@ function jsString(s) { return JSON.stringify(String(s)); }
 
 (function main() {
   let clientId = '', clientSecret = '';
-  if (fs.existsSync(ENV_PATH)) {
+
+  // PLAYBILL_IMAGE_BUILD=1 forces empty creds even when .env is present.
+  // Image builds MUST set this — otherwise the developer's personal OAuth
+  // client would be baked into every flashed device and every end-user's
+  // API calls would burn the dev's quota. Each end-user creates their own
+  // OAuth client per docs/youtube-setup.md and pastes it into the PWA.
+  const shippingImage = process.env.PLAYBILL_IMAGE_BUILD === '1';
+
+  if (shippingImage) {
+    console.log('[embed-yt-credentials] PLAYBILL_IMAGE_BUILD=1 — forcing empty creds (shippable image)');
+  } else if (fs.existsSync(ENV_PATH)) {
     const env = parseEnv(fs.readFileSync(ENV_PATH, 'utf8'));
     clientId     = env.PLAYBILL_YT_CLIENT_ID     || '';
     clientSecret = env.PLAYBILL_YT_CLIENT_SECRET || '';
@@ -59,7 +69,7 @@ function jsString(s) { return JSON.stringify(String(s)); }
 
   if (clientId && clientSecret) {
     console.log(`[embed-yt-credentials] wrote ${path.relative(REPO_ROOT, OUT_PATH)} (clientId ${clientId.slice(0, 12)}…)`);
-  } else {
+  } else if (!shippingImage) {
     console.warn(`[embed-yt-credentials] .env missing or incomplete — wrote empty default-client.local.js`);
   }
 })();

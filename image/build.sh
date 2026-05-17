@@ -146,7 +146,14 @@ log "Building trailcurrent-playbill-dkms deb"
     || fatal "trailcurrent-playbill-dkms build failed"
 
 log "Building trailcurrent-playbill deb (includes Electron app + controller)"
-( bash "$REPO_ROOT/packaging/trailcurrent-playbill/build-deb.sh" 2>&1 | tail -10 ) \
+# PLAYBILL_IMAGE_BUILD=1 forces build-tools/embed-yt-credentials.js to
+# emit an EMPTY default-client.local.js, even if the developer's .env is
+# sitting in the repo root. Without this gate the dev's personal OAuth
+# client gets baked into every shipped image and every end-user's API
+# calls burn the dev's quota. Each end-user creates their own OAuth
+# client per docs/youtube-setup.md and pastes it into the Headwaters PWA.
+rm -f "$REPO_ROOT/controller/src/sources/youtube/default-client.local.js"
+( PLAYBILL_IMAGE_BUILD=1 bash "$REPO_ROOT/packaging/trailcurrent-playbill/build-deb.sh" 2>&1 | tail -10 ) \
     || fatal "trailcurrent-playbill build failed"
 
 # Stage both debs into $STAGING/files/debs/ for the chroot install hook.

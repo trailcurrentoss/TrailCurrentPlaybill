@@ -21,7 +21,7 @@
      3. We patch the album sidecar with the track's local file path.
 
    Output layout:
-     ~/Music/Playbill Library/<Artist>/<Album> (<Year>)/
+     ~/Playbill/Music/<Artist>/<Album> (<Year>)/
        01 - <Track 1 Title>.flac
        02 - <Track 2 Title>.flac
        ...
@@ -41,7 +41,7 @@ const { spawn, execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const { downloadCoverArt } = require('./cd-artwork');
 
-const LIBRARY_ROOT = path.join(os.homedir(), 'Music', 'Playbill Library');
+const LIBRARY_ROOT = path.join(os.homedir(), 'Playbill', 'Music');
 const CDPARANOIA_BIN = 'cdparanoia';
 const FLAC_BIN = 'flac';
 

@@ -681,17 +681,38 @@ function SettingsView({ focus }) {
   );
 }
 
-// ─── YouTube settings: sign-in device flow only ──────────────────────
+// ─── YouTube settings ────────────────────────────────────────────────
 //
-// OAuth credentials are baked into the build from .env (see
-// build-tools/embed-yt-credentials.js) and are NEVER exposed to the user
-// or rendered into the UI. The renderer only sees the device-flow state:
-// not-signed-in / pending / signed-in.
+// Search and playback are anonymous (yt-dlp scrapes the public web) and
+// always work — no credentials, no quota, no Google project required.
+// Signing in is optional and unlocks per-account features (subscriptions,
+// watch later, liked playlists). Sign-in requires a one-time, ~10-min
+// Google Cloud Console setup where the user creates their own OAuth
+// client and pastes the two values below. See the linked guide for the
+// step-by-step.
 
 function YoutubeScreen({ ctrlState }) {
   const yt = (ctrlState && ctrlState.youtube) || {};
-  const [busy, setBusy]   = useState(false);
-  const [error, setError] = useState(null);
+  const [busy, setBusy]     = useState(false);
+  const [error, setError]   = useState(null);
+  const [showCreds, setShowCreds] = useState(false);
+
+  // Credential entry form state — separate from sign-in busy spinner.
+  const [clientId, setClientId]         = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [credsBusy, setCredsBusy]       = useState(false);
+  const [credsErr, setCredsErr]         = useState(null);
+  const [credsSaved, setCredsSaved]     = useState(false);
+
+  const sectionHdr = { font:'600 11px var(--font-sans)', letterSpacing:2,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.45)',
+                       margin:'0 0 14px' };
+  const labelStyle = { display:'block', fontSize:12, letterSpacing:1,
+                       textTransform:'uppercase', color:'rgba(255,255,255,0.6)',
+                       marginBottom:6 };
+  const inputStyle = { width:'100%', padding:'12px 14px', background:'rgba(255,255,255,0.05)',
+                       border:'1px solid rgba(255,255,255,0.1)', borderRadius:8,
+                       color:'#fff', font:'14px var(--font-sans)' };
 
   async function startSignIn() {
     setError(null); setBusy(true);
@@ -715,6 +736,31 @@ function YoutubeScreen({ ctrlState }) {
     finally { setBusy(false); }
   }
 
+  async function saveCreds(e) {
+    if (e) e.preventDefault();
+    setCredsErr(null); setCredsSaved(false);
+    const id = clientId.trim();
+    const sec = clientSecret.trim();
+    if (!id.endsWith('.apps.googleusercontent.com')) {
+      return setCredsErr('Client ID should end with .apps.googleusercontent.com.');
+    }
+    if (!sec) {
+      return setCredsErr('Paste the client secret from the same OAuth client modal.');
+    }
+    setCredsBusy(true);
+    try {
+      await window.playbill.controller.command({
+        action: 'youtube.setSettings',
+        value:  { clientId: id, clientSecret: sec },
+      });
+      setClientId(''); setClientSecret('');
+      setCredsSaved(true);
+      setShowCreds(false);
+    } catch (e2) {
+      setCredsErr(String(e2.message || e2));
+    } finally { setCredsBusy(false); }
+  }
+
   return (
     <div style={{padding:'40px 60px', maxWidth:900}}>
       <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24}}>
@@ -731,62 +777,183 @@ function YoutubeScreen({ ctrlState }) {
         )}
       </div>
 
-      <p style={{color:'rgba(255,255,255,0.6)', fontSize:14, marginBottom:24, maxWidth:680}}>
-        Sign in to YouTube to search, browse your subscriptions, and watch your playlists.
-        Playbill will show a one-time activation code; enter it at the URL on your phone or laptop to finish.
-      </p>
+      {/* Section 1 — Anonymous browse status. This is the default, always-on path. */}
+      <section data-zone="settings.youtube.browse" data-zone-axis="vertical"
+               style={{marginBottom:32}}>
+        <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:14}}>
+          <h2 style={{...sectionHdr, margin:0}}>Search &amp; watch</h2>
+          <div style={{display:'inline-flex', alignItems:'center', gap:8, padding:'4px 12px',
+                       borderRadius:9999, background:'rgba(82,164,65,0.1)',
+                       border:'1px solid rgba(82,164,65,0.3)', color:'#52a441',
+                       fontSize:11, letterSpacing:0.5, textTransform:'uppercase'}}>
+            <span style={{width:6, height:6, borderRadius:'50%', background:'#52a441',
+                          boxShadow:'0 0 8px #52a44180'}}></span>
+            Ready
+          </div>
+        </div>
+        <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:0, maxWidth:680}}>
+          YouTube search and playback work without any sign-in or credentials.
+          Anyone can search and watch immediately &mdash; no Google account, no Cloud
+          project, no setup. The optional sign-in below is only needed if you want
+          your subscriptions, watch later, and liked playlists on the device.
+        </p>
+      </section>
 
-      {error && (
-        <div style={{padding:'12px 14px', marginBottom:18, background:'rgba(255,84,83,0.1)',
-                     border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
-                     color:'#ff5453', fontSize:13}}>{error}</div>
-      )}
+      {/* Section 2 — Optional sign-in. Three states: needs creds / has creds & not signed in / signed in. */}
+      <section data-zone="settings.youtube.signin" data-zone-axis="vertical"
+               style={{marginTop:32, paddingTop:24, borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+        <h2 style={sectionHdr}>Sign in to your account (optional)</h2>
+        <p style={{color:'rgba(255,255,255,0.5)', fontSize:13, marginBottom:18, maxWidth:680}}>
+          To bring your subscriptions, watch later, and liked playlists onto the Playbill,
+          you create your own Google Cloud OAuth client (one-time, ~10&nbsp;minutes) and paste
+          the Client&nbsp;ID and Client&nbsp;secret here. Each Playbill keeps its own credentials at
+          file mode 0600; the values are never sent to TrailCurrent or anywhere else.
+        </p>
+        <p style={{color:'rgba(255,255,255,0.4)', fontSize:12, marginBottom:18}}>
+          Setup guide (open on your phone/laptop): <a href="https://headwaters.local/docs/playbill-youtube-setup.html"
+            target="_blank" rel="noreferrer" style={{color:'#52a441'}}>
+            headwaters.local/docs/playbill-youtube-setup.html
+          </a>
+        </p>
 
-      {/* Sign-in pending: big code + URL */}
-      {yt.pending && (
-        <div style={{padding:'24px', marginBottom:24, background:'rgba(82,164,65,0.06)',
-                     border:'1px solid rgba(82,164,65,0.3)', borderRadius:12, maxWidth:600}}>
-          <div style={{fontSize:13, color:'rgba(255,255,255,0.7)', marginBottom:8}}>
-            On your phone or laptop, open:
+        {error && (
+          <div style={{padding:'12px 14px', marginBottom:18, background:'rgba(255,84,83,0.1)',
+                       border:'1px solid rgba(255,84,83,0.3)', borderRadius:8,
+                       color:'#ff5453', fontSize:13}}>{error}</div>
+        )}
+        {credsSaved && !yt.signedIn && (
+          <div style={{marginBottom:14}}>
+            <SuccessAlert title="Credentials saved." message="Tap Sign in to YouTube to start the device-code flow." />
           </div>
-          <div style={{font:'600 22px var(--font-mono)', color:'#fff', marginBottom:24}}>
-            {yt.pending.verification_url}
+        )}
+
+        {/* Sign-in pending: big code + URL */}
+        {yt.pending && (
+          <div style={{padding:'24px', marginBottom:24, background:'rgba(82,164,65,0.06)',
+                       border:'1px solid rgba(82,164,65,0.3)', borderRadius:12, maxWidth:600}}>
+            <div style={{fontSize:13, color:'rgba(255,255,255,0.7)', marginBottom:8}}>
+              On your phone or laptop, open:
+            </div>
+            <div style={{font:'600 22px var(--font-mono)', color:'#fff', marginBottom:24}}>
+              {yt.pending.verification_url}
+            </div>
+            <div style={{fontSize:13, color:'rgba(255,255,255,0.7)', marginBottom:8}}>
+              And enter this code:
+            </div>
+            <div style={{font:'700 48px var(--font-mono)', color:'var(--tc-primary)', letterSpacing:6, marginBottom:18}}>
+              {yt.pending.user_code}
+            </div>
+            <div style={{fontSize:12, color:'rgba(255,255,255,0.5)', marginBottom:18}}>
+              Waiting for confirmation&hellip;
+            </div>
+            <button className="tv-btn" onClick={cancelSignIn} disabled={busy}>
+              <ion-icon name="close"></ion-icon> Cancel
+            </button>
           </div>
-          <div style={{fontSize:13, color:'rgba(255,255,255,0.7)', marginBottom:8}}>
-            And enter this code:
-          </div>
-          <div style={{font:'700 48px var(--font-mono)', color:'var(--tc-primary)', letterSpacing:6, marginBottom:18}}>
-            {yt.pending.user_code}
-          </div>
-          <div style={{fontSize:12, color:'rgba(255,255,255,0.5)', marginBottom:18}}>
-            Waiting for confirmation…
-          </div>
-          <button className="tv-btn" onClick={cancelSignIn} disabled={busy}>
-            <ion-icon name="close"></ion-icon> Cancel
+        )}
+
+        {/* State A — no creds yet: invite them to paste, with the form behind a toggle so the default view is calm. */}
+        {!yt.pending && !yt.signedIn && !yt.canSignIn && !showCreds && (
+          <button className="tv-btn primary" onClick={() => setShowCreds(true)}>
+            <ion-icon name="key-outline"></ion-icon> Enter Google Cloud credentials
           </button>
-        </div>
-      )}
+        )}
 
-      {/* Primary action */}
-      {!yt.signedIn && !yt.pending && yt.canSignIn && (
-        <button className="tv-btn primary" onClick={startSignIn} disabled={busy}>
-          <ion-icon name="log-in-outline"></ion-icon>
-          {busy ? 'Starting…' : 'Sign in to YouTube'}
-        </button>
-      )}
-      {!yt.signedIn && !yt.pending && !yt.canSignIn && (
-        <div style={{padding:'12px 14px', background:'rgba(255,255,255,0.04)',
-                     border:'1px solid rgba(255,255,255,0.08)', borderRadius:8,
-                     color:'rgba(255,255,255,0.6)', fontSize:13, maxWidth:600}}>
-          Sign-in is not available in this build. Rebuild Playbill with valid OAuth credentials in <code>.env</code>.
-        </div>
-      )}
-      {yt.signedIn && (
-        <button className="tv-btn" onClick={signOut} disabled={busy}
-                style={{background:'rgba(255,84,83,0.1)', color:'#ff5453'}}>
-          <ion-icon name="log-out-outline"></ion-icon> Sign Out
-        </button>
-      )}
+        {/* State A — credentials form expanded. */}
+        {!yt.pending && !yt.signedIn && !yt.canSignIn && showCreds && (
+          <form onSubmit={saveCreds} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:14}} noValidate>
+            <div>
+              <label style={labelStyle}>Client ID</label>
+              <input style={inputStyle}
+                     type="text"
+                     placeholder="…apps.googleusercontent.com"
+                     value={clientId} onChange={(e) => { setClientId(e.target.value); setCredsErr(null); }}
+                     autoComplete="off" spellCheck="false"
+                     data-osk="text" data-osk-title="YouTube Client ID" />
+            </div>
+            <div>
+              <label style={labelStyle}>Client secret</label>
+              <input style={inputStyle}
+                     type="password"
+                     placeholder="GOCSPX-…"
+                     value={clientSecret} onChange={(e) => { setClientSecret(e.target.value); setCredsErr(null); }}
+                     autoComplete="off" spellCheck="false"
+                     data-osk="text" data-osk-title="YouTube Client secret" />
+            </div>
+            {credsErr && <FieldError>{credsErr}</FieldError>}
+            <div style={{display:'flex', gap:12}}>
+              <button type="submit" className="tv-btn primary"
+                      disabled={credsBusy || !clientId.trim() || !clientSecret.trim()}>
+                <ion-icon name="save-outline"></ion-icon>
+                {credsBusy ? 'Saving…' : 'Save credentials'}
+              </button>
+              <button type="button" className="tv-btn" onClick={() => {
+                setShowCreds(false); setClientId(''); setClientSecret(''); setCredsErr(null);
+              }} disabled={credsBusy}>
+                <ion-icon name="close"></ion-icon> Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* State B — creds present, not signed in: offer device-code sign-in + edit creds. */}
+        {!yt.pending && !yt.signedIn && yt.canSignIn && (
+          <div style={{display:'flex', gap:12, flexWrap:'wrap'}}>
+            <button className="tv-btn primary" onClick={startSignIn} disabled={busy}>
+              <ion-icon name="log-in-outline"></ion-icon>
+              {busy ? 'Starting…' : 'Sign in to YouTube'}
+            </button>
+            <button className="tv-btn" onClick={() => setShowCreds(true)} disabled={busy}>
+              <ion-icon name="key-outline"></ion-icon> Edit credentials
+            </button>
+          </div>
+        )}
+
+        {/* State B — edit-creds form re-opened. */}
+        {!yt.pending && !yt.signedIn && yt.canSignIn && showCreds && (
+          <form onSubmit={saveCreds} style={{maxWidth:600, display:'flex', flexDirection:'column', gap:14, marginTop:18}} noValidate>
+            <div>
+              <label style={labelStyle}>Client ID (paste to overwrite)</label>
+              <input style={inputStyle}
+                     type="text"
+                     placeholder="…apps.googleusercontent.com"
+                     value={clientId} onChange={(e) => { setClientId(e.target.value); setCredsErr(null); }}
+                     autoComplete="off" spellCheck="false"
+                     data-osk="text" data-osk-title="YouTube Client ID" />
+            </div>
+            <div>
+              <label style={labelStyle}>Client secret (paste to overwrite)</label>
+              <input style={inputStyle}
+                     type="password"
+                     placeholder="GOCSPX-…"
+                     value={clientSecret} onChange={(e) => { setClientSecret(e.target.value); setCredsErr(null); }}
+                     autoComplete="off" spellCheck="false"
+                     data-osk="text" data-osk-title="YouTube Client secret" />
+            </div>
+            {credsErr && <FieldError>{credsErr}</FieldError>}
+            <div style={{display:'flex', gap:12}}>
+              <button type="submit" className="tv-btn primary"
+                      disabled={credsBusy || !clientId.trim() || !clientSecret.trim()}>
+                <ion-icon name="save-outline"></ion-icon>
+                {credsBusy ? 'Saving…' : 'Save credentials'}
+              </button>
+              <button type="button" className="tv-btn" onClick={() => {
+                setShowCreds(false); setClientId(''); setClientSecret(''); setCredsErr(null);
+              }} disabled={credsBusy}>
+                <ion-icon name="close"></ion-icon> Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* State C — signed in: sign-out only. */}
+        {yt.signedIn && (
+          <button className="tv-btn" onClick={signOut} disabled={busy}
+                  style={{background:'rgba(255,84,83,0.1)', color:'#ff5453'}}>
+            <ion-icon name="log-out-outline"></ion-icon> Sign Out
+          </button>
+        )}
+      </section>
     </div>
   );
 }
@@ -997,7 +1164,7 @@ function LibraryScreen({ ctrlState }) {
         <code style={{display:'block', padding:'12px 14px', background:'rgba(255,255,255,0.03)',
                        border:'1px dashed rgba(255,255,255,0.1)', borderRadius:8,
                        color:'rgba(255,255,255,0.7)', fontSize:13, maxWidth:600}}>
-          ~/Videos/Playbill Library/&#123;Movies,Shows&#125;/&lt;Title&gt;/&lt;Title&gt;.mkv
+          ~/Playbill/&#123;Movies,Shows&#125;/&lt;Title&gt;/&lt;Title&gt;.mkv
         </code>
         <p style={{color:'rgba(255,255,255,0.4)', fontSize:12, marginTop:10, maxWidth:680}}>
           Each title is a folder with a <code style={{color:'rgba(255,255,255,0.6)'}}>.mkv</code> and a

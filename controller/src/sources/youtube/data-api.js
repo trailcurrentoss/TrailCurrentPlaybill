@@ -101,4 +101,32 @@ async function listPlaylistItems(playlistId, pageToken) {
   };
 }
 
-module.exports = { getMyChannel, listSubscriptions, listChannelUploads, listPlaylistItems };
+/** Playlists the signed-in user created. Each result is a directory tile
+ *  pointing at /playlist/<id> which then drills into the playlist's videos.
+ *  We do NOT surface watch-later (WL) or watch-history (HL) — the Data
+ *  API returns those playlist IDs but reads of their contents are
+ *  empty-by-design (Google removed read access in 2016). */
+async function listMyPlaylists(pageToken) {
+  const params = { part: 'snippet,contentDetails', mine: 'true', maxResults: '50' };
+  if (pageToken) params.pageToken = pageToken;
+  const j = await _get('/playlists', params);
+  return {
+    items: (j.items || []).map((pl) => ({
+      id:        pl.id,
+      type:      'directory',
+      sourceId:  'youtube',
+      title:     pl.snippet && pl.snippet.title,
+      subtitle:  pl.contentDetails && typeof pl.contentDetails.itemCount === 'number'
+                   ? `${pl.contentDetails.itemCount} video${pl.contentDetails.itemCount === 1 ? '' : 's'}`
+                   : null,
+      thumbnail: pl.snippet && pl.snippet.thumbnails && (pl.snippet.thumbnails.medium || pl.snippet.thumbnails.default || {}).url,
+      targetPath: '/playlist/' + pl.id,
+    })),
+    nextPageToken: j.nextPageToken || null,
+  };
+}
+
+module.exports = {
+  getMyChannel, listSubscriptions, listChannelUploads,
+  listPlaylistItems, listMyPlaylists,
+};

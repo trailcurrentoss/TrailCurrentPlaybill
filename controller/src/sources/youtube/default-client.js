@@ -1,15 +1,25 @@
-/* YouTube OAuth — built-in (default) client credentials.
+/* YouTube OAuth — optional dev-only built-in client credentials.
  *
- * Real credential values live in `default-client.local.js` (gitignored,
- * generated at build time from <repo>/.env by
- * build-tools/embed-yt-credentials.js). This wrapper exposes that file
- * if it exists, or null if the build skipped the embed step.
+ * Shipped images carry NO default client. image/build.sh sets
+ * PLAYBILL_IMAGE_BUILD=1 which forces build-tools/embed-yt-credentials.js
+ * to emit `module.exports = null` here. End-users follow
+ * docs/youtube-setup.md (mirrored in the Headwaters PWA at
+ * /docs/playbill-youtube-setup.html) to create their own Google Cloud
+ * OAuth client, then paste it via the PWA's Playbill → YouTube tab.
+ * Their values land per-rig at
+ * ~/.config/trailcurrent-playbill/sources/youtube/client.json (mode 0600)
+ * and never leave the device.
  *
- * `client_secret` for an OAuth client of type "TVs and Limited Input devices"
- * is not actually secret — Google's own docs acknowledge that distributed
- * device apps cannot keep secrets — but we still treat the value as private
- * by keeping it out of the repo, out of the IPC surface, and out of any
- * UI element. The controller is the only process that ever sees it. */
+ * Why ship empty: a baked-in client means every end-user's API calls
+ * burn the developer's YouTube Data API quota and re-consents pile up
+ * against one Google Cloud project — and the only fix once distributed
+ * is to rotate the secret, which breaks every existing install.
+ *
+ * The default-client.local.js file exists only as a dev convenience: on
+ * the developer's own machine, running `npm run build:creds` (without
+ * PLAYBILL_IMAGE_BUILD=1) bakes their .env values here so their personal
+ * Playbill works without going through the PWA setup. NEVER ship a deb
+ * produced this way. */
 
 'use strict';
 

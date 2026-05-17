@@ -25,7 +25,7 @@
    handler, ever.
 
    Library is read from the controller (music.libraryList scans the on-
-   disk ~/Music/Playbill Library tree). We refresh on mount and whenever
+   disk ~/Playbill/Music tree). We refresh on mount and whenever
    state.music.status transitions to 'done' so a freshly-ripped album
    shows up without a reload. Identical refresh discipline to LocalView. */
 
