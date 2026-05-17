@@ -98,3 +98,4 @@ branding/_working/
 google_client_secret*.json
 credentials
 controller/src/sources/youtube/default-client.local.js
+packaging/**/dist/
