@@ -1439,6 +1439,85 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
+            // Hook 7c: Make gnome-initial-setup actually run on first login
+            //
+            // INTENT (also documented in image/files/gnome/dconf/00-trailcurrent-playbill):
+            // the first time the `trailcurrent` user logs in, GNOME's setup
+            // wizard should fire and prompt for the user-preference keys we
+            // intentionally don't lock — keyboard layout, timezone/location,
+            // WiFi, online accounts, privacy. After it completes, the sentinel
+            // ~/.config/gnome-initial-setup-done is written and the wizard
+            // never runs again.
+            //
+            // Ubuntu Noble's `gnome-initial-setup` deb (pulled transitively by
+            // ubuntu-desktop) already ships everything needed:
+            //   * /usr/libexec/gnome-initial-setup binary
+            //   * /etc/xdg/autostart/gnome-initial-setup-first-login.desktop
+            //     (XDG autostart; X-GNOME-HiddenUnderSystemd=true defers to
+            //      the systemd unit below when systemd is managing the
+            //      user-session — which it is on Noble.)
+            //   * /usr/lib/systemd/user/gnome-initial-setup-first-login.service
+            //     symlinked into ../gnome-session.target.wants/, gated by
+            //     ConditionPathExists=!%E/gnome-initial-setup-done
+            //
+            // What we have to make sure of from our side:
+            //   (a) Neither /etc/skel/.config/gnome-initial-setup-done nor
+            //       /home/trailcurrent/.config/gnome-initial-setup-done exist.
+            //       useradd -m (Hook 3) copies /etc/skel into the new home;
+            //       if anything in the build chain ever drops the sentinel
+            //       into skel "as a default", the wizard would be perma-
+            //       skipped on every flashed device. Belt-and-suspenders rm.
+            //   (b) The service symlink shipped by the deb is still present
+            //       after our other hooks have run. (gnome-session.target.wants
+            //       is in /usr/lib/systemd/user — read-only from our hooks'
+            //       perspective, but verify defensively.)
+            //
+            // Why this hook was added (2026-05-17): the previously built
+            // image was not showing the wizard on first login. The dconf
+            // file comments described the intended behavior but nothing
+            // actively guaranteed the sentinel was absent. Hook 26 now
+            // fail-fasts on the verification.
+            //
+            // Order: AFTER hook 3 (user created) but BEFORE hook 18 (which
+            // chowns /home/trailcurrent). Hook 18 will end up touching any
+            // files we leave under /home/trailcurrent.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 7c] ensuring gnome-initial-setup fires on trailcurrent first login"
+
+                # (a) Binary present? Pulled by ubuntu-desktop; fail-fast here
+                # so a broken --include doesn't silently let us ship without
+                # the wizard.
+                if [ ! -x "$1/usr/libexec/gnome-initial-setup" ]; then
+                    echo "  ERROR: /usr/libexec/gnome-initial-setup missing — package not installed?" >&2
+                    exit 1
+                fi
+                if [ ! -f "$1/etc/xdg/autostart/gnome-initial-setup-first-login.desktop" ]; then
+                    echo "  ERROR: gnome-initial-setup-first-login.desktop missing from /etc/xdg/autostart/" >&2
+                    exit 1
+                fi
+                if [ ! -f "$1/usr/lib/systemd/user/gnome-initial-setup-first-login.service" ]; then
+                    echo "  ERROR: gnome-initial-setup-first-login.service missing from user systemd dir" >&2
+                    exit 1
+                fi
+                if [ ! -L "$1/usr/lib/systemd/user/gnome-session.target.wants/gnome-initial-setup-first-login.service" ]; then
+                    echo "  ERROR: gnome-session.target.wants symlink missing — service won't auto-activate" >&2
+                    exit 1
+                fi
+
+                # (b) Wipe any sentinel that would suppress the wizard. We
+                # specifically wipe /etc/skel because useradd -m copies it,
+                # AND /home/trailcurrent/.config because the user already
+                # exists (Hook 3) and may have inherited the file.
+                rm -f "$1/etc/skel/.config/gnome-initial-setup-done"
+                rm -f "$1/home/trailcurrent/.config/gnome-initial-setup-done"
+
+                echo "  ✓ gnome-initial-setup binary + autostart + service present"
+                echo "  ✓ no first-login sentinel in /etc/skel or /home/trailcurrent"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
             // Hook 8: TrailCurrent-Playbill GTK theme (Farwatch PWA chrome port)
             //
             // Two installs in one hook:
@@ -2531,6 +2610,32 @@ function(
                 # Firstboot
                 check_x "$1" /usr/local/sbin/trailcurrent-playbill-firstboot.sh
                 check   "$1" /etc/systemd/system/trailcurrent-playbill-firstboot.service
+
+                # gnome-initial-setup (Hook 7c) — wizard fires on first login
+                # for the trailcurrent user (timezone, keyboard, WiFi, etc.).
+                # Verify all four required artifacts AND that no sentinel
+                # exists in skel or in the pre-created home — either would
+                # silently skip the wizard on every flashed device.
+                check_x "$1" /usr/libexec/gnome-initial-setup
+                check   "$1" /etc/xdg/autostart/gnome-initial-setup-first-login.desktop
+                check   "$1" /usr/lib/systemd/user/gnome-initial-setup-first-login.service
+                if [ -L "$1/usr/lib/systemd/user/gnome-session.target.wants/gnome-initial-setup-first-login.service" ]; then
+                    echo "  ✓ gnome-initial-setup-first-login wanted by gnome-session.target"
+                else
+                    echo "  ✗ gnome-initial-setup-first-login NOT wanted by gnome-session.target"
+                    FAIL=$((FAIL+1))
+                fi
+                for SENTINEL in \
+                    "$1/etc/skel/.config/gnome-initial-setup-done" \
+                    "$1/home/trailcurrent/.config/gnome-initial-setup-done"
+                do
+                    if [ -e "$SENTINEL" ]; then
+                        echo "  ✗ ${SENTINEL#$1} present — first-login wizard would be skipped"
+                        FAIL=$((FAIL+1))
+                    else
+                        echo "  ✓ ${SENTINEL#$1} absent (wizard will run)"
+                    fi
+                done
 
                 # System chrome
                 check   "$1" /etc/modprobe.d/disable-unused.conf
