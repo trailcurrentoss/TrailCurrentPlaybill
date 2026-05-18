@@ -655,7 +655,8 @@ function(
                         sox \
                         uxplay \
                         brave-browser \
-                        snapd
+                        snapd \
+                        gnome-initial-setup
                 # Note on yt-dlp: apt's package can lag YouTube's extractor
                 # changes by months. Hook 5a installs a fresh release blob
                 # (fetched by build.sh) to /usr/local/bin/yt-dlp; that path
@@ -754,7 +755,8 @@ function(
                            gstreamer1.0-gl \
                            ffmpeg lame flac libdvdread8t64 libdvdnav4 \
                            nodejs yt-dlp avahi-daemon libcap2-bin \
-                           sox uxplay brave-browser snapd; do
+                           sox uxplay brave-browser snapd \
+                           gnome-initial-setup; do
                     if ! chroot "$1" dpkg -s "$pkg" >/dev/null 2>&1; then
                         MISSING="$MISSING $pkg"
                     fi
