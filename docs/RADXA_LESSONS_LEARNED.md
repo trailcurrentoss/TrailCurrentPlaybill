@@ -39,6 +39,16 @@ Stock embloader 0.4 polls `gST->ConIn` during the autoboot window even at `timeo
 
 **The fix is mandatory and non-optional.** Patched embloader at [`image/embloader/patches/0001-playbill-autoboot-on-timeout-zero.patch`](../image/embloader/patches/0001-playbill-autoboot-on-timeout-zero.patch). The patch short-circuits the menu when `timeout == 0`, never touching ConIn. Built by [`build-embloader.sh`](../image/embloader/build-embloader.sh) and installed by hook 23 in [`rootfs.jsonnet`](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet) over both `/EFI/BOOT/BOOTAA64.EFI` and `/EFI/systemd/systemd-bootaa64.efi`.
 
+### Debug UART (`ttyMSM0`) is permanently disabled — Pin 8 reused for fan PWM
+Header pin 8 (`gpio22`, `qup05` UART5_TX) used to be claimed by the kernel as the `ttyMSM0` debug console. The Playbill image now wires a 5 V cooling fan to that pin, so the [`qcs6490-radxa-dragon-q6a-playbill-pwm-fan`](../image/overlays/qcs6490-radxa-dragon-q6a-playbill-pwm-fan.dts) overlay disables `/soc@0/geniqup@9c0000/serial@994000` to release the pad. Hook 20 in [`rootfs.jsonnet`](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet) strips `console=ttyMSM0,…` and the bare `earlycon` arg from `/etc/kernel/cmdline` and every systemd-boot loader entry so the kernel doesn't try to register the dead console.
+
+Consequences to keep in mind:
+- **No serial console for low-level kernel debugging.** Remote shells are SSH + `tty1`. If you brick networking, you have to recover by reflashing — there's no UART back door any more.
+- **The embloader autoboot patch above is still mandatory.** The DT overlay only takes effect after the kernel boots; embloader runs from UEFI well before that, with `gpio23` still in its hardware-default state. The phantom-ConIn fix is what keeps the boot menu from trapping on EMI before our kernel ever runs.
+- **`gpio23` is now unclaimed** (previously the debug-UART RX). It's deliberately not hogged in the `playbill-unused-pins-disable` overlay either — see the note in that file. If a future regression appears around floating-pin EMI on `gpio23`, hog it as an input there.
+
+Fan-control daemon (`playbill-fan-control.service`) operates as a thermostat: max CPU thermal-zone temp ≥ 60 °C turns the fan fully on, ≤ 50 °C (10 °C hysteresis) turns it off, with 60 s minimum on / 120 s minimum off latches to suppress short cycles when the SoC hovers near the threshold. A safety override at 80 °C breaks the off-latch. The settings live at the top of [`image/files/scripts/playbill-fan-control.py`](../image/files/scripts/playbill-fan-control.py) and were live-tuned 2026-05-20 against actual fan noise — small 5 V fans whine across most of the PWM range, so the daemon is intentionally thermostat-only (no variable speed) to keep the duty cycle out of the audible-harmonics band.
+
 ### `rsetup.service` will silently disable SSH on first boot
 Radxa ships `rsetup-config-first-boot` which auto-mounts a `/config` partition (separate from rootfs), reads `/config/before.txt`, and calls `disable_service ssh`. It also creates an unwanted `radxa` user (UID 1001) and may rename your hostname.
 

@@ -139,7 +139,7 @@ function MusicView() {
               <div
                 className={'thumb' + (album.coverUrl ? '' : ' no-poster')}
                 style={{
-                  backgroundImage: album.coverUrl ? `url(${album.coverUrl})` : 'none',
+                  backgroundImage: album.coverUrl ? `url("${album.coverUrl}")` : 'none',
                   aspectRatio: '1',
                 }}
               >
@@ -179,7 +179,7 @@ function AlbumDetail({ album, onBack, onPlayAlbum, onPlayTrack }) {
       <div className="music-detail-hero">
         <div
           className={'music-detail-cover' + (album.coverUrl ? '' : ' no-poster')}
-          style={{ backgroundImage: album.coverUrl ? `url(${album.coverUrl})` : 'none' }}
+          style={{ backgroundImage: album.coverUrl ? `url("${album.coverUrl}")` : 'none' }}
         >
           {!album.coverUrl && <ion-icon name="disc-outline"></ion-icon>}
         </div>

@@ -30,8 +30,13 @@ function safeReadJson(file) {
   catch (_) { return null; }
 }
 
+// See dvd-library.js for the parens rationale — albums under folders
+// like "Best Of (1999-2009)" need %28/%29 so the URL stays parseable
+// inside CSS url() rules.
 function toFileUrl(absPath) {
-  return 'file://' + encodeURI(absPath);
+  return 'file://' + encodeURI(absPath)
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29');
 }
 
 function scanAlbumDir(albumDir) {

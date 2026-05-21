@@ -153,7 +153,7 @@ function LocalView() {
           >
             <div
               className={'thumb' + (m.img ? '' : ' no-poster')}
-              style={{ backgroundImage: m.img ? `url(${m.img})` : 'none', aspectRatio: '2/3' }}
+              style={{ backgroundImage: m.img ? `url("${m.img}")` : 'none', aspectRatio: '2/3' }}
             >
               {!m.img && (
                 <div className="no-poster-inner">

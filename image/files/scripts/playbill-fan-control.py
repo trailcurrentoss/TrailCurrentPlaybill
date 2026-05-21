@@ -58,21 +58,29 @@ MAX_TEMP_C = 80.0   # at or above this, fan full
 # 80 °C full-fan target leaves ~10–15 °C headroom before the kernel's
 # thermal throttle (≈95 °C on QCS6490 cpu*-thermal zones) engages.
 
-# Minimum non-zero duty cycle. Below this, the prototype 5 V fan whines —
-# partly from low rotor torque (stiction stutter) and partly from PWM
-# duty-cycle harmonics in the audible band. Live-tuned 2026-05-20 against
-# user-perceived noise on the actual hardware:
+# Minimum non-zero duty cycle. Set to 1.0 so the daemon operates as a
+# thermostat: fan is either OFF (line LOW) or full ON (line HIGH 100 % of
+# the time). No PWM modulation while the fan is running, which means no
+# duty-cycle harmonics — the only noise the fan can produce is its native
+# motor / air-flow noise at full speed.
+#
+# Live-tuned 2026-05-20 against user-perceived noise on the actual
+# hardware. Earlier attempts to keep variable-speed PWM control while
+# avoiding the whine band:
 #   0.40 → whiny throughout running
-#   0.55 → fine while spinning up under sustained load, but exposed
-#          on the slow cool-down (≈10 s spent at this duty as temp
-#          drifts back through the 60–70 °C band)
-#   0.75 → smooth across the whole running envelope, including
-#          cool-down. Confirmed by the user as "perfectly fine".
-# Trade-off accepted (explicit user preference): the fan jumps from OFF
-# straight to a confidently-spinning 75 % — audibly louder for short
-# bursts but never produces the high-pitch buzz the lower duty range
-# was making. Below 60 °C the fan is fully OFF regardless of this floor.
-MIN_RUNNING_DUTY = 0.75
+#   0.55 → fine spinning up under sustained load (stress test), but
+#          exposed on the slow cool-down (~10 s at this duty as the
+#          temp drifts back through 60–70 °C)
+#   0.75 → quiet in stress-test conditions but still whiny in real
+#          mixed workloads like watching a live stream, where the temp
+#          hovers in the lower-duty range for extended periods
+# After three iterations the user explicitly chose thermostat mode:
+# "set the fan speed to the next level which gets rid of this sound.
+#  So all temperature ranges use the same higher fan speed".
+#
+# Trade-off accepted: when the fan engages it is at 100 % — louder for
+# short bursts than a modulated curve, but absolutely no whine.
+MIN_RUNNING_DUTY = 1.0
 
 # Sample the thermal zones this often (seconds). The PWM bit-bang continues
 # between samples at the previously-computed duty cycle.
@@ -90,9 +98,26 @@ KICKSTART_DURATION_S = 1.5
 
 # Hysteresis: avoid clicking the fan on/off at the MIN_TEMP_C boundary.
 # Once the fan turns on, leave it running until temp drops MIN_TEMP_HYST_C
-# below MIN_TEMP_C. 5 °C gives the heat-spreader enough time to actually
-# move heat out before the fan re-engages.
-MIN_TEMP_HYST_C = 5.0
+# below MIN_TEMP_C. 10 °C gives the heat-spreader plenty of time to actually
+# move heat out before the fan re-engages, and prevents short rapid cycles
+# during light loads (e.g. video playback) that hover right at threshold.
+MIN_TEMP_HYST_C = 10.0
+
+# Minimum on / off durations. Once the fan engages, leave it running for at
+# least MIN_FAN_ON_S so a brief temperature dip doesn't bounce it back off
+# (which would also trigger another mechanical spin-up cycle). Symmetric on
+# the other side: once the fan stops, keep it off for at least MIN_FAN_OFF_S
+# unless the SoC is sliding past the safety threshold. The on/off latches
+# only constrain the *threshold-driven* state changes; the safety override
+# below can still force the fan on regardless.
+MIN_FAN_ON_S  = 60.0   # 1 min minimum running window
+MIN_FAN_OFF_S = 120.0  # 2 min minimum idle window
+
+# Safety override: if the SoC has actually climbed to MAX_TEMP_C, the fan
+# turns on regardless of the MIN_FAN_OFF_S latch. This protects against the
+# pathological case where the daemon decides to keep the fan off for the
+# minimum-off duration just as the CPU is genuinely overheating.
+SAFETY_FORCE_ON_C = MAX_TEMP_C
 
 
 # ── libgpiod via ctypes ─────────────────────────────────────────────────────
@@ -198,19 +223,61 @@ def main():
     signal.signal(signal.SIGTERM, cleanup)
 
     last_sample = 0.0
-    print("fan-control: started; reading temps from", len(cpu_temp_paths), "cpu thermal zone(s)", flush=True)
+    # Initialise the on/off latch timestamps so the FIRST OFF→ON or ON→OFF
+    # transition isn't gated. Subtracting the minimum on/off windows from
+    # the current time means "long enough ago that the latch has already
+    # expired" — i.e., the daemon doesn't punish the user by forcing a
+    # 2-min idle wait on startup.
+    start_t = time.monotonic()
+    state["last_off_at"] = start_t - MIN_FAN_OFF_S
+    state["last_on_at"]  = start_t - MIN_FAN_ON_S
+    print("fan-control: started; reading temps from", len(cpu_temp_paths),
+          f"cpu thermal zone(s); min_on={MIN_FAN_ON_S:.0f}s min_off={MIN_FAN_OFF_S:.0f}s",
+          flush=True)
 
     try:
         while not state["stop"]:
             now = time.monotonic()
             if now - last_sample >= SAMPLE_INTERVAL_S:
                 temp = _read_max_cpu_temp_c(cpu_temp_paths)
-                new_duty = _temp_to_duty(temp, state["running"])
+                desired_duty = _temp_to_duty(temp, state["running"])
                 # Quantize to nearest 5 % to keep the PWM math/log noise down.
-                new_duty = round(new_duty * 20) / 20.0
-                if abs(new_duty - state["duty"]) >= 0.05 or state["duty"] == 0.0 and new_duty > 0.0:
+                desired_duty = round(desired_duty * 20) / 20.0
+
+                # Apply min-on / min-off latches. Safety override: if the
+                # SoC has actually climbed to SAFETY_FORCE_ON_C, the fan
+                # turns on regardless of the min-off latch — we'd rather
+                # break the latch than let the kernel throttle.
+                new_duty = desired_duty
+                safety_override = (temp is not None) and (temp >= SAFETY_FORCE_ON_C)
+
+                if state["running"] and desired_duty <= 0.0:
+                    on_for = now - state["last_on_at"]
+                    if on_for < MIN_FAN_ON_S:
+                        # Hold ON; latch hasn't expired.
+                        new_duty = state["duty"] if state["duty"] > 0.0 else 1.0
+                    else:
+                        state["last_off_at"] = now
+                elif not state["running"] and desired_duty > 0.0:
+                    off_for = now - state["last_off_at"]
+                    if off_for < MIN_FAN_OFF_S and not safety_override:
+                        # Hold OFF; latch hasn't expired and we're not in
+                        # the safety-override band.
+                        new_duty = 0.0
+                    else:
+                        state["last_on_at"] = now
+
+                if abs(new_duty - state["duty"]) >= 0.05 or (state["duty"] == 0.0 and new_duty > 0.0):
                     temp_str = f"{temp:.1f}°C" if temp is not None else "n/a"
-                    print(f"fan-control: temp={temp_str} duty={new_duty*100:.0f}%", flush=True)
+                    note = ""
+                    if new_duty != desired_duty:
+                        if desired_duty <= 0.0 and new_duty > 0.0:
+                            note = f"  [holding ON, on for {now - state['last_on_at']:.0f}s, min {MIN_FAN_ON_S:.0f}s]"
+                        elif desired_duty > 0.0 and new_duty <= 0.0:
+                            note = f"  [holding OFF, off for {now - state['last_off_at']:.0f}s, min {MIN_FAN_OFF_S:.0f}s]"
+                    elif safety_override and new_duty > 0.0 and state["duty"] <= 0.0:
+                        note = "  [safety override: temp ≥ SAFETY_FORCE_ON_C]"
+                    print(f"fan-control: temp={temp_str} duty={new_duty*100:.0f}%{note}", flush=True)
                 state["duty"] = new_duty
                 state["running"] = new_duty > 0.0
                 last_sample = now

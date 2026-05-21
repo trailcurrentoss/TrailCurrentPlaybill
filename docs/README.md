@@ -20,6 +20,8 @@ In future stages Playbill connects to the Headwaters NAS (media library), the ri
 | Audio out   | Built-in 3.5 mm headphone jack (WCD938x codec). Not HDMI, not USB DAC, not Bluetooth. |
 | Input       | USB keyboard + mouse for the desktop; arrow keys / IR or Bluetooth remote for the Playbill TV shell. **Not a touchscreen device.** |
 | Network     | WiFi (ath11k) and Ethernet, both via NetworkManager / GNOME network indicator |
+| IR receiver | KY-022 (TL1838 / VS1838B) on header pins 1 / 9 / 15 — see [playbill-gpio-pinout.png](playbill-gpio-pinout.png) |
+| Cooling fan | 5 V fan on header pins 4 / 6 / 8, PWM driven from gpio22 by a userspace thermostat (`playbill-fan-control.service`) reading the max CPU thermal zone |
 
 ## Repository layout
 
@@ -47,6 +49,7 @@ TrailCurrentPlaybill/
 │   ├── SETUP.md            Operator guide: build → flash → first boot
 │   ├── KERNEL_UPDATE_POLICY.md   Why we hold kernel + Mesa + linux-firmware
 │   ├── RADXA_LESSONS_LEARNED.md  Q6A-specific gotchas (boot, audio, video, AirPlay)
+│   ├── library-artwork.md  How to add posters / album covers for items that didn't resolve automatically
 │   └── app/                Per-feature docs (Live TV, Radio, Cast, architecture, onboarding)
 └── STAGE1_PLAN.md          The Stage-1 plan in full
 ```

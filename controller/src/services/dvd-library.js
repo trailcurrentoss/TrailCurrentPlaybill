@@ -20,12 +20,17 @@ function safeReadJson(file) {
 
 // Build a file:// URL from an absolute path. The renderer uses these
 // as <img> / background-image sources. Paths contain spaces and
-// parentheses (e.g. "Inception (2010).jpg") so encodeURI is mandatory
-// to keep them legal.
+// parentheses (e.g. "Inception (2010).jpg"); encodeURI escapes the
+// spaces but NOT the parens, so we follow up with explicit %28/%29
+// substitution. Reason: when the URL is dropped into a CSS
+// `background-image: url(…)` rule, unquoted parens inside the url()
+// argument terminate the function and the whole declaration is
+// discarded — that's exactly why year-suffixed library folders like
+// "Three Kings (1999)" used to render with no poster.
 function toFileUrl(absPath) {
-  // encodeURI preserves '/' but escapes spaces/parens. Prepend file://
-  // (Linux paths begin with '/', so the result is file:///home/...).
-  return 'file://' + encodeURI(absPath);
+  return 'file://' + encodeURI(absPath)
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29');
 }
 
 function scanCategory(category) {
