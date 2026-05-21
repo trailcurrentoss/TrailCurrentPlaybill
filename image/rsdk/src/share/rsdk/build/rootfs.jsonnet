@@ -2090,29 +2090,62 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 20: Kernel cmdline — usbcore.autosuspend
+            // Hook 20: Kernel cmdline — usbcore.autosuspend, drop ttyMSM0
+            //
+            // Two patches applied to every place the cmdline lives
+            // (/etc/kernel/cmdline, /boot/extlinux/extlinux.conf, every
+            // /boot/efi/loader/entries/*.conf):
+            //
+            //   (a) Append `usbcore.autosuspend=-1` (USB device stability,
+            //       pre-existing patch).
+            //
+            //   (b) Strip `console=ttyMSM0,...` and the bare `earlycon`
+            //       arg. The playbill-pwm-fan overlay disables
+            //       /soc@0/geniqup@9c0000/serial@994000 (qcom,geni-debug-uart)
+            //       to release gpio22 (PIN_8) for software-PWM fan control,
+            //       which leaves ttyMSM0 unregistered and earlycon writing to
+            //       an unmuxed pad. The kernel doesn't panic on the missing
+            //       console (`console=tty1` is still present and SSH carries
+            //       the remote shell), but leaving the dead `console=ttyMSM0`
+            //       arg in place produces a noisy "ignoring console=…" line
+            //       per boot. Strip both args so the cmdline accurately
+            //       describes what the kernel will actually do.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
                 echo "[hook 20] patching kernel cmdline"
-                CMDLINE="$1/etc/kernel/cmdline"
-                if [ -f "$CMDLINE" ] && ! grep -q "usbcore.autosuspend" "$CMDLINE"; then
-                    sed -i 's/$/ usbcore.autosuspend=-1/' "$CMDLINE"
-                fi
-                EXTLINUX="$1/boot/extlinux/extlinux.conf"
-                if [ -f "$EXTLINUX" ] && ! grep -q "usbcore.autosuspend" "$EXTLINUX"; then
-                    sed -i '/^[[:space:]]*append/ s/$/ usbcore.autosuspend=-1/' "$EXTLINUX"
-                fi
-                for entry in "$1"/boot/efi/loader/entries/*.conf; do
-                    [ -f "$entry" ] || continue
-                    if ! grep -q "usbcore.autosuspend" "$entry"; then
-                        sed -i '/^options / s/$/ usbcore.autosuspend=-1/' "$entry"
+
+                # Single sed program applied to every cmdline source. Idempotent:
+                #   - appends usbcore.autosuspend=-1 if not already there
+                #   - removes `console=ttyMSM0,<rest>` token (with leading space)
+                #   - removes a standalone `earlycon` token (with leading space)
+                patch_cmdline_file() {
+                    local f="$1" line_match="$2"
+                    [ -f "$f" ] || return 0
+                    if ! grep -q "usbcore.autosuspend" "$f"; then
+                        if [ -n "$line_match" ]; then
+                            sed -i "${line_match} s/\$/ usbcore.autosuspend=-1/" "$f"
+                        else
+                            sed -i 's/$/ usbcore.autosuspend=-1/' "$f"
+                        fi
                     fi
+                    # Strip `console=ttyMSM0,…` (any rate spec) once.
+                    sed -i 's/ console=ttyMSM0[^ ]*//g' "$f"
+                    # Strip bare `earlycon` token. Match start-of-line / space
+                    # before, and space / end-of-line after, to avoid clipping
+                    # an "earlycon=foo" form (we don't use one but be safe).
+                    sed -i -E 's/( |^)earlycon( |$)/\1\2/g; s/  +/ /g; s/ $//' "$f"
+                }
+
+                patch_cmdline_file "$1/etc/kernel/cmdline" ""
+                patch_cmdline_file "$1/boot/extlinux/extlinux.conf" "/^[[:space:]]*append/"
+                for entry in "$1"/boot/efi/loader/entries/*.conf; do
+                    patch_cmdline_file "$entry" "/^options /"
                 done
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 21: Install device-tree overlays (unused-pins disable + IR receiver)
+            // Hook 21: Install device-tree overlays + paired userspace services
             //
             // - unused-pins-disable: defense-in-depth against EMI / floating-pin issues.
             //   Claims every 40-pin header GPIO we do not bind so they sit in a defined
@@ -2121,15 +2154,22 @@ function(
             // - ir-recv: binds gpio-ir-receiver to GPIO_1 (header PIN_15) for the
             //   KY-022 / VS1838B IR demodulator; partners with /etc/rc_keymaps/playbill.toml
             //   to map remote scancodes to KeyboardEvent keycodes.
+            // - pwm-fan: disables qcom,geni-debug-uart at serial@994000 to release
+            //   gpio22 (PIN_8) for the userspace fan-control daemon. The 5 V cooling
+            //   fan is wired to PIN_4 (5 V) / PIN_6 (GND) / PIN_8 (PWM); the daemon
+            //   /usr/local/sbin/playbill-fan-control.py drives software-PWM with
+            //   duty cycle tracking max CPU temperature. See
+            //   docs/playbill-gpio-pinout.{svg,png} for the wiring reference.
             //
-            // Both compiled by build.sh from image/overlays/*.dts before this hook runs.
+            // All three .dtbos are compiled by build.sh from image/overlays/*.dts
+            // before this hook runs.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
-                echo "[hook 21] installing device-tree overlays (unused-pins + ir-recv)"
+                echo "[hook 21] installing device-tree overlays (unused-pins + ir-recv + pwm-fan)"
 
                 STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
-                OVERLAYS="qcs6490-radxa-dragon-q6a-playbill-unused-pins-disable.dtbo qcs6490-radxa-dragon-q6a-playbill-ir-recv.dtbo"
+                OVERLAYS="qcs6490-radxa-dragon-q6a-playbill-unused-pins-disable.dtbo qcs6490-radxa-dragon-q6a-playbill-ir-recv.dtbo qcs6490-radxa-dragon-q6a-playbill-pwm-fan.dtbo"
                 for OVR in $OVERLAYS; do
                     if [ ! -f "$STAGING/files/dtbo/$OVR" ]; then
                         echo "  ERROR: overlay $OVR missing from staging" >&2
@@ -2233,6 +2273,26 @@ function(
                     ln -sf ../playbill-ir-keymap-load.service \
                         "$1/etc/systemd/system/multi-user.target.wants/playbill-ir-keymap-load.service"
                     echo "  installed playbill-ir-keymap-load.service (boot-time keymap loader, auto-enabled)"
+                fi
+
+                # Fan-control daemon + service (paired with pwm-fan overlay).
+                # The daemon (Python + ctypes against libgpiod.so.2 — no extra
+                # apt deps) reads max(cpu*-thermal.temp) every 2 s and bit-bangs
+                # gpio22 at ~200 Hz with duty cycle linearly mapped from
+                # 40 °C (off) to 75 °C (full). Pre-validated against live
+                # hardware on 2026-05-20.
+                if [ -f "$FILES/scripts/playbill-fan-control.py" ]; then
+                    install -d -m 755 "$1/usr/local/sbin"
+                    install -m 755 "$FILES/scripts/playbill-fan-control.py" \
+                        "$1/usr/local/sbin/playbill-fan-control.py"
+                    if [ -f "$FILES/systemd/playbill-fan-control.service" ]; then
+                        install -m 644 "$FILES/systemd/playbill-fan-control.service" \
+                            "$1/etc/systemd/system/playbill-fan-control.service"
+                        mkdir -p "$1/etc/systemd/system/multi-user.target.wants"
+                        ln -sf ../playbill-fan-control.service \
+                            "$1/etc/systemd/system/multi-user.target.wants/playbill-fan-control.service"
+                        echo "  installed playbill-fan-control.py + .service (5 V fan PWM on gpio22, CPU-temp driven, auto-enabled)"
+                    fi
                 fi
             |||,
 
@@ -2683,7 +2743,8 @@ function(
                 # DT overlays staged + referenced by loader entry
                 for OVR in \
                     qcs6490-radxa-dragon-q6a-playbill-unused-pins-disable.dtbo \
-                    qcs6490-radxa-dragon-q6a-playbill-ir-recv.dtbo
+                    qcs6490-radxa-dragon-q6a-playbill-ir-recv.dtbo \
+                    qcs6490-radxa-dragon-q6a-playbill-pwm-fan.dtbo
                 do
                     if ls "$1"/boot/efi/*/[0-9]*/dtbo/"$OVR" 1>/dev/null 2>&1; then
                         echo "  ✓ DT overlay staged: $OVR"
@@ -2699,6 +2760,43 @@ function(
                         FAIL=$((FAIL+1))
                     fi
                 done
+
+                # ttyMSM0 console + earlycon stripped from cmdline (pwm-fan
+                # overlay disables the QUP that owns gpio22, so console=ttyMSM0
+                # and earlycon would be dead args after boot).
+                for cmdline_src in \
+                    "$1/etc/kernel/cmdline" \
+                    "$1/boot/extlinux/extlinux.conf"
+                do
+                    [ -f "$cmdline_src" ] || continue
+                    if grep -q "console=ttyMSM0" "$cmdline_src"; then
+                        echo "  ✗ ${cmdline_src#$1} still has console=ttyMSM0"
+                        FAIL=$((FAIL+1))
+                    else
+                        echo "  ✓ ${cmdline_src#$1} has no console=ttyMSM0"
+                    fi
+                    if grep -qE '( |^)earlycon( |$)' "$cmdline_src"; then
+                        echo "  ✗ ${cmdline_src#$1} still has bare earlycon"
+                        FAIL=$((FAIL+1))
+                    fi
+                done
+                for entry in "$1"/boot/efi/loader/entries/*.conf; do
+                    [ -f "$entry" ] || continue
+                    if grep -q "console=ttyMSM0" "$entry"; then
+                        echo "  ✗ ${entry#$1} still has console=ttyMSM0"
+                        FAIL=$((FAIL+1))
+                    fi
+                done
+
+                # Fan-control daemon + service
+                check_x "$1" /usr/local/sbin/playbill-fan-control.py
+                check   "$1" /etc/systemd/system/playbill-fan-control.service
+                if [ -L "$1/etc/systemd/system/multi-user.target.wants/playbill-fan-control.service" ]; then
+                    echo "  ✓ playbill-fan-control.service enabled"
+                else
+                    echo "  ✗ playbill-fan-control.service NOT enabled"
+                    FAIL=$((FAIL+1))
+                fi
 
                 # IR keymap installed + registered
                 if [ -f "$1/etc/rc_keymaps/playbill.toml" ]; then

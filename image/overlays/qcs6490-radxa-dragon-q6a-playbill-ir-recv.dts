@@ -12,6 +12,9 @@
 //   Header pin 9   (GND)       ← module pin  -   (black wire)
 //   Header pin 15  (GPIO_1)    ← module pin  S   (yellow wire)
 //
+// See docs/playbill-gpio-pinout.{svg,png} for the combined wiring reference
+// covering both this IR receiver and the 5 V cooling fan on PINs 4/6/8.
+//
 // Pin history / why PIN_15 instead of something else:
 //   - PIN_3 (gpio24 / I2C7_SDA): HANGS BOOT. The Q6A's pre-kernel firmware
 //     probes I2C7 for HAT-EEPROM; a non-I2C device on SDA never ACKs and

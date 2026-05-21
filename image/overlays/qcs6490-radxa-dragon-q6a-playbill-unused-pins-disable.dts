@@ -18,12 +18,22 @@
 //   * gives each a stable kernel-visible line-name for diagnostics
 //
 // Pins NOT included (deliberately left alone):
-//   gpio22 (PIN_8 UART_TX) and gpio23 (PIN_10 UART_RX) — these are the
-//   debug UART (ttyMSM0). The kernel keeps them muxed as UART for console
-//   I/O. The phantom-input issue on gpio23 is mitigated upstream of the
-//   kernel by patching UEFI BootAskValid + ConIn (see
-//   files/scripts/playbill-firstboot.sh §1b), so we do not need to
-//   wrest these pins from the UART driver.
+//   gpio22 (PIN_8) — owned by the playbill-pwm-fan overlay. The 5 V cooling
+//   fan's PWM input is wired to PIN_8 and is driven by
+//   /usr/local/sbin/playbill-fan-control.py (playbill-fan-control.service)
+//   via libgpiod. The playbill-pwm-fan overlay disables the kernel debug
+//   UART (qcom,geni-debug-uart at serial@994000) which used to hold this
+//   pad, so gpio22 is now free for the daemon to claim. Do NOT hog it
+//   here as an input or the daemon will be unable to acquire it.
+//
+//   gpio23 (PIN_10 UART_RX) — formerly the debug-UART RX. Released as a
+//   side-effect when playbill-pwm-fan disabled serial@994000. Left
+//   unclaimed (and unhogged) because we do not use PIN_10. The original
+//   phantom-input issue on this pad is mitigated upstream of the kernel by
+//   patching UEFI BootAskValid + ConIn (see
+//   files/scripts/playbill-firstboot.sh §1b), so leaving it floating is
+//   safe at the boot level. If a future regression in that area appears,
+//   consider hogging gpio23 here as an input.
 //
 //   HAT-used GPIOs (gpio29, 48, 49, 50, 51, 57, 97, 98, 99, 100) — owned
 //   by the MCP2515 / SPI12 / SC16IS752 bindings in the OS DT and the CAN

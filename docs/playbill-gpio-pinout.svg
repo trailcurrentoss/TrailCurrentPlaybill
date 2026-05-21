@@ -1,0 +1,321 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 950" font-family="Inter, Helvetica, Arial, sans-serif">
+
+  <!-- Background -->
+  <rect width="1100" height="950" fill="#f8f9fa"/>
+
+  <!-- Title bar -->
+  <rect width="1100" height="54" fill="#ffffff"/>
+  <rect y="54" width="1100" height="3" fill="#52a441"/>
+  <text x="24" y="35" font-size="16" font-weight="700" fill="#52a441">TrailCurrent Playbill</text>
+  <text x="218" y="35" font-size="13" fill="#495057">40-pin GPIO header wiring — KY-022 IR receiver + 5 V cooling fan (PWM-controlled by CPU temp)</text>
+
+  <!-- =================================================================== -->
+  <!-- PANEL 1: Radxa Dragon Q6A 40-pin header                              -->
+  <!-- Board orientation: viewed top-down with U.FL connectors at top of    -->
+  <!-- the board, the header sits on the right edge running vertically with -->
+  <!-- pin 1 at the TOP. Below the header is drawn rotated 90° CLOCKWISE    -->
+  <!-- so that pin 1 lands at the BOTTOM-LEFT corner. This means:           -->
+  <!--   - LEFT column of physical header → BOTTOM row of this diagram      -->
+  <!--   - Odd pins (1, 3, 5, …, 39) → BOTTOM row                           -->
+  <!--   - Even pins (2, 4, 6, …, 40) → TOP row                             -->
+  <!--                                                                      -->
+  <!-- Fan callouts go UP from the TOP row (pins 4, 6, 8).                  -->
+  <!-- IR callouts go DOWN from the BOTTOM row (pins 1, 9, 15).             -->
+  <!-- =================================================================== -->
+  <rect x="20" y="80" width="1060" height="490" fill="#ffffff" stroke="#0d6efd" stroke-width="1.5" rx="6"/>
+  <path d="M20,86 Q20,80 26,80 L1074,80 Q1080,80 1080,86 L1080,108 L20,108 Z" fill="#0d6efd"/>
+  <text x="550" y="100" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">Radxa Dragon Q6A — 40-pin GPIO header (board rotated 90° CW · pin 1 at bottom-left)</text>
+
+  <!-- ===================================================== -->
+  <!-- FAN callouts — go UP from the TOP (even) row          -->
+  <!-- Pin 4 (5V), Pin 6 (GND), Pin 8 (PWM signal / gpio22)  -->
+  <!-- Header pin coordinates: pin 4 cx=79, pin 6 cx=102,    -->
+  <!-- pin 8 cx=125, all with the pad spanning y=380-392.    -->
+  <!-- Stage callouts at y=128 / 198 / 268 above the header. -->
+  <!-- ===================================================== -->
+
+  <!-- Pin 4 — 5V to fan + (red wire) -->
+  <line x1="79" y1="380" x2="79" y2="350" stroke="#b91c1c" stroke-width="1.4"/>
+  <polyline points="79,350 215,350 215,342" fill="none" stroke="#b91c1c" stroke-width="1.4"/>
+  <rect x="120" y="290" width="200" height="50" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.2" rx="3"/>
+  <text x="220" y="309" text-anchor="middle" font-size="10" font-weight="700" fill="#b91c1c">Pin 4 — 5 V</text>
+  <text x="220" y="323" text-anchor="middle" font-size="9" fill="#7f1d1d">to fan  +    (red wire)</text>
+  <text x="220" y="335" text-anchor="middle" font-size="8" fill="#7f1d1d" font-style="italic">supplies the fan motor</text>
+
+  <!-- Pin 6 — GND to fan - (black wire) -->
+  <line x1="102" y1="380" x2="102" y2="270" stroke="#1a1a1a" stroke-width="1.4"/>
+  <polyline points="102,270 430,270 430,262" fill="none" stroke="#1a1a1a" stroke-width="1.4"/>
+  <rect x="340" y="210" width="180" height="50" fill="#f1f3f5" stroke="#1a1a1a" stroke-width="1.2" rx="3"/>
+  <text x="430" y="229" text-anchor="middle" font-size="10" font-weight="700" fill="#1a1a1a">Pin 6 — GND</text>
+  <text x="430" y="243" text-anchor="middle" font-size="9" fill="#495057">to fan  −    (black wire)</text>
+  <text x="430" y="255" text-anchor="middle" font-size="8" fill="#495057" font-style="italic">common ground</text>
+
+  <!-- Pin 8 — PWM signal / gpio22 (blue wire) -->
+  <line x1="125" y1="380" x2="125" y2="190" stroke="#0d6efd" stroke-width="1.6"/>
+  <polyline points="125,190 645,190 645,182" fill="none" stroke="#0d6efd" stroke-width="1.6"/>
+  <rect x="540" y="128" width="220" height="54" fill="#dbeafe" stroke="#0d6efd" stroke-width="1.4" rx="3"/>
+  <text x="650" y="147" text-anchor="middle" font-size="10" font-weight="700" fill="#0a3d99">Pin 8 — GPIO22  (fan PWM)</text>
+  <text x="650" y="161" text-anchor="middle" font-size="9" fill="#0a3d99">to fan PWM input  (blue wire)</text>
+  <text x="650" y="174" text-anchor="middle" font-size="8" fill="#0a3d99" font-style="italic">software PWM ≈100 Hz, duty ∝ max CPU temp</text>
+
+  <!-- Header body (now further down to leave room for fan callouts) -->
+  <rect x="40" y="378" width="940" height="50" fill="#0d2b52" stroke="#091a33" stroke-width="2" rx="3"/>
+
+  <!-- Pin geometry: 20 columns at pitch ~46.5px starting x=50.
+       TOP row (even pins) y=388; BOTTOM row (odd pins) y=408. -->
+
+  <!-- Square pad indicator on pin 1 (bottom-left corner) -->
+  <rect x="46" y="416" width="8" height="8" fill="#ffffff" stroke="#ffd54f" stroke-width="1"/>
+
+  <!-- Orientation cues -->
+  <text x="40" y="372" font-size="10" fill="#6c757d" font-style="italic">pin 2 ▲</text>
+  <text x="980" y="372" font-size="10" fill="#6c757d" font-style="italic" text-anchor="end">pin 40 ▲</text>
+
+  <!-- TOP row pins (even: 2, 4, 6, …, 40).
+       USED: pin 4 (red, 5V), pin 6 (black, GND), pin 8 (blue, fan PWM). -->
+  <g id="top-row-even">
+    <!-- pin 2 -->
+    <rect x="55" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <!-- pin 4 — 5V (red) -->
+    <rect x="72" y="388" width="14" height="12" fill="#ef4444" stroke="#7f1d1d" stroke-width="1.5"/>
+    <!-- pin 6 — GND (black) -->
+    <rect x="95" y="388" width="14" height="12" fill="#1a1a1a" stroke="#000" stroke-width="1.5"/>
+    <!-- pin 8 — GPIO22 / fan PWM (blue) -->
+    <rect x="118" y="388" width="14" height="12" fill="#0d6efd" stroke="#0a3d99" stroke-width="1.5"/>
+    <rect x="141" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="164" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="187" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="210" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="233" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="256" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="279" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="302" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="325" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="348" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="371" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="394" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="417" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="440" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="463" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="486" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="509" y="388" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+  </g>
+
+  <!-- BOTTOM row pins (odd: 1, 3, 5, …, 39).
+       USED: pin 1 (yellow, 3.3V), pin 9 (black, GND), pin 15 (orange, IR signal). -->
+  <g id="bottom-row-odd">
+    <!-- pin 1 — 3.3V (yellow) -->
+    <rect x="55" y="408" width="14" height="12" fill="#facc15" stroke="#854d0e" stroke-width="1.5"/>
+    <rect x="72" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="95" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="118" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <!-- pin 9 — GND (black) -->
+    <rect x="141" y="408" width="14" height="12" fill="#1a1a1a" stroke="#000" stroke-width="1.5"/>
+    <rect x="164" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="187" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <!-- pin 15 — GPIO_1 IR signal (orange) -->
+    <rect x="210" y="408" width="14" height="12" fill="#ffc107" stroke="#7a5a00" stroke-width="1.5"/>
+    <rect x="233" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="256" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="279" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="302" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="325" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="348" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="371" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="394" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="417" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="440" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="463" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="486" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+    <rect x="509" y="408" width="14" height="12" fill="#495057" stroke="#212529" stroke-width="0.5"/>
+  </g>
+
+  <!-- Pin-number labels: even pins ABOVE the top row, odd pins BELOW the bottom row. -->
+  <g font-size="9" text-anchor="middle" fill="#6c757d">
+    <!-- Top row: even pins -->
+    <text x="62" y="384">2</text>
+    <text x="79" y="384" fill="#7f1d1d" font-weight="700">4</text>
+    <text x="102" y="384" fill="#212529" font-weight="700">6</text>
+    <text x="125" y="384" fill="#0a3d99" font-weight="700">8</text>
+    <text x="148" y="384">10</text>
+    <text x="171" y="384">12</text>
+    <text x="194" y="384">14</text>
+    <text x="217" y="384">16</text>
+    <text x="240" y="384">18</text>
+    <text x="263" y="384">20</text>
+    <text x="286" y="384">22</text>
+    <text x="309" y="384">24</text>
+    <text x="332" y="384">26</text>
+    <text x="355" y="384">28</text>
+    <text x="378" y="384">30</text>
+    <text x="401" y="384">32</text>
+    <text x="424" y="384">34</text>
+    <text x="447" y="384">36</text>
+    <text x="470" y="384">38</text>
+    <text x="516" y="384">40</text>
+
+    <!-- Bottom row: odd pins -->
+    <text x="62" y="438" fill="#854d0e" font-weight="700">1</text>
+    <text x="79" y="438">3</text>
+    <text x="102" y="438">5</text>
+    <text x="125" y="438">7</text>
+    <text x="148" y="438" fill="#212529" font-weight="700">9</text>
+    <text x="171" y="438">11</text>
+    <text x="194" y="438">13</text>
+    <text x="217" y="438" fill="#b88600" font-weight="700">15</text>
+    <text x="240" y="438">17</text>
+    <text x="263" y="438">19</text>
+    <text x="286" y="438">21</text>
+    <text x="309" y="438">23</text>
+    <text x="332" y="438">25</text>
+    <text x="355" y="438">27</text>
+    <text x="378" y="438">29</text>
+    <text x="401" y="438">31</text>
+    <text x="424" y="438">33</text>
+    <text x="447" y="438">35</text>
+    <text x="470" y="438">37</text>
+    <text x="516" y="438">39</text>
+  </g>
+
+  <!-- ===================================================== -->
+  <!-- IR callouts — go DOWN from the BOTTOM (odd) row       -->
+  <!-- Pin 1 (3.3V), Pin 9 (GND), Pin 15 (GPIO_1 signal)     -->
+  <!-- ===================================================== -->
+
+  <!-- Pin 1 — 3.3V (yellow) -->
+  <line x1="62" y1="420" x2="62" y2="460" stroke="#854d0e" stroke-width="1.2"/>
+  <polyline points="62,460 150,460 150,468" fill="none" stroke="#854d0e" stroke-width="1.2"/>
+  <rect x="85" y="468" width="170" height="32" fill="#fef9c3" stroke="#854d0e" stroke-width="1" rx="3"/>
+  <text x="170" y="484" text-anchor="middle" font-size="10" font-weight="700" fill="#854d0e">Pin 1 — 3.3V</text>
+  <text x="170" y="496" text-anchor="middle" font-size="9" fill="#495057">to IR module  +    (red wire)</text>
+
+  <!-- Pin 15 — GPIO_1 (signal) -->
+  <line x1="217" y1="420" x2="217" y2="520" stroke="#ffc107" stroke-width="1.4"/>
+  <polyline points="217,520 300,520 300,528" fill="none" stroke="#ffc107" stroke-width="1.4"/>
+  <rect x="205" y="528" width="190" height="32" fill="#fff8db" stroke="#b88600" stroke-width="1.2" rx="3"/>
+  <text x="300" y="544" text-anchor="middle" font-size="10" font-weight="700" fill="#212529">Pin 15 — GPIO_1 (IR signal)</text>
+  <text x="300" y="556" text-anchor="middle" font-size="9" fill="#664d03">to IR module  S    (yellow wire)  ·  active-low</text>
+
+  <!-- Pin 9 — GND -->
+  <line x1="148" y1="420" x2="148" y2="468" stroke="#1a1a1a" stroke-width="1.2"/>
+  <polyline points="148,468 440,468 440,476" fill="none" stroke="#1a1a1a" stroke-width="1.2"/>
+  <rect x="370" y="476" width="138" height="32" fill="#f1f3f5" stroke="#1a1a1a" stroke-width="1" rx="3"/>
+  <text x="439" y="492" text-anchor="middle" font-size="10" font-weight="700" fill="#1a1a1a">Pin 9 — GND</text>
+  <text x="439" y="504" text-anchor="middle" font-size="9" fill="#495057">to IR module  −    (black wire)</text>
+
+  <!-- HAT-occupied region annotation -->
+  <rect x="540" y="528" width="440" height="30" fill="#fff3cd" stroke="#e0a800" stroke-width="1.2" rx="4"/>
+  <text x="760" y="546" text-anchor="middle" font-size="9" fill="#664d03">Waveshare RS485 CAN HAT-B uses pins 11/12/19/21–24/35–38/40.</text>
+  <text x="760" y="555" text-anchor="middle" font-size="9" fill="#664d03">Fan (4 / 6 / 8) and IR (1 / 9 / 15) are clear of the HAT footprint.</text>
+
+  <!-- =================================================================== -->
+  <!-- PANEL 2A: IR wiring table (left half)                                -->
+  <!-- =================================================================== -->
+  <rect x="20" y="590" width="525" height="170" fill="#ffffff" stroke="#e0a800" stroke-width="1.5" rx="6"/>
+  <path d="M20,596 Q20,590 26,590 L539,590 Q545,590 545,596 L545,618 L20,618 Z" fill="#e0a800"/>
+  <text x="282" y="610" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">KY-022 IR receiver — pin-by-pin wiring</text>
+
+  <!-- Column headers -->
+  <rect x="40" y="630" width="485" height="22" fill="#e9ecef" stroke="#ced4da"/>
+  <text x="80" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">Signal</text>
+  <text x="190" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">Q6A header</text>
+  <text x="340" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">KY-022 pin</text>
+  <text x="485" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">Wire</text>
+
+  <!-- IR Row: VCC -->
+  <rect x="40" y="652" width="485" height="28" fill="#ffffff" stroke="#ced4da"/>
+  <rect x="46" y="658" width="14" height="16" fill="#facc15" rx="2"/>
+  <text x="80" y="670" text-anchor="middle" font-size="10" font-weight="700" fill="#212529">VCC</text>
+  <text x="190" y="670" text-anchor="middle" font-size="10" fill="#212529">Pin 1  (3.3 V)</text>
+  <text x="340" y="670" text-anchor="middle" font-size="10" fill="#212529">middle  ( + )</text>
+  <text x="485" y="670" text-anchor="middle" font-size="10" fill="#212529">Red</text>
+
+  <!-- IR Row: Signal -->
+  <rect x="40" y="680" width="485" height="28" fill="#fdfdff" stroke="#ced4da"/>
+  <rect x="46" y="686" width="14" height="16" fill="#ffc107" rx="2"/>
+  <text x="80" y="698" text-anchor="middle" font-size="10" font-weight="700" fill="#212529">S (data)</text>
+  <text x="190" y="698" text-anchor="middle" font-size="10" fill="#212529">Pin 15  (GPIO_1)</text>
+  <text x="340" y="698" text-anchor="middle" font-size="10" fill="#212529">right  ( S )</text>
+  <text x="485" y="698" text-anchor="middle" font-size="10" fill="#212529">Yellow</text>
+
+  <!-- IR Row: GND -->
+  <rect x="40" y="708" width="485" height="28" fill="#ffffff" stroke="#ced4da"/>
+  <rect x="46" y="714" width="14" height="16" fill="#1a1a1a" rx="2"/>
+  <text x="80" y="726" text-anchor="middle" font-size="10" font-weight="700" fill="#212529">GND</text>
+  <text x="190" y="726" text-anchor="middle" font-size="10" fill="#212529">Pin 9  (GND)</text>
+  <text x="340" y="726" text-anchor="middle" font-size="10" fill="#212529">left  ( − )</text>
+  <text x="485" y="726" text-anchor="middle" font-size="10" fill="#212529">Black</text>
+
+  <text x="282" y="752" text-anchor="middle" font-size="9" fill="#6c757d" font-style="italic">VS1838B open-collector, idle HIGH; tie S directly to GPIO_1 — no level shifter.</text>
+
+  <!-- =================================================================== -->
+  <!-- PANEL 2B: Fan wiring table (right half)                              -->
+  <!-- =================================================================== -->
+  <rect x="555" y="590" width="525" height="170" fill="#ffffff" stroke="#52a441" stroke-width="1.5" rx="6"/>
+  <path d="M555,596 Q555,590 561,590 L1074,590 Q1080,590 1080,596 L1080,618 L555,618 Z" fill="#52a441"/>
+  <text x="817" y="610" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">5 V cooling fan — pin-by-pin wiring</text>
+
+  <!-- Column headers -->
+  <rect x="575" y="630" width="485" height="22" fill="#e9ecef" stroke="#ced4da"/>
+  <text x="615" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">Signal</text>
+  <text x="725" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">Q6A header</text>
+  <text x="875" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">Fan lead</text>
+  <text x="1020" y="646" font-size="11" font-weight="700" fill="#212529" text-anchor="middle">Wire</text>
+
+  <!-- Fan Row: VCC -->
+  <rect x="575" y="652" width="485" height="28" fill="#ffffff" stroke="#ced4da"/>
+  <rect x="581" y="658" width="14" height="16" fill="#ef4444" rx="2"/>
+  <text x="615" y="670" text-anchor="middle" font-size="10" font-weight="700" fill="#212529">VCC</text>
+  <text x="725" y="670" text-anchor="middle" font-size="10" fill="#212529">Pin 4  (5 V)</text>
+  <text x="875" y="670" text-anchor="middle" font-size="10" fill="#212529">fan  +</text>
+  <text x="1020" y="670" text-anchor="middle" font-size="10" fill="#212529">Red</text>
+
+  <!-- Fan Row: PWM -->
+  <rect x="575" y="680" width="485" height="28" fill="#fdfdff" stroke="#ced4da"/>
+  <rect x="581" y="686" width="14" height="16" fill="#0d6efd" rx="2"/>
+  <text x="615" y="698" text-anchor="middle" font-size="10" font-weight="700" fill="#212529">PWM</text>
+  <text x="725" y="698" text-anchor="middle" font-size="10" fill="#212529">Pin 8  (GPIO22)</text>
+  <text x="875" y="698" text-anchor="middle" font-size="10" fill="#212529">fan PWM input</text>
+  <text x="1020" y="698" text-anchor="middle" font-size="10" fill="#212529">Blue</text>
+
+  <!-- Fan Row: GND -->
+  <rect x="575" y="708" width="485" height="28" fill="#ffffff" stroke="#ced4da"/>
+  <rect x="581" y="714" width="14" height="16" fill="#1a1a1a" rx="2"/>
+  <text x="615" y="726" text-anchor="middle" font-size="10" font-weight="700" fill="#212529">GND</text>
+  <text x="725" y="726" text-anchor="middle" font-size="10" fill="#212529">Pin 6  (GND)</text>
+  <text x="875" y="726" text-anchor="middle" font-size="10" fill="#212529">fan  −</text>
+  <text x="1020" y="726" text-anchor="middle" font-size="10" fill="#212529">Black</text>
+
+  <text x="817" y="752" text-anchor="middle" font-size="9" fill="#6c757d" font-style="italic">PWM drives the fan tach/control input (or an external MOSFET on 2-wire fans).</text>
+
+  <!-- =================================================================== -->
+  <!-- PANEL 3: Linux side — overlays, fan daemon, IR keymap                -->
+  <!-- =================================================================== -->
+  <rect x="20" y="780" width="1060" height="138" fill="#ffffff" stroke="#dee2e6" stroke-width="1.5" rx="6"/>
+  <text x="550" y="804" text-anchor="middle" font-size="13" font-weight="700" fill="#212529">Linux side — DT overlays · fan-control daemon · IR keymap</text>
+
+  <!-- Left column: IR overlay + keymap -->
+  <text x="40" y="826" font-size="11" fill="#dc3545" font-weight="700">IR receiver</text>
+  <text x="40" y="841" font-size="10" fill="#495057" font-family="ui-monospace, Menlo, Consolas, monospace">image/overlays/qcs6490-radxa-dragon-q6a-playbill-ir-recv.dts</text>
+  <text x="40" y="855" font-size="10" fill="#495057">  gpio-ir-receiver  →  &amp;tlmm gpio1  (PIN_15, active-low, wakeup-source)</text>
+  <text x="40" y="869" font-size="10" fill="#495057" font-family="ui-monospace, Menlo, Consolas, monospace">/etc/rc_keymaps/playbill.toml</text>
+  <text x="40" y="883" font-size="10" fill="#495057">  NEC scancodes  ·  Power → KEY_PROG1 (XF86Launch1) → GNOME launches Playbill</text>
+  <text x="40" y="897" font-size="9" fill="#6c757d" font-style="italic">Loaded at boot via 60-playbill-ir-keymap.rules + playbill-ir-keymap-load.service.</text>
+
+  <!-- Right column: Fan overlay + daemon -->
+  <text x="560" y="826" font-size="11" fill="#198754" font-weight="700">Cooling fan</text>
+  <text x="560" y="841" font-size="10" fill="#495057" font-family="ui-monospace, Menlo, Consolas, monospace">image/overlays/qcs6490-radxa-dragon-q6a-playbill-pwm-fan.dts</text>
+  <text x="560" y="855" font-size="10" fill="#495057">  &amp;tlmm gpio22  released from QUP6 UART, muxed as plain GPIO output (PIN_8)</text>
+  <text x="560" y="869" font-size="10" fill="#495057" font-family="ui-monospace, Menlo, Consolas, monospace">/usr/local/sbin/playbill-fan-control.py</text>
+  <text x="560" y="883" font-size="10" fill="#495057">  reads max(cpu*-thermal.temp) → software PWM ≈100 Hz on gpio22</text>
+  <text x="560" y="897" font-size="9" fill="#6c757d" font-style="italic">Curve: ≤40 °C → 0 %  ·  60 °C → 50 %  ·  ≥75 °C → 100 %. Run by playbill-fan-control.service.</text>
+
+  <!-- Verification + footer -->
+  <text x="550" y="935" text-anchor="middle" font-size="9" fill="#7a1a25" font-weight="700">⚠ Pin 8 (gpio22) used to be the ttyMSM0 debug UART_TX. The serial console is dropped from the kernel cmdline; debug now uses tty1 + SSH only.</text>
+
+  <!-- Footer -->
+  <rect y="926" width="1100" height="24" fill="#ffffff"/>
+  <rect y="926" width="1100" height="1" fill="#dee2e6"/>
+  <text x="24" y="943" font-size="9" fill="#52a441" font-weight="600">TrailCurrent</text>
+  <text x="110" y="943" font-size="9" fill="#6c757d">Playbill — GPIO peripheral wiring reference (IR + cooling fan)</text>
+</svg>

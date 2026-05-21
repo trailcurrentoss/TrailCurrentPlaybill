@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// Playbill Q6A — free gpio22 (PIN_8) for software-PWM fan control.
+//
+// Hardware:
+//   5 V cooling fan (2- or 3-wire) attached to the 40-pin GPIO header:
+//     Header pin 4   (5 V)        →  fan +     (red wire)
+//     Header pin 6   (GND)        →  fan −     (black wire)
+//     Header pin 8   (GPIO22)     →  fan PWM   (blue wire)
+//
+//   The PWM control is software-driven from userspace
+//   (/usr/local/sbin/playbill-fan-control.py, run by
+//   playbill-fan-control.service) at ~200 Hz with duty cycle proportional
+//   to max CPU thermal-zone temperature. Live-validated 2026-05-20 on the
+//   prototype: fan responds clearly to on/off and shows audible speed
+//   differences across the 0/25/50/75/100 % duty steps.
+//
+// What this overlay actually does:
+//   gpio22 is normally claimed by qcom,geni-debug-uart at /soc@0/geniqup@9c0000/
+//   serial@994000 (qup05 / UART5_TX, see live DT phandle 0x71). With that node
+//   enabled the kernel applies pinctrl-0 = <qup-uart5-tx-state
+//   qup-uart5-rx-state>, holding gpio22 muxed as UART_TX, and userspace cannot
+//   claim the line (it appears as `"PIN_8" kernel output [used]` in gpioinfo).
+//
+//   Disabling serial@994000 here releases gpio22 (and its mate gpio23 /
+//   PIN_10 / UART5_RX) back to the TLMM, which restores their pinmux to the
+//   default plain-GPIO function. The userspace fan-control daemon then
+//   claims gpio22 via /dev/gpiochip4 and toggles it.
+//
+// Cost: we lose the ttyMSM0 serial console. The image's kernel cmdline drops
+// `console=ttyMSM0,115200n8 earlycon` (see rootfs.jsonnet hook 20) so the
+// kernel doesn't try to register the dead console; boot output goes to tty1
+// and SSH remains the primary remote shell. earlycon is no longer useful
+// either since the QUP UART is unbound, so it's dropped at the same time.
+//
+// Live-test validation method (do NOT regress this — gpio22 is hard to
+// debug without a logic analyzer):
+//   1. Apply this overlay (or an equivalent disposable test overlay).
+//   2. Reboot.
+//   3. `gpioinfo /dev/gpiochip4 | grep 'line *22:'` must show
+//      `"PIN_8" unused output active-high` (NOT `kernel [used]`).
+//   4. `ls /dev/ttyMSM0` must be absent.
+//   5. Userspace must be able to claim gpio22 via libgpiod (e.g. running
+//      playbill-fan-control.py and observing fan response).
+//
+// Pin history / why PIN_8 was previously off-limits:
+//   PIN_8 (gpio22) was explicitly left alone by the
+//   playbill-unused-pins-disable overlay because the kernel kept it muxed
+//   as the debug-UART TX line. That note in the unused-pins overlay is now
+//   stale; gpio22 is owned by THIS overlay + the fan daemon, not by the
+//   kernel UART driver, and not by the unused-pins hog list.
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	metadata {
+		title = "Disable ttyMSM0 + free gpio22 for fan PWM (Playbill Q6A)";
+		compatible = "radxa,dragon-q6a";
+		category = "misc";
+		exclusive = "gpio22", "gpio23";
+		description = "Disables /soc@0/geniqup@9c0000/serial@994000 (qcom,geni-debug-uart)
+to release gpio22 (PIN_8) for the playbill fan-control daemon. gpio23
+(PIN_10 / UART5_RX) is freed as a side-effect; it is left unclaimed
+because we do not use PIN_10 on the Playbill 40-pin header. The image's
+kernel cmdline drops `console=ttyMSM0` and `earlycon` to suppress the
+now-orphaned console; boot messages still go to tty1.";
+	};
+
+	fragment@0 {
+		target-path = "/soc@0/geniqup@9c0000/serial@994000";
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+};

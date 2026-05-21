@@ -1,0 +1,41 @@
+[Unit]
+Description=Playbill — 5 V cooling fan PWM control (CPU temp driven)
+Documentation=file:///usr/share/doc/playbill/playbill-gpio-pinout.png
+# We need the GPIO character device to exist (provided by sysinit.target via
+# the kernel's gpiochip subsystem) and the cpu*-thermal zones to be populated
+# (also sysinit-era). We do NOT want to run before local-fs.target because
+# we read /sys/class/thermal at runtime; that's already up by sysinit, but
+# pinning here is safe.
+After=sysinit.target local-fs.target
+ConditionPathExists=/dev/gpiochip4
+ConditionPathExists=/usr/local/sbin/playbill-fan-control.py
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /usr/local/sbin/playbill-fan-control.py
+# Drop the line low on exit (the daemon also does this in its own finally
+# block, but if we're killed with SIGKILL the kernel character-device close
+# returns gpio22 to its default state automatically).
+KillSignal=SIGTERM
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=3
+# The fan-control daemon is non-essential — if it dies repeatedly, don't
+# bring the system down with it. Let systemd back off and try again later.
+StartLimitInterval=120
+StartLimitBurst=5
+
+# Hardening — the daemon needs /dev/gpiochip4 and /sys/class/thermal only.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+DeviceAllow=/dev/gpiochip4 rw
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
