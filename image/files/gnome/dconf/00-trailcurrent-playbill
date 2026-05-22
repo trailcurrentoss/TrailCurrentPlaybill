@@ -51,6 +51,16 @@ picture-options='zoom'
 gtk-theme='Yaru-viridian-dark'
 icon-theme='Yaru'
 
+# gedit ships with `tango` as its GtkSourceView default style scheme — a
+# light scheme (light background, explicit dark foreground per token). On a
+# dark-themed desktop the source-view widget renders against libadwaita's
+# dark view background while tango's foreground colors stay dark, producing
+# unreadable dark-on-dark text. `Yaru-dark` is a dark style scheme installed
+# by gtksourceview5-common on Noble and matches Yaru-viridian-dark chrome.
+# Not locked — users may prefer Adwaita-dark / solarized-dark / etc.
+[org/gnome/gedit/preferences/editor]
+scheme='Yaru-dark'
+
 [org/gnome/shell]
 favorite-apps=['trailcurrent-playbill.desktop', 'firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.Settings.desktop']
 # Empty array → GNOME Shell auto-populates the app picker from /usr/share/applications/.
