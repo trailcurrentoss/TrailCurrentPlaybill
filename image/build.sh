@@ -106,11 +106,21 @@ section "Staging files for rsdk hooks"
 mkdir -p "$STAGING_DIR/files"
 mkdir -p "$STAGING_DIR/branding"
 mkdir -p "$STAGING_DIR/electron-app"
+mkdir -p "$STAGING_DIR/cache"
 
 # Image-local files (systemd, scripts, plymouth, gnome theme, audio config,
 # apt pins, ssh, motd, profile, modprobe, sysctl, launcher, icons)
 log "Staging image-local files into $STAGING_DIR/files"
 rsync -a "$SCRIPT_DIR/files/" "$STAGING_DIR/files/"
+
+# Build cache (NPU model bundle, dvb firmware, etc.) — referenced by
+# hook 23c via $PLAYBILL_STAGING/cache/<x>. We preserve symlinks (not
+# -L deref) so a 1.7 GB Llama bundle that's symlinked to Peregrine's
+# cache doesn't get duplicated on disk; hook 23c does its own deref-
+# copy into the chroot. Preflight has already verified the symlink
+# target exists.
+log "Staging build cache (symlinks preserved) into $STAGING_DIR/cache"
+rsync -a "$CACHE_DIR/" "$STAGING_DIR/cache/"
 
 # Branding assets (wallpapers + logo SVG)
 log "Staging branding assets"

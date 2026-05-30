@@ -115,6 +115,43 @@ for size in 16 24 32 48 64 128 256 512; do
     fi
 done
 
+# ── 5b. Build cache (NPU model bundle) ──────────────────────────────────────
+# Hook 23c in rootfs.jsonnet stages the Qualcomm QAIRT runtime + the Llama
+# 3.2 1B context binary from image/cache/npu-model/. That directory is a
+# symlink to ../../TrailCurrentPeregrine/image_build/cache/npu-model/ —
+# populated by Peregrine's own `preflight.sh --download-cache`. If the
+# symlink target is missing, hook 23c fails ~90 minutes into the build
+# (after mmdebstrap, apt-install, qemu chroot work, etc.). This check
+# catches that in 1 second instead.
+#
+# Regression history: 2026-05-30 build hit this; build.sh wasn't staging
+# image/cache/ at all and preflight had no cache check. Fixed in tandem.
+step "5b. Build cache (NPU model bundle from Peregrine)"
+NPU_CACHE="${SCRIPT_DIR}/cache/npu-model"
+if [ ! -e "$NPU_CACHE" ]; then
+    fail "image/cache/npu-model does not exist (symlink or directory)"
+    fail "  populate via: cd ../TrailCurrentPeregrine && ./image_build/preflight.sh --download-cache"
+elif [ -L "$NPU_CACHE" ] && [ ! -d "$NPU_CACHE" ]; then
+    # Symlink with broken target
+    NPU_TARGET=$(readlink -f "$NPU_CACHE" 2>/dev/null || echo "?")
+    fail "image/cache/npu-model symlink target is missing: $NPU_TARGET"
+    fail "  populate via: cd ../TrailCurrentPeregrine && ./image_build/preflight.sh --download-cache"
+elif [ ! -f "$NPU_CACHE/genie-t2t-run" ] || [ ! -f "$NPU_CACHE/libGenie.so" ]; then
+    fail "image/cache/npu-model exists but is missing required artifacts (genie-t2t-run, libGenie.so)"
+    fail "  re-populate via: cd ../TrailCurrentPeregrine && ./image_build/preflight.sh --force-cache"
+else
+    # Also need the actual Llama context binary (>1 GB) — the most-likely
+    # silent-empty case is a fresh `mkdir` with no contents yet.
+    BIN_COUNT=$(find -L "$NPU_CACHE/models" -name '*.serialized.bin' 2>/dev/null | wc -l)
+    if [ "$BIN_COUNT" -lt 1 ]; then
+        fail "image/cache/npu-model/models/ has no *.serialized.bin Llama context binary"
+        fail "  populate via: cd ../TrailCurrentPeregrine && ./image_build/preflight.sh --download-cache"
+    else
+        CACHE_SIZE=$(du -shL "$NPU_CACHE" 2>/dev/null | cut -f1)
+        ok "image/cache/npu-model present (${CACHE_SIZE}, $BIN_COUNT context binary)"
+    fi
+fi
+
 # ── 6. Disk space ───────────────────────────────────────────────────────────
 step "6. Free disk space (need ~30 GB free for the build)"
 FREE_GB=$(df -BG --output=avail "$RSDK_DIR" | tail -1 | tr -dc '0-9')
