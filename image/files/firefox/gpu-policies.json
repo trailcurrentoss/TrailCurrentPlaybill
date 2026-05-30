@@ -1,0 +1,11 @@
+{
+  "policies": {
+    "Preferences": {
+      "gfx.webrender.all":                              { "Value": true, "Status": "default" },
+      "gfx.webrender.compositor":                       { "Value": true, "Status": "default" },
+      "gfx.x11-egl.force-enabled":                      { "Value": true, "Status": "default" },
+      "media.hardware-video-decoding.force-enabled":    { "Value": true, "Status": "default" },
+      "layers.acceleration.force-enabled":              { "Value": true, "Status": "default" }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+#!/bin/bash
+# Q6A GPU-acceleration wrapper. See rootfs.jsonnet hook 23b.
+# To bypass and run stock Brave: invoke /usr/bin/brave-browser directly.
+exec /usr/bin/brave-browser \
+    --ozone-platform=wayland \
+    --ignore-gpu-blocklist \
+    --use-angle=gles \
+    --disable-features=Vulkan \
+    --enable-features=UseSkiaRenderer \
+    --enable-gpu-rasterization \
+    --enable-zero-copy \
+    --enable-hardware-overlays \
+    "$@"

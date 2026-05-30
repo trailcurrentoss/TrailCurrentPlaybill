@@ -142,7 +142,7 @@ fi
 step "7. Static apt package-name check (catches virtual/typo bugs in seconds)"
 
 ROOTFS_JSONNET="${RSDK_DIR}/src/share/rsdk/build/rootfs.jsonnet"
-THIRDPARTY_SKIP="qcom-fastrpc1 libcdsprpc1 radxa-firmware-qcs6490 firefox-esr brave-browser"
+THIRDPARTY_SKIP="fastrpc task-qcs6490 task-qualcomm libcdsprpc1 radxa-firmware-qcs6490 firefox-esr brave-browser"
 
 if ! command -v apt-cache >/dev/null 2>&1; then
     warn "apt-cache not available on host — skipping package-name check"

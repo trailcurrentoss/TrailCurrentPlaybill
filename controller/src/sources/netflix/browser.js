@@ -131,11 +131,28 @@ function start() {
       '--user-data-dir=' + PROFILE_DIR,
       '--no-first-run',
       '--no-default-browser-check',
-      '--disable-features=TranslateUI',
+      '--disable-features=TranslateUI,Vulkan',
       '--autoplay-policy=no-user-gesture-required',
       '--disable-pinch',
       '--overscroll-history-navigation=0',
       '--start-fullscreen',
+      // GPU acceleration on Q6A (Mesa Freedreno + Turnip on Adreno 643).
+      // Verified 2026-05-30: without these, Brave consults its hardcoded
+      // GPU blocklist, marks Freedreno-on-Linux-ARM as "untested", falls
+      // back to SwiftShader software rendering, and pegs ~240 % CPU at
+      // 1080p with frame drops. With the blocklist overridden + ANGLE
+      // pointed at GLES (the only ANGLE backend usable on Adreno-Mesa
+      // since Vulkan is incompatible with Wayland Ozone in Chromium),
+      // brave drops to ~138 % CPU and the GPU process stays alive.
+      // Netflix tops out at 720p anyway (Widevine L3 cap on ARM Linux)
+      // so software decode is fine; the win is the GPU compositor path.
+      '--ozone-platform=wayland',
+      '--ignore-gpu-blocklist',
+      '--use-angle=gles',
+      '--enable-features=UseSkiaRenderer',
+      '--enable-gpu-rasterization',
+      '--enable-zero-copy',
+      '--enable-hardware-overlays',
       // Use an on-disk plaintext password store instead of libsecret/gnome-
       // keyring. Without this, Brave/Chromium prompts the user to unlock the
       // default keyring at every launch — it tries to store its own profile

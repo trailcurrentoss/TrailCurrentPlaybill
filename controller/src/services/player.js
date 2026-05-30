@@ -65,12 +65,22 @@ function getMetadata() { return session ? session.metadata || null : null; }
  *                                          live here so all callers route through
  *                                          one balancing layer.
  */
-// Q6A's V4L2 H.264 path produces green/fuzzy frames (see
-// docs/RADXA_LESSONS_LEARNED.md and the Iris-driver pending note). Until the
-// kernel ships a working hwdec backend, force software decode — 1080p MKVs
-// play fine on the CPU. Callers that want to opt back in can pass an explicit
-// hwdec value (e.g. on non-Q6A hardware).
-function play({ url, audioUrl, hwdec = 'no', headers, mediaType = 'video', metadata, fullscreen = true, audioFxArgs } = {}) {
+// Q6A hwdec story (re-verified 2026-05-30 on kernel 6.18.2-4-qcom):
+//   v4l2m2m-copy / auto-safe : Venus driver enumerates VP9/H264/HEVC but
+//                              stalls in real-world decode (~88% drop rate
+//                              measured; single-digit fps). Do NOT use.
+//                              Earlier symptom in this code was green/fuzzy
+//                              frames; the new symptom is just stalling.
+//   vulkan                   : Mesa Turnip 25.2.8 ships Vulkan Video for
+//                              H.264 / HEVC / AV1 on Adreno 643. Verified
+//                              1 drop in 14 s at 1080p60 H.264. For VP9
+//                              (no Vulkan-Video VP9 path) mpv falls back
+//                              to software automatically — also smooth.
+//   no                       : Pure software. Fine for 1080p; 4K VP9/AV1
+//                              CPU-bound at ~all-cores.
+// Default is vulkan: hardware where supported, software fallback for the
+// rest. Callers can pass an explicit hwdec to override.
+function play({ url, audioUrl, hwdec = 'vulkan', headers, mediaType = 'video', metadata, fullscreen = true, audioFxArgs } = {}) {
   if (!url) return Promise.reject(new Error('player.play: url required'));
   ensureDirs();
   return stop().then(() => new Promise((resolve, reject) => {

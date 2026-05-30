@@ -1,0 +1,30 @@
+[Unit]
+Description=Genie NPU LLM Server (Llama3.2-1B on Hexagon DSP)
+After=network.target
+
+[Service]
+Type=simple
+User=trailcurrent
+Group=audio
+SupplementaryGroups=render
+WorkingDirectory=/home/trailcurrent
+ExecStart=/usr/bin/python3 /home/trailcurrent/genie_server.py
+Restart=on-failure
+RestartSec=5
+
+Environment=HOME=/home/trailcurrent
+Environment=PYTHONUNBUFFERED=1
+Environment=GENIE_DIR=/home/trailcurrent/Llama3.2-1B-1024-v68
+# libGenie.so dlopens libQnnHtp.so, libQnnHtpV68Stub.so, etc. from $GENIE_DIR
+Environment=LD_LIBRARY_PATH=/home/trailcurrent/Llama3.2-1B-1024-v68
+# Port choice: Ollama defaults to 11434 and is commonly installed for
+# CPU/GPU GGUF inference. genie-server (NPU-accelerated) runs alongside
+# Ollama on the next port up so users can pick the right backend per
+# query (large model → Ollama; fast small model on NPU → genie-server).
+Environment=GENIE_PORT=11435
+
+# IMPORTANT: do NOT add ProtectSystem / ProtectHome / etc. here.
+# Hardening breaks /dev/fastrpc-* device access required by genie-t2t-run.
+
+[Install]
+WantedBy=multi-user.target

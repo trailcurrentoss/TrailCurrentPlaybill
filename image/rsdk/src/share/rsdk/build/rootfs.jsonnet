@@ -284,15 +284,38 @@ function(
             "clinfo",
 
             // ── NPU userspace (Hexagon CDSP via FastRPC) ────────────────
-            // Both packages come from the Radxa qcs6490-noble apt repo,
-            // which additional_repos.libjsonnet wires in automatically for
-            // the Q6A SoC. qcom-fastrpc1 contains cdsprpcd (the userspace
-            // RPC daemon) and the fastrpc test tools; libcdsprpc1 is the
-            // shared library QNN apps link against. Both are pinned (-1)
-            // so apt cannot upgrade them out of step with the held kernel.
-            "qcom-fastrpc1",
+            // All packages come from the Radxa qcs6490-noble apt repo.
+            //
+            // Package choice (2026-05-30): we use Radxa's `fastrpc` +
+            // `task-qcs6490` + `task-qualcomm` set rather than the
+            // Qualcomm PPA `qcom-fastrpc1` variant. This is what Peregrine
+            // uses successfully for NPU inference. Differences:
+            //
+            //   - `fastrpc` (Radxa) vs `qcom-fastrpc1` (Qcom PPA): ship
+            //     the same cdsprpcd/libcdsprpc1/lib*rpc binaries but the
+            //     PPA variant pulls in udev rules that set /dev/fastrpc-*
+            //     to GROUP=fastrpc 0666, while the Radxa stack sets them
+            //     to GROUP=render 0660 with `uaccess` tag — required by
+            //     the QAIRT libGenie.so runtime.
+            //   - `task-qcs6490` ships /usr/share/initramfs-tools/hooks/
+            //     zz-cp-dsp-firmware which copies /lib/firmware/qcom/
+            //     qcs6490/radxa/dragon-q6a/{adsp,cdsp}.mbn into initramfs
+            //     so the kernel's request_firmware at ~1s into boot
+            //     succeeds. Without this hook, firmware probe fails with
+            //     ENOENT and the DSPs never come up cleanly.
+            //   - `task-qualcomm` ships /lib/udev/rules.d/99-fastrpc.rules
+            //     with the correct render-group + uaccess setup for
+            //     /dev/fastrpc-* AND /dev/dma_heap/{system,reserved}.
+            //     The dma_heap/reserved permission is what allows the
+            //     QnnHtp backend to allocate shared buffers for the DSP.
+            //
+            // hook 3a installs these explicitly (the silent-rollback
+            // mechanism would lose them otherwise).
+            "fastrpc",
+            "task-qcs6490",
+            "task-qualcomm",
             "libcdsprpc1",
-            // Adreno + Venus + DSP firmware bundle (also pinned).
+            // Adreno + Venus + DSP firmware bundle.
             "radxa-firmware-qcs6490",
 
             // ── Audio (PipeWire + WirePlumber + UCM profiles) ───────────
@@ -518,11 +541,12 @@ function(
             //   * gnome-software-plugin-flatpak (= gnome-software 46.0-1ubuntu2)
             //     becoming unsatisfiable when noble-updates ships a newer
             //     point release of gnome-software (May 2026)
-            //   * qcom-fastrpc1 (Qualcomm PPA) Breaks `fastrpc` (Radxa repo),
-            //     which is pulled in transitively by task-qualcomm-npu via
-            //     `task-radxa-dragon-q6a --install-recommends` in the
-            //     essential-hook. apt is unwilling to do the swap inside the
-            //     suppressed --include transaction (May 2026).
+            //   * Previously qcom-fastrpc1 (Qualcomm PPA) was used here but
+            //     it Breaks `fastrpc` (Radxa repo) which task-qcs6490 /
+            //     task-qualcomm transitively pull in. apt is unwilling to
+            //     swap inside the suppressed --include. We now use `fastrpc`
+            //     + `task-qcs6490` + `task-qualcomm` directly (the Peregrine
+            //     stack, verified working for NPU inference).
             //
             // Fix: install the desktop / vendor-swap / Electron set
             // explicitly here via a real `apt-get install` invocation. This
@@ -623,7 +647,9 @@ function(
                         lsdvd \
                         ocl-icd-libopencl1 \
                         clinfo \
-                        qcom-fastrpc1 \
+                        fastrpc \
+                        task-qcs6490 \
+                        task-qualcomm \
                         libcdsprpc1 \
                         radxa-firmware-qcs6490 \
                         pipewire \
@@ -747,7 +773,8 @@ function(
                 # fail with cryptic messages.
                 MISSING=""
                 for pkg in ubuntu-desktop gnome-shell gdm3 firefox-esr flatpak \
-                           qcom-fastrpc1 mesa-vulkan-drivers libnss3 libxss1 \
+                           fastrpc task-qcs6490 task-qualcomm libcdsprpc1 \
+                           mesa-vulkan-drivers libnss3 libxss1 \
                            libxtst6 libatspi2.0-0t64 libasound2t64 \
                            rtl-sdr librtlsdr2 dvb-tools dtv-scan-tables mpv \
                            handbrake handbrake-cli lsdvd \
@@ -1836,40 +1863,43 @@ function(
             |||,
 
             // ════════════════════════════════════════════════════════════
-            // Hook 13a: NPU userspace plumbing (FastRPC udev + ADSP path)
+            // Hook 13a: NPU userspace plumbing — CLEANUP-ONLY (2026-05-30)
             //
-            // The kernel FastRPC driver (`fastrpc`, `qcom_fastrpc`) and the
-            // CDSP firmware loader (`qcom_q6v5_pas`) load by default once
-            // the NPU blacklist (formerly hook 13) is gone. What still needs
-            // staging from us:
-            //   (a) /etc/udev/rules.d/99-fastrpc.rules — opens
-            //       /dev/fastrpc-cdsp{,-secure}, /dev/fastrpc-adsp, and the
-            //       dma_heap/system node to mode 0666 so the user-session
-            //       trailcurrent can talk to the NPU without sudo.
-            //   (b) /etc/profile.d/adsp-library-path.sh — exports
-            //       ADSP_LIBRARY_PATH=/usr/lib/dsp/cdsp:/usr/lib/dsp/adsp:/dsp
-            //       so QNN clients (libQnnHtp*, genie-t2t-run, llama.cpp
-            //       Hexagon backend) find the Skel libs.
+            // Previously this hook shipped:
+            //   * /etc/udev/rules.d/99-fastrpc.rules — custom rule that set
+            //     /dev/fastrpc-* to GROUP=fastrpc mode 0666, AND set
+            //     /dev/dma_heap/system to 0666 (but NOT /dev/dma_heap/
+            //     reserved). This silently OVERRODE /lib/udev/rules.d/
+            //     99-fastrpc.rules from the task-qualcomm package, which
+            //     uses GROUP=render + uaccess tag for all three (fastrpc-*,
+            //     dma_heap/system, dma_heap/reserved). The QAIRT libGenie
+            //     runtime needs dma_heap/reserved accessible — without it,
+            //     QnnDevice creation fails with error 14001.
+            //   * /etc/profile.d/adsp-library-path.sh — exported
+            //     ADSP_LIBRARY_PATH=/usr/lib/dsp/cdsp:/usr/lib/dsp/adsp:/dsp
+            //     Inherited from an outdated troubleshooting gist. Peregrine
+            //     (which has working NPU inference) ships no such file, and
+            //     the env var is not needed; QAIRT clients find their libs
+            //     via the model directory + LD_LIBRARY_PATH.
             //
-            // The userspace daemon `cdsprpcd.service` ships with qcom-fastrpc1
-            // (Radxa qcs6490-noble repo). Its enablement happens in hook 19
-            // alongside the other system services.
+            // The package set in hook 3a (fastrpc + task-qcs6490 +
+            // task-qualcomm) now provides everything formerly hand-rolled
+            // here:
+            //   - task-qualcomm: /lib/udev/rules.d/99-fastrpc.rules (correct
+            //     render + uaccess + dma_heap/{system,reserved} rule)
+            //   - task-qcs6490:  /usr/share/initramfs-tools/hooks/
+            //     zz-cp-dsp-firmware (so adsp.mbn / cdsp.mbn land in
+            //     initramfs and load at the ~1 s kernel firmware-probe)
+            //   - fastrpc: cdsprpcd binary + libcdsprpc.so + lib*rpc.so
             //
-            // No QNN runtime libs (libQnnHtp*.so, libQnnSystem.so, Genie) are
-            // staged in this image. Those are application-supplied; an app
-            // that wants on-NPU inference drops them next to its binary and
-            // ADSP_LIBRARY_PATH picks them up.
+            // This hook now defensively removes the legacy files in case
+            // an in-place upgrade left them behind from an older image.
             // ════════════════════════════════════════════════════════════
             |||
                 set -e
-                echo "[hook 13a] installing NPU userspace plumbing (udev + profile.d)"
-                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
-                FILES="$STAGING/files"
-                mkdir -p "$1/etc/udev/rules.d"
-                install -m 644 "$FILES/udev/99-fastrpc.rules" \
-                    "$1/etc/udev/rules.d/99-fastrpc.rules"
-                install -m 644 "$FILES/profile/adsp-library-path.sh" \
-                    "$1/etc/profile.d/adsp-library-path.sh"
+                echo "[hook 13a] removing legacy NPU plumbing overrides (now provided by task-qualcomm)"
+                rm -f "$1/etc/udev/rules.d/99-fastrpc.rules"
+                rm -f "$1/etc/profile.d/adsp-library-path.sh"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -2129,12 +2159,15 @@ function(
                             sed -i 's/$/ usbcore.autosuspend=-1/' "$f"
                         fi
                     fi
-                    # Strip `console=ttyMSM0,…` (any rate spec) once.
-                    sed -i 's/ console=ttyMSM0[^ ]*//g' "$f"
+                    # Strip `console=ttyMSM0,…` (any rate spec). Must match
+                    # start-of-line as well as mid-line — /etc/kernel/cmdline
+                    # from radxa-system-config-kernel-cmdline-ttymsm0 is a bare
+                    # line where console=ttyMSM0 IS the first token.
+                    sed -i -E 's/(^| )console=ttyMSM0[^ ]*//g' "$f"
                     # Strip bare `earlycon` token. Match start-of-line / space
                     # before, and space / end-of-line after, to avoid clipping
                     # an "earlycon=foo" form (we don't use one but be safe).
-                    sed -i -E 's/( |^)earlycon( |$)/\1\2/g; s/  +/ /g; s/ $//' "$f"
+                    sed -i -E 's/( |^)earlycon( |$)/\1\2/g; s/  +/ /g; s/^ //; s/ $//' "$f"
                 }
 
                 patch_cmdline_file "$1/etc/kernel/cmdline" ""
@@ -2346,6 +2379,185 @@ function(
                     mkdir -p "$(dirname "$dest")"
                     install -m 644 "$SRC" "$dest"
                 done
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 23b: GPU acceleration — system-wide configs
+            //
+            // The Q6A's Adreno 643 GPU works correctly under Mesa Freedreno
+            // (OpenGL ES) and Turnip (Vulkan). vkmark scores ~3300; glmark2
+            // ~1500. BUT most desktop apps default-disable GPU acceleration
+            // on this SoC for two unrelated reasons:
+            //
+            //   - mpv defaults pick `hwdec=auto-safe`, which whitelists the
+            //     V4L2-M2M Venus driver. On kernel 6.18.x for QCS6490 that
+            //     driver enumerates VP9/H.264/HEVC support but stalls in
+            //     actual decode (~88 % drop rate measured 2026-05-30 with
+            //     a 1080p60 H.264 file: 79 drops in 9 s; with VP9 the
+            //     decoder loop ran at ~4 fps). Iris is the upstream
+            //     replacement but ships without a `qcs6490-iris` compatible
+            //     string in 6.18, so it never binds.
+            //
+            //   - Chromium-family browsers (Brave, Chromium snap, Chromium
+            //     apt) consult their GPU blocklist, find Freedreno on
+            //     Linux ARM marked "untested", and fall back to SwiftShader
+            //     software rendering. Firefox does the same via its own
+            //     blocklist. Net effect: at 1080p60 video, browsers peg
+            //     2-3 cores; mpv (which has no blocklist) sips ~30 % of one.
+            //
+            // What this hook ships:
+            //
+            //   /etc/mpv/mpv.conf
+            //     hwdec=vulkan via Mesa Turnip Vulkan Video. Verified
+            //     2026-05-30: 1 drop in 14 s @ 1080p60 H.264. VP9 falls
+            //     back to software automatically (no Vulkan Video VP9 in
+            //     Turnip) — 2 drops in 14 s, also smooth.
+            //
+            //   /usr/local/bin/brave-browser
+            //     PATH-shadows /usr/bin/brave-browser with a wrapper that
+            //     adds the working flag set: blocklist override, ANGLE on
+            //     GLES (only ANGLE backend usable here — Vulkan-ANGLE is
+            //     incompatible with Wayland Ozone in Chromium), Skia
+            //     renderer, GPU rasterization, zero-copy, hardware overlays.
+            //     Measured 2026-05-30: 240 % → 138 % CPU under 1080p video
+            //     (still software-decoded but GPU now does compositing).
+            //
+            //   /etc/firefox-esr/policies/policies.json
+            //     Forces WebRender and hardware video decode on, overriding
+            //     the Mozilla-side blocklist.
+            //
+            // What this hook does NOT fix:
+            //
+            //   - Snap Chromium. The `mesa-2404` snap that snap-chromium
+            //     bundles ships ZERO Freedreno files; the snap's Mesa
+            //     thinks the GPU is llvmpipe (software). Unfixable without
+            //     removing the snap; the user should uninstall snap
+            //     chromium and apt-install `chromium` instead (apt chromium
+            //     uses host Mesa and benefits from desktop integration).
+            //
+            //   - VP9 / AV1 4K60 in any browser. YouTube serves 4K as
+            //     VP9 or AV1 only (no 4K H.264). Mesa Turnip Vulkan Video
+            //     doesn't support VP9 / AV1. Software decode of 4K60 VP9
+            //     on 4× Cortex-A78 is not feasible. The hardware ceiling
+            //     for browser 4K video on this board is HEVC content
+            //     (e.g. local .mkv playback in mpv, smooth).
+            //
+            // Hook 26 verifies all three files are present.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 23b] installing system-wide GPU acceleration configs"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                FILES="$STAGING/files"
+
+                # ── /etc/mpv/mpv.conf ───────────────────────────────────
+                install -d -m 755 "$1/etc/mpv"
+                install -m 644 "$FILES/mpv/mpv.conf" \
+                    "$1/etc/mpv/mpv.conf"
+
+                # ── /usr/local/bin/brave-browser (PATH wrapper) ─────────
+                # PATH order on Ubuntu puts /usr/local/bin before /usr/bin
+                # so this shadows the apt-installed wrapper. The wrapper
+                # script execs the real /usr/bin/brave-browser (which
+                # itself wraps the /opt/brave.com/brave/brave binary) with
+                # our GPU-acceleration flags prepended. User-supplied
+                # args ("$@") win — Chromium-family treats later args as
+                # overrides.
+                install -d -m 755 "$1/usr/local/bin"
+                install -m 755 "$FILES/scripts/brave-browser" \
+                    "$1/usr/local/bin/brave-browser"
+
+                # ── /etc/firefox-esr/policies/policies.json ─────────────
+                # Mozilla's documented enterprise-policy mechanism. Forces
+                # WebRender (gfx.webrender.all) and hardware video decode
+                # (media.hardware-video-decoding.force-enabled) on regardless
+                # of Mozilla's hardcoded blocklist for Freedreno-on-Linux-ARM.
+                # gfx.x11-egl.force-enabled fixes Wayland/EGL path detection.
+                # Distinct filename in the staging tree (gpu-policies.json)
+                # so it doesn't shadow hook 8b's dark-theme policies.json.
+                install -d -m 755 "$1/etc/firefox-esr/policies"
+                install -m 644 "$FILES/firefox/gpu-policies.json" \
+                    "$1/etc/firefox-esr/policies/policies.json"
+
+                echo "  ✓ /etc/mpv/mpv.conf installed"
+                echo "  ✓ /usr/local/bin/brave-browser wrapper installed"
+                echo "  ✓ /etc/firefox-esr/policies/policies.json installed"
+            |||,
+
+            // ════════════════════════════════════════════════════════════
+            // Hook 23c: Stage Qualcomm QAIRT NPU runtime + Llama 3.2 1B
+            //
+            // Ships the same offline-LLM underpinnings Peregrine uses, so the
+            // Hexagon NPU (12 TOPS) is usable out-of-box for everyday-task
+            // LLM inference — not just from a custom-app context. Bundle is:
+            //
+            //   /home/trailcurrent/Llama3.2-1B-1024-v68/
+            //       genie-t2t-run            — Qualcomm's runtime binary
+            //       libGenie.so              — Genie LLM runtime
+            //       libQnnHtp*.so            — QNN HTP (Hexagon Tensor Processor) backend
+            //       libQnnSystem.so          — QNN system layer
+            //       models/*.serialized.bin  — Llama 3.2 1B QNN HTP context binaries
+            //       tokenizer.json
+            //       htp-model-config-*.json  — Genie's model config
+            //       htp_backend_ext_config.json
+            //   /home/trailcurrent/genie_server.py
+            //       HTTP wrapper exposing an Ollama-compatible /api/generate
+            //       endpoint on localhost (default port 11434). Lets any app
+            //       talk to the NPU LLM via standard HTTP without binding to
+            //       libGenie.so directly.
+            //   /etc/systemd/system/genie-server.service
+            //       Runs the above as the trailcurrent user with the right
+            //       LD_LIBRARY_PATH + group memberships (audio + render +
+            //       fastrpc) so /dev/fastrpc-cdsp is accessible. Hardening
+            //       (ProtectSystem, etc.) intentionally NOT enabled — breaks
+            //       FastRPC device access.
+            //
+            // The cache directory (~1.7 GB) is symlinked into image/cache/
+            // from sibling-project Peregrine to avoid duplication. If the
+            // symlink target is missing, this hook fails loudly — re-run
+            // Peregrine's `image_build/preflight.sh --download-cache` to
+            // populate it. (A future refactor could move the cache into a
+            // shared TrailCurrent assets dir.)
+            //
+            // Hook 26 verifies the staged artifacts.
+            // ════════════════════════════════════════════════════════════
+            |||
+                set -e
+                echo "[hook 23c] staging Qualcomm QAIRT NPU runtime + Llama 3.2 1B model"
+                STAGING="${PLAYBILL_STAGING:-/tmp/playbill-staging}"
+                NPU_SRC="$STAGING/cache/npu-model"
+                if [ ! -d "$NPU_SRC" ]; then
+                    echo "  ERROR: NPU cache missing at $NPU_SRC" >&2
+                    echo "  image/cache/npu-model is symlinked to Peregrine's cache" >&2
+                    echo "  populate via: cd ../TrailCurrentPeregrine && ./image_build/preflight.sh --download-cache" >&2
+                    exit 1
+                fi
+                # Deref any symlink so the copy lands as real files in the rootfs.
+                mkdir -p "$1/home/trailcurrent/Llama3.2-1B-1024-v68"
+                cp -aL "$NPU_SRC"/. "$1/home/trailcurrent/Llama3.2-1B-1024-v68/"
+                chmod +x "$1/home/trailcurrent/Llama3.2-1B-1024-v68/genie-t2t-run"
+                chown -R 1000:1000 "$1/home/trailcurrent/Llama3.2-1B-1024-v68"
+                echo "  copied $(du -sh "$1/home/trailcurrent/Llama3.2-1B-1024-v68" | cut -f1) to /home/trailcurrent/Llama3.2-1B-1024-v68/"
+
+                install -m 644 -o 1000 -g 1000 \
+                    "$STAGING/files/scripts/genie_server.py" \
+                    "$1/home/trailcurrent/genie_server.py"
+
+                install -m 644 \
+                    "$STAGING/files/systemd/genie-server.service" \
+                    "$1/etc/systemd/system/genie-server.service"
+
+                # task-qualcomm ships /lib/udev/rules.d/99-fastrpc.rules
+                # which sets GROUP=render + uaccess on /dev/fastrpc-* AND
+                # /dev/dma_heap/{system,reserved}. Hook 4 already adds
+                # trailcurrent to `render`, so no group plumbing needed
+                # here. (Earlier revisions added a fastrpc group + user
+                # membership; that was tied to the qcom-fastrpc1 udev
+                # rules which set GROUP=fastrpc — now obsolete.)
+
+                # Enable the service. Hook 26 verifies the wants link.
+                chroot "$1" systemctl enable genie-server.service
+                echo "  ✓ genie-server.service installed and enabled"
             |||,
 
             // ════════════════════════════════════════════════════════════
@@ -2637,7 +2849,7 @@ function(
                     fi
                 done
 
-                # NPU userspace (kernel modules unblocked, CDSP packages installed)
+                # NPU userspace (kernel modules unblocked, Peregrine package set)
                 if [ ! -f "$1/etc/modprobe.d/disable-unused.conf" ] || \
                    ! grep -q "blacklist fastrpc" "$1/etc/modprobe.d/disable-unused.conf" 2>/dev/null; then
                     echo "  ✓ NPU kernel modules NOT blacklisted"
@@ -2645,9 +2857,33 @@ function(
                     echo "  ✗ NPU still blacklisted in disable-unused.conf"
                     FAIL=$((FAIL+1))
                 fi
-                check   "$1" /etc/udev/rules.d/99-fastrpc.rules
-                check   "$1" /etc/profile.d/adsp-library-path.sh
-                for pkg in qcom-fastrpc1 libcdsprpc1 radxa-firmware-qcs6490; do
+                # Custom rule + profile.d must NOT exist anymore. task-qualcomm
+                # ships /lib/udev/rules.d/99-fastrpc.rules with the correct
+                # render-group + uaccess setup; an /etc-side override would
+                # shadow it and re-break the QnnDevice 14001 issue.
+                if [ -e "$1/etc/udev/rules.d/99-fastrpc.rules" ]; then
+                    echo "  ✗ /etc/udev/rules.d/99-fastrpc.rules present — would shadow task-qualcomm rule"
+                    FAIL=$((FAIL+1))
+                else
+                    echo "  ✓ no /etc-side 99-fastrpc.rules (task-qualcomm rule wins)"
+                fi
+                if [ -e "$1/etc/profile.d/adsp-library-path.sh" ]; then
+                    echo "  ✗ /etc/profile.d/adsp-library-path.sh present — Peregrine doesn't ship one"
+                    FAIL=$((FAIL+1))
+                else
+                    echo "  ✓ no adsp-library-path.sh (matches Peregrine)"
+                fi
+                check   "$1" /lib/udev/rules.d/99-fastrpc.rules
+                if [ -f "$1/lib/udev/rules.d/99-fastrpc.rules" ] && \
+                   grep -q 'KERNEL=="reserved"' "$1/lib/udev/rules.d/99-fastrpc.rules" && \
+                   grep -q 'GROUP="render"' "$1/lib/udev/rules.d/99-fastrpc.rules"; then
+                    echo "  ✓ 99-fastrpc.rules covers dma_heap/reserved with render group"
+                else
+                    echo "  ✗ 99-fastrpc.rules missing dma_heap/reserved render-group rule"
+                    FAIL=$((FAIL+1))
+                fi
+                check_x "$1" /usr/share/initramfs-tools/hooks/zz-cp-dsp-firmware
+                for pkg in fastrpc task-qcs6490 task-qualcomm libcdsprpc1 radxa-firmware-qcs6490; do
                     if chroot "$1" dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
                         echo "  ✓ $pkg installed (Radxa qcs6490-noble repo)"
                     else
@@ -2655,15 +2891,63 @@ function(
                         FAIL=$((FAIL+1))
                     fi
                 done
-                if chroot "$1" systemctl is-enabled cdsprpcd.service >/dev/null 2>&1; then
-                    echo "  ✓ cdsprpcd.service enabled"
+                # cDSP-side support libs MUST be the Radxa-signed originals
+                # shipped by radxa-firmware-qcs6490 — NOT symlinks into
+                # linux-firmware-dragonwing's /usr/share/qcom/qcm6490/
+                # Thundercomm/RB3gen2/dsp/cdsp/ tree, which carries look-alike
+                # but Thundercomm-signed binaries. The Q6A's cdsp.mbn only
+                # trusts Radxa signatures; loading the wrong shell wedges the
+                # cDSP and every PD-create fails with AEE_EFATAL (ioErr
+                # 0x80000600) → Genie surfaces "Failed to create device:
+                # 14001". The previous fix attempt (2026-05-30) replaced the
+                # Radxa shells with dragonwing symlinks while debugging — be
+                # the build that catches that.
+                NPU_SHELL_FAIL=0
+                for f in /usr/lib/dsp/cdsp/fastrpc_shell_unsigned_3 \
+                         /usr/lib/dsp/cdsp/fastrpc_shell_3 \
+                         /usr/lib/dsp/cdsp/libc++.so.1 \
+                         /usr/lib/dsp/cdsp/libc++abi.so.1 \
+                         /usr/lib/dsp/cdsp/libsysmon_skel.so \
+                         /usr/lib/dsp/cdsp/libsysmondomain_skel.so \
+                         /usr/lib/dsp/cdsp/libstabilitydomain_skel.so; do
+                    if [ -L "$1$f" ]; then
+                        echo "  ✗ $f is a SYMLINK (must be the Radxa-signed regular file; symlinks to dragonwing variants wedge the cDSP)"
+                        NPU_SHELL_FAIL=$((NPU_SHELL_FAIL+1))
+                    elif [ ! -f "$1$f" ]; then
+                        echo "  ✗ $f MISSING (radxa-firmware-qcs6490 should ship it)"
+                        NPU_SHELL_FAIL=$((NPU_SHELL_FAIL+1))
+                    fi
+                done
+                if [ "$NPU_SHELL_FAIL" -eq 0 ]; then
+                    echo "  ✓ /usr/lib/dsp/cdsp/ shells + skels are Radxa-signed regular files (not dragonwing symlinks)"
                 else
-                    echo "  ✗ cdsprpcd.service NOT enabled"
+                    FAIL=$((FAIL+NPU_SHELL_FAIL))
+                fi
+                # dpkg -V radxa-firmware-qcs6490 must be clean. Any line of
+                # output here means a file from that package has been
+                # tampered with (md5 mismatch / mode-or-type drift) — the
+                # exact signature of the dragonwing-symlink regression.
+                # Done host-side against the staged rootfs: dpkg --root
+                # walks the package's md5sums file against on-disk files,
+                # which works without entering a chroot.
+                DPKG_V_OUT=$(dpkg --root="$1" -V radxa-firmware-qcs6490 2>&1 || true)
+                if [ -z "$DPKG_V_OUT" ]; then
+                    echo "  ✓ dpkg -V radxa-firmware-qcs6490 clean (no tampered files)"
+                else
+                    echo "  ✗ radxa-firmware-qcs6490 has modified files — package integrity failed:"
+                    echo "$DPKG_V_OUT" | sed 's/^/      /'
+                    FAIL=$((FAIL+1))
+                fi
+
+                # qcom-fastrpc1 MUST NOT be installed — would conflict with
+                # `fastrpc` and re-introduce the wrong udev rules.
+                if chroot "$1" dpkg -l qcom-fastrpc1 2>/dev/null | grep -q "^ii"; then
+                    echo "  ✗ qcom-fastrpc1 installed (conflicts with Peregrine-matching fastrpc)"
                     FAIL=$((FAIL+1))
                 fi
                 if id -nG trailcurrent 2>/dev/null | tr ' ' '\n' | grep -qx render \
                    || chroot "$1" id -nG trailcurrent 2>/dev/null | tr ' ' '\n' | grep -qx render; then
-                    echo "  ✓ trailcurrent in render group"
+                    echo "  ✓ trailcurrent in render group (needed for /dev/fastrpc-* + /dev/dma_heap/*)"
                 else
                     echo "  ✗ trailcurrent NOT in render group"
                     FAIL=$((FAIL+1))
@@ -2672,6 +2956,60 @@ function(
                 # Firstboot
                 check_x "$1" /usr/local/sbin/trailcurrent-playbill-firstboot.sh
                 check   "$1" /etc/systemd/system/trailcurrent-playbill-firstboot.service
+                # growpart (from cloud-guest-utils) — firstboot.sh's grow
+                # step silently no-ops if this binary is ever missing.
+                # cloud-guest-utils currently arrives via ubuntu-desktop
+                # recommends; this assertion converts a transitive-dep
+                # disappearance into a loud build failure.
+                check_x "$1" /usr/bin/growpart
+
+                # Hook 23b artifacts — GPU acceleration system-wide
+                check   "$1" /etc/mpv/mpv.conf
+                check_x "$1" /usr/local/bin/brave-browser
+                check   "$1" /etc/firefox-esr/policies/policies.json
+
+                # Hook 23c artifacts — QAIRT NPU runtime + Llama 3.2 1B
+                check_x "$1" /home/trailcurrent/Llama3.2-1B-1024-v68/genie-t2t-run
+                check   "$1" /home/trailcurrent/Llama3.2-1B-1024-v68/libGenie.so
+                check   "$1" /home/trailcurrent/Llama3.2-1B-1024-v68/libQnnHtp.so
+                check   "$1" /home/trailcurrent/Llama3.2-1B-1024-v68/tokenizer.json
+                check   "$1" /home/trailcurrent/genie_server.py
+                check   "$1" /etc/systemd/system/genie-server.service
+                if [ -L "$1/etc/systemd/system/multi-user.target.wants/genie-server.service" ]; then
+                    echo "  ✓ genie-server.service enabled"
+                else
+                    echo "  ✗ genie-server.service NOT enabled"
+                    FAIL=$((FAIL+1))
+                fi
+                # Llama model context binary (>1 GB) — confirms the heavy
+                # asset is actually present, not just an empty models/ dir.
+                BIN_COUNT=$(find "$1/home/trailcurrent/Llama3.2-1B-1024-v68/models" -name '*.serialized.bin' 2>/dev/null | wc -l)
+                if [ "$BIN_COUNT" -ge 1 ]; then
+                    echo "  ✓ Llama context-binary present ($BIN_COUNT file(s))"
+                else
+                    echo "  ✗ Llama context-binary missing from models/ directory"
+                    FAIL=$((FAIL+1))
+                fi
+                # render-group membership for /dev/fastrpc-* / dma_heap
+                # access is already verified above in the NPU userspace
+                # block (task-qualcomm's 99-fastrpc.rules sets GROUP=render).
+                # No separate fastrpc-group check needed — the legacy
+                # qcom-fastrpc1 path that required it is now removed.
+                # mpv.conf must specify hwdec=vulkan (NOT v4l2m2m / auto-safe,
+                # both of which are broken on QCS6490 in kernel 6.18.x).
+                if grep -q '^hwdec=vulkan' "$1/etc/mpv/mpv.conf"; then
+                    echo "  ✓ /etc/mpv/mpv.conf uses hwdec=vulkan"
+                else
+                    echo "  ✗ /etc/mpv/mpv.conf does NOT set hwdec=vulkan"
+                    FAIL=$((FAIL+1))
+                fi
+                # Brave wrapper must override the GPU blocklist.
+                if grep -q 'ignore-gpu-blocklist' "$1/usr/local/bin/brave-browser"; then
+                    echo "  ✓ /usr/local/bin/brave-browser overrides GPU blocklist"
+                else
+                    echo "  ✗ /usr/local/bin/brave-browser missing GPU acceleration flags"
+                    FAIL=$((FAIL+1))
+                fi
 
                 # gnome-initial-setup (Hook 7c) — wizard fires on first login
                 # for the trailcurrent user (timezone, keyboard, WiFi, etc.).

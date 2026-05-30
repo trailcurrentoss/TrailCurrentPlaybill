@@ -184,31 +184,138 @@ gst-inspect-1.0 v4l2slh264dec >/dev/null && echo "v4l2slh264dec: present"
 
 If `v4l2-ctl --list-devices` shows no Venus codec, check `dmesg | grep -i venus` — the Venus firmware (`venus.mbn` / `venus-5.4.fw`) is in `linux-firmware` and the Radxa firmware bundle, both of which are pinned. Don't reach for `apt upgrade linux-firmware` to "fix" it without unpinning carefully (see [KERNEL_UPDATE_POLICY.md](KERNEL_UPDATE_POLICY.md)).
 
-## Step 9 — Verify the NPU (Hexagon CDSP via FastRPC)
+## Step 9 — Verify the NPU and use the on-device LLM
 
-The Q6A exposes Qualcomm's Hexagon NPU via the in-kernel `fastrpc` driver and the userspace daemon `cdsprpcd` (from `qcom-fastrpc1`, Radxa qcs6490-noble repo). Kernel modules and CDSP firmware load on every boot; the NPU is available to any user-session app that opens `/dev/fastrpc-cdsp`.
+The Q6A's Hexagon V68 NPU runs **Llama 3.2 1B** at ~22 tok/s via Qualcomm's QAIRT / Genie runtime. The image ships the full stack pre-staged (rootfs.jsonnet hook 23c) and a `genie-server.service` that auto-starts at boot and exposes an Ollama-compatible HTTP API on `127.0.0.1:11435`. No login, no configuration, no model download — it's ready as soon as `systemctl is-active genie-server.service` says `active`.
+
+### 9.1 — Smoke test
 
 ```bash
-# Kernel modules loaded (NOT blacklisted)
-lsmod | grep -E "fastrpc|q6v5"
+# Should print "active"
+systemctl is-active genie-server.service
 
-# CDSP firmware loaded and remote-proc running
-cat /sys/class/remoteproc/remoteproc*/name
-cat /sys/class/remoteproc/remoteproc*/state    # should print "running" for cdsp
-
-# Device nodes — should be 0666 thanks to the udev rule
-ls -l /dev/fastrpc-* /dev/dma_heap/system
-
-# Daemon running
-systemctl status cdsprpcd.service --no-pager
-
-# DSP library search path picked up by login shells
-echo "$ADSP_LIBRARY_PATH"
+# Should return JSON with a "response" field
+curl -s -X POST http://127.0.0.1:11435/api/generate \
+    -H 'Content-Type: application/json' \
+    -d '{"prompt":"Say hello in one short sentence."}'
 ```
 
-The image installs the *plumbing* (kernel + libcdsprpc + udev + cdsprpcd) but no application-level QNN runtime. Apps that want to run on-NPU inference (a Hexagon-aware llama.cpp build, a QNN-using Electron module, etc.) ship their own `libQnnHtp*.so` / model files. Drop those into `/usr/lib/dsp/cdsp/` (system-wide) or alongside the binary; `ADSP_LIBRARY_PATH` is preset so they load without further setup.
+Expected output (about 0.5 s end-to-end after the service has warmed up; the cold-start adds another 4 s to load the model into NPU memory):
 
-If `state` reads `crashed` instead of `running`, see the [Foadsf NPU troubleshooting gist](https://gist.github.com/Foadsf/2972e8059102ad9bc9c5848ae1fc7cc3) — the most common cause is a `cdsp.mbn` ↔ `fastrpc_shell_unsigned_3` version mismatch, which our `radxa-firmware-qcs6490` apt pin is meant to prevent.
+```json
+{"model":"llama3.2:1b-npu","response":"Hello!","done":true,"total_duration":434341562}
+```
+
+`total_duration` is in nanoseconds.
+
+### 9.2 — Single-turn generation
+
+`/api/generate` takes a prompt and returns a complete response. Optional fields: `system` (system prompt), `stream` (NDJSON token stream — see 9.4).
+
+```bash
+curl -s -X POST http://127.0.0.1:11435/api/generate \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "system":"You are a concise assistant. Answer in one sentence.",
+        "prompt":"What is the capital of France?"
+    }' | jq -r .response
+```
+
+### 9.3 — Multi-turn chat
+
+`/api/chat` accepts a `messages` array with `role` of `system`, `user`, or `assistant`. The server builds the Llama-3 chat template internally — you only need to send the conversation history.
+
+```bash
+curl -s -X POST http://127.0.0.1:11435/api/chat \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "messages":[
+            {"role":"system","content":"You are a helpful assistant."},
+            {"role":"user","content":"What is 17 * 24?"},
+            {"role":"assistant","content":"17 * 24 = 408."},
+            {"role":"user","content":"And divided by 8?"}
+        ]
+    }' | jq -r .response
+```
+
+### 9.4 — Streaming (token-by-token)
+
+Pass `"stream": true` and the server emits NDJSON — one JSON object per line, the same format Ollama uses. Useful for chat UIs that want to print tokens as they arrive instead of waiting for the full reply.
+
+```bash
+curl -s -N -X POST http://127.0.0.1:11435/api/generate \
+    -H 'Content-Type: application/json' \
+    -d '{"prompt":"Write a haiku about a campfire.","stream":true}'
+```
+
+Each line looks like `{"model":"llama3.2:1b-npu","response":"Smoke","done":false}` until the final line, which carries `"done":true` plus timing fields.
+
+### 9.5 — Python client
+
+The simplest possible client — no SDK, no dependencies:
+
+```python
+import json, urllib.request
+
+req = urllib.request.Request(
+    "http://127.0.0.1:11435/api/generate",
+    data=json.dumps({"prompt": "Summarize the Pythagorean theorem."}).encode(),
+    headers={"Content-Type": "application/json"},
+)
+print(json.loads(urllib.request.urlopen(req).read())["response"])
+```
+
+If you have `ollama` Python client installed, point it at this server with `OLLAMA_HOST=http://127.0.0.1:11435` — the `/api/generate` and `/api/chat` schemas are compatible.
+
+### 9.6 — Direct CLI (without the HTTP layer)
+
+For one-shot scripting or debugging, you can invoke Qualcomm's runner directly. This loads the model fresh each time (~4 s cold start), so it's slower than going through the persistent service, but useful for isolating issues.
+
+```bash
+cd ~/Llama3.2-1B-1024-v68
+LD_LIBRARY_PATH=. ./genie-t2t-run \
+    -c htp-model-config-llama32-1b-gqa.json \
+    -p '<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
+What is 2 + 2?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'
+```
+
+### 9.7 — Confirm the underlying plumbing (if the smoke test fails)
+
+```bash
+# DSP firmware loaded and running on both subsystems
+cat /sys/class/remoteproc/remoteproc0/name      # adsp
+cat /sys/class/remoteproc/remoteproc0/state     # running
+cat /sys/class/remoteproc/remoteproc1/name      # cdsp
+cat /sys/class/remoteproc/remoteproc1/state     # running
+
+# /dev/fastrpc-* accessible to the trailcurrent user via the render group + uaccess ACL
+ls -l /dev/fastrpc-* /dev/dma_heap/system /dev/dma_heap/reserved
+groups | grep -q render && echo "render: ok"
+
+# Successful init sequence in the journal
+journalctl -u genie-server.service -b --no-pager | \
+    grep -E "Created user PD|Persistent NPU ready|Warmup done"
+```
+
+A healthy journal contains all three lines: `Created user PD on domain 3 ... Unsigned:Y`, `[genie-server] Persistent NPU ready (Genie API v1.13, load 4.2s)`, and `Warmup done in 0.4s: 'Hello!'`.
+
+### 9.8 — If `Failed to create device: 14001` shows up in the journal
+
+The cDSP rejected user-PD startup. On this image that's almost always because the Radxa-signed cDSP shells under `/usr/lib/dsp/cdsp/` have been replaced with symlinks into `linux-firmware-dragonwing`'s Thundercomm RB3gen2 tree — the trust-anchor mismatch produces error `0x80000600 / -2147482112`. Full background and the recovery procedure (apt reinstall + reboot, both required) are in [RADXA_LESSONS_LEARNED.md → cDSP shells MUST be the Radxa-signed binaries](RADXA_LESSONS_LEARNED.md#cdsp-shells-must-be-the-radxa-signed-binaries-not-the-thundercomm-look-alikes). Two-second self-check:
+
+```bash
+stat -c '%F' /usr/lib/dsp/cdsp/fastrpc_shell_unsigned_3   # should print "regular file"
+dpkg -V radxa-firmware-qcs6490                            # should print NOTHING
+```
+
+Hook 26 of `rootfs.jsonnet` now refuses to ship a build where either check would fail, so a freshly-flashed image cannot be in this state — only post-flash tampering can produce it.
+
+### 9.9 — Replacing the model
+
+The bundle in `~/Llama3.2-1B-1024-v68/` is the Hugging Face `Llama-3.2-1B` compiled to a Hexagon V68 HTP context binary. Swapping to a different model is non-trivial — you need a `.serialized.bin` compiled against this exact NPU revision (Qualcomm QAIRT 2.40.1, HTP V68). The supported model and the toolchain to recompile other Llama variants live in the sibling Peregrine project; for now, Playbill ships exactly the one model. If you want a larger context window or a different model, see [TrailCurrentPeregrine's NPU model cache](../../TrailCurrentPeregrine/image_build/cache/npu-model/) and the comments in [rootfs.jsonnet hook 23c](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet).
 
 ## Step 10 — Verify the apt-pinning policy
 

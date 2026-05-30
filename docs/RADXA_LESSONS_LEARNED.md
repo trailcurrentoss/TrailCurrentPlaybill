@@ -214,7 +214,32 @@ On the first board boot the codec attached but PipeWire showed only "Dummy Outpu
 
 **Workaround until kernel 6.18 lands:** force GStreamer to skip the hardware decoder and use libav (`avdec_h264`). The A78 cores decode 1080p H.264 in software comfortably (~150 % of one core sustained). Applied in [`controller/src/sources/cast/uxplay.js`](../controller/src/sources/cast/uxplay.js) via UxPlay's `-avdec` flag.
 
-When the Iris driver lands: drop `-avdec`, switch to `-vd v4l2h264dec`, retest cast end-to-end. mpv playback (Live TV via `--hwdec=auto-safe`) currently does whatever the kernel allows it to negotiate, which on this kernel is software fallback — same upgrade applies.
+**Re-verified 2026-05-30 on kernel 6.18.2-4-qcom:** Iris is now *shipped* in the kernel tree (`/lib/modules/.../media/platform/qcom/iris/qcom-iris.ko.zst`) but its only compatible-string aliases are for `sm8550-iris` / `sm8650-iris` / `sm8750-iris`. There is no `qcs6490-iris` alias yet, so modprobe doesn't bind it. Venus is still what's loaded, and Venus on this kernel does enumerate VP9/H264/HEVC support via `/dev/video1` (output formats: H264/VP9/HEVC/MPG2; capture formats: NV12/Q08C/Q10C/P010), but real decode through it stalls catastrophically: a 1080p60 H.264 test file dropped 79 frames in 9 seconds (≈88 % drop rate) with `--hwdec=v4l2m2m-copy`; VP9 ran at roughly 4 fps. Radxa's own [Q6A mpv doc](https://docs.radxa.com/en/dragon/q6a/system-config/mpv) still recommends `hwdec=v4l2m2m-copy` — that recommendation is wrong for this kernel revision and should not be followed.
+
+### Mesa Turnip Vulkan Video IS the working hardware decode path (2026-05-30)
+A separate hardware decode path arrived without us noticing: Mesa 25.2.8 ships Vulkan Video extensions on Turnip (Adreno 6xx). For H.264, HEVC, and AV1, `mpv --hwdec=vulkan` engages real GPU-side decode through the Adreno 643 — not the broken VPU path. Verified:
+
+| Codec | Path | Drops in 14 s @ 1080p60 |
+|---|---|---|
+| H.264 | `hwdec=vulkan` → Mesa Turnip Vulkan Video → Adreno | 1 |
+| VP9 | `hwdec=vulkan` → no VP9 in Turnip → software fallback | 2 |
+| H.264 | `hwdec=v4l2m2m-copy` (Radxa-recommended) | 79 in 9 s |
+
+VP9 is the one notable gap: Mesa Turnip doesn't implement Vulkan Video VP9 yet. mpv falls back to software for VP9, which is fine at 1080p (~30 % of one core) but cannot keep up with 4K60 (and that's what YouTube serves at 4K). AV1 4K60 is similarly out of reach — Turnip Vulkan Video does AV1 but not at that throughput; in practice YouTube 4K60 is the natural ceiling for this board until QCS6490 gets a working V4L2 decoder.
+
+**Image-level config (hook 23b in [rootfs.jsonnet](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet)) ships three system-wide configs to make GPU acceleration the default for general use, not just for the Playbill app:**
+
+1. `/etc/mpv/mpv.conf` — sets `hwdec=vulkan` system-wide. Any mpv invocation from any user benefits.
+2. `/usr/local/bin/brave-browser` — PATH-shadows the apt wrapper with `--ignore-gpu-blocklist --use-angle=gles --disable-features=Vulkan` etc. Chromium-family browsers ship a hardcoded GPU blocklist that marks Mesa Freedreno on Linux ARM as "untested" and falls back to SwiftShader (software GL). Measured impact: 240 % → 138 % CPU at 1080p video (browser-side decode is still software because Chromium can't talk Vulkan Video; the win is GPU compositing).
+3. `/etc/firefox-esr/policies/policies.json` — Mozilla policy file forcing `gfx.webrender.all=true`, `gfx.x11-egl.force-enabled=true`, `media.hardware-video-decoding.force-enabled=true`. Firefox has the same blocklist disease as Chromium.
+
+Hook 26 (final checkpoint) verifies all three files are present and that `mpv.conf` has `hwdec=vulkan` (not `v4l2m2m-copy`, which a future Radxa-doc-following well-meaning edit might switch back).
+
+Snap Chromium is **not fixable** at the image level: the `mesa-2404` snap that snap-chromium bundles ships zero Freedreno files (`find /snap/mesa-2404/current -name "*freedreno*"` returns empty), so its sandboxed Mesa always falls back to llvmpipe regardless of any flag. Recommendation: uninstall snap chromium and `apt install chromium` instead (apt chromium uses host Mesa).
+
+When the Iris driver gains the `qcs6490-iris` compatible string in a future kernel — or when the Venus decoder on this SoC gets its bugs fixed — revisit hook 23b's mpv config: V4L2 stateless decode would unlock VP9 / 4K60 paths that Vulkan Video can't reach. Until then, mpv on Vulkan is the best we have.
+
+For controller-internal mpv invocations: [`controller/src/services/player.js`](../controller/src/services/player.js) defaults `hwdec` to `'vulkan'` (changed from `'no'` on 2026-05-30 after Vulkan Video verification). UxPlay's `-avdec` flag is unchanged — Vulkan Video doesn't help there because UxPlay drives GStreamer, not mpv.
 
 ### GStreamer `autovideosink` picks xvimagesink on GNOME Wayland
 GStreamer's `autovideosink` selects sinks by rank. On the Q6A:
@@ -255,6 +280,97 @@ UxPlay registers `_airplay._tcp` and `_raop._tcp` via the Bonjour-compatibility 
 ```
 avahi-browse -rt _airplay._tcp | grep Playbill
 ```
+
+## NPU / Hexagon cDSP / Genie LLM inference
+
+The QCS6490's Hexagon V68 NPU runs Llama 3.2 1B at conversational speeds (~22 tok/s on this hardware) via Qualcomm's QAIRT / Genie runtime. Playbill ships the same stack Peregrine validated: `~/Llama3.2-1B-1024-v68/` with the genie-t2t-run binary, libGenie.so, the QnnHtp backend libs, and a serialized model context binary; `~/genie_server.py` exposes an Ollama-compatible HTTP API on `127.0.0.1:11435`. The systemd unit is `genie-server.service`. Hook 23c stages the bundle; hook 26 verifies it. When it works the journal shows `[genie-server] Persistent NPU ready (Genie API v1.13, load 4.2s)` within five seconds of service start. When it doesn't work, the failure modes below are the ones we've actually hit on this board.
+
+### cDSP shells MUST be the Radxa-signed binaries, not the Thundercomm look-alikes
+
+The most expensive trap. **The cDSP-side files under `/usr/lib/dsp/cdsp/` — specifically `fastrpc_shell_3`, `fastrpc_shell_unsigned_3`, `libc++.so.1`, `libc++abi.so.1`, `libsysmon_skel.so`, `libsysmondomain_skel.so`, `libstabilitydomain_skel.so` — must be the Radxa-signed copies installed by `radxa-firmware-qcs6490`.**
+
+A second package on this image, `linux-firmware-dragonwing`, ships *look-alike* binaries with the same filenames under `/usr/share/qcom/qcm6490/Thundercomm/RB3gen2/dsp/cdsp/`. They're a few dozen bytes different in size and totally different in md5 — same vendor source, but signed for the Thundercomm RB3gen2 reference board, not for Radxa boards. The Q6A's cDSP firmware (`/lib/firmware/qcom/qcs6490/radxa/dragon-q6a/cdsp.mbn`) is built to trust only the Radxa signing chain, so when libcdsprpc spawns a user PD using a Thundercomm-signed shell the cDSP rejects PD-create with `AEE_EFATAL`. The journal signature is:
+
+```
+Successfully opened file /usr/lib/dsp/cdsp/fastrpc_shell_unsigned_3
+close_device_node: closed dev 6 on domain 3
+remote_init failed for domain 3, errno Success, ioErr -2147482112
+[ERROR] "Failed to create device: 14001"
+```
+
+`-2147482112` is `0x80000600` cast through a signed 32-bit int — that's Qualcomm's AEE_EFATAL surfaced through the FastRPC `INIT_CREATE` ioctl path. The `14001` is QNN's error code for "QnnDevice creation failed because the backend rejected init."
+
+**Diagnostic commands (both are 1-second checks):**
+
+```bash
+# Should print "regular file", NOT "symbolic link"
+stat -c '%F' /usr/lib/dsp/cdsp/fastrpc_shell_unsigned_3
+
+# Should print NOTHING. Any line of output means a package file has
+# been tampered with — the regression signature is every cdsp/ and
+# adsp/ entry flagged "?M5????" (mode-or-type change + md5 mismatch).
+dpkg -V radxa-firmware-qcs6490
+```
+
+**Recovery procedure (on a live board, both steps required):**
+
+```bash
+# (1) The package is pinned to Priority -1 by 50-trailcurrent-playbill-holds.pref
+# (kernel-bundle protection — see KERNEL_UPDATE_POLICY.md). Temporarily move
+# the pin file aside to reinstall.
+sudo mv /etc/apt/preferences.d/50-trailcurrent-playbill-holds.pref /tmp/
+sudo apt update
+sudo apt install --reinstall -y radxa-firmware-qcs6490
+sudo mv /tmp/50-trailcurrent-playbill-holds.pref /etc/apt/preferences.d/
+sudo apt update
+
+# (2) Reboot. systemctl restart of just genie-server is NOT enough —
+# the cDSP loaded its host-side support libs at first PD-create and
+# stays wedged across every subsequent attempt until cdsp.mbn is
+# reloaded fresh. Cycling /sys/class/remoteproc/remoteproc1/state
+# also works if you can't reboot.
+sudo reboot
+```
+
+After reboot the journal shows the Peregrine-success sequence: `Created user PD on domain 3 ... Unsigned:Y`, `Successfully opened file libQnnHtpV68Skel.so`, `[INFO] "Allocated total size = 33333760 across 1 buffers"`, then `Persistent NPU ready`.
+
+**How the regression happens.** A previous debug attempt redirected `/usr/lib/dsp/cdsp/*` to dragonwing's RB3gen2 tree with symlinks, presumably hoping the "newer" reference-board binaries would be more compatible. They're not — the trust-anchor mismatch is the whole problem. Hook 26 now refuses to ship a build where any cdsp/ entry is a symlink, or where `dpkg -V radxa-firmware-qcs6490` reports anything.
+
+**Why `apt install --reinstall` alone wasn't enough.** Files on disk get restored, but the *running* cDSP is still holding state from the bad libs it loaded earlier. We didn't realise this on first attempt — the post-reinstall journal looked identical to the pre-reinstall journal and we almost concluded the shell hypothesis was wrong. Reboot was the missing step. The cDSP doesn't re-read its host-side libs on demand; it caches the first set it sees from a given PD-create and rejects every retry once that set is poisoned.
+
+### Genie service runs as `trailcurrent`, in `render` group, no fastrpc group
+
+[`genie-server.service`](../image/files/systemd/genie-server.service) runs as `User=trailcurrent`, `Group=audio`, `SupplementaryGroups=render`. The `render` group is the one that grants `/dev/fastrpc-*` and `/dev/dma_heap/{system,reserved}` access on this image, via `task-qualcomm`'s `/lib/udev/rules.d/99-fastrpc.rules`. **Do not add `fastrpc` as a supplementary group** — that group only exists if `qcom-fastrpc1` (Qualcomm PPA variant, not used in this image) was ever installed, and listing it on a service whose principal is `trailcurrent` provides no extra access but signals confusion about which package set is in play. Peregrine's working unit uses `render` only; match it exactly.
+
+Do **not** add systemd hardening (`ProtectSystem`, `ProtectHome`, `PrivateDevices`, etc.) to this unit. Genie's runtime walks `/dev/fastrpc-cdsp{,-secure}`, `/dev/dma_heap/*`, and dlopens libs out of `/usr/lib/dsp/cdsp/` from a process tree systemd's namespacing will break in subtle ways. The unit file has an inline comment to this effect; keep it.
+
+### libcdsprpc + the Llama bundle live in two different places — both matter
+
+The QAIRT host-side runtime is in two stacks at once:
+
+| Path | Provider | Role |
+|---|---|---|
+| `/usr/lib/libcdsprpc.so` | `libcdsprpc1` (Radxa qcs6490-noble repo) | Distro libcdsprpc — `libGenie.so` dlopens this. |
+| `/usr/lib/dsp/cdsp/*` | `radxa-firmware-qcs6490` | Host-side files the cDSP loads via FastRPC at user-PD start. |
+| `/lib/firmware/qcom/qcs6490/radxa/dragon-q6a/cdsp.mbn` | `linux-firmware-dragonwing` | The cDSP firmware itself, loaded by `remoteproc` at boot. |
+| `/home/trailcurrent/Llama3.2-1B-1024-v68/libQnn*.so + libGenie.so + genie-t2t-run` | hook 23c (staged from Peregrine cache) | App-side: Genie API, QnnHtp backend, the runner CLI. |
+| `/home/trailcurrent/Llama3.2-1B-1024-v68/models/weight_sharing_model_1_of_1.serialized.bin` | hook 23c | The compiled Llama 3.2 1B HTP context binary (1.7 GB). |
+
+The bundle in `~/Llama3.2-1B-1024-v68/` is mostly self-contained — `libQnnHtp.so`, `libQnnHtpV68Stub.so`, `libQnnSystem.so`, `libGenie.so` all live there, and `LD_LIBRARY_PATH` in the systemd unit points at that dir — but the cDSP-side libs (the `/usr/lib/dsp/cdsp/` ones above) are NOT redundant copies. The cDSP firmware looks for them at PD-startup time via FastRPC's own filesystem proxy (`apps_std_imp.c:1044: Successfully opened file /usr/lib/dsp/cdsp/libc++abi.so.1` in the journal). Don't try to "consolidate" by deleting `/usr/lib/dsp/cdsp/` — Genie can't start without those files served from that exact path.
+
+### Don't blacklist the Qualcomm fastrpc / Q6V5 / PIL modules "for idle power"
+
+The blacklist trap exists for the NPU side just like it does for audio. The fastrpc kernel module (`qcom_fastrpc`), the Q6V5 PAS loader (`qcom_q6v5_pas`), the PIL info layer (`qcom_pil_info`), and the Q6V5 core (`qcom_q6v5`) are ALL required for the cDSP to power up and stay up. Blacklisting them means `remoteproc1` (cdsp) shows `offline` instead of `running` and every Genie call dies before it leaves the host.
+
+[`image/files/modprobe/disable-unused.conf`](../image/files/modprobe/disable-unused.conf) ships empty-but-commented to keep the rationale visible to future edits.
+
+### NPU model is sourced from Peregrine's cache, not duplicated
+
+`image/cache/npu-model/` in this repo is a symlink into `../../TrailCurrentPeregrine/image_build/cache/npu-model/`. If you're building Playbill on a fresh checkout, run Peregrine's `image_build/preflight.sh --download-cache` first to populate the cache, or hook 23c fails loud. A future refactor could move the cache into a shared `TrailCurrent/assets/` tree; until then, **don't copy the 1.7 GB context binary into this repo** — keep the symlink.
+
+### The UEFI / EDK2 build is not a factor
+
+Both Peregrine (working) and Playbill (broken-then-fixed) run identical `edk2-qcs6490 0.1.0-5` / `edk2-radxa-dragon-q6a 0.1.0-5`. There is no "newer UEFI" to chase for NPU issues — when you're staring at `Failed to create device: 14001` on a Q6A, the answer is not in the bootloader, it's in `/usr/lib/dsp/cdsp/`.
 
 ## Desktop / Ubuntu environment
 
