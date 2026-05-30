@@ -2108,14 +2108,24 @@ function(
                         "$1/etc/systemd/timesyncd.conf.d/10-trailcurrent-playbill.conf"
                 fi
 
+                # cdsprpcd.service used to be enabled here when the image used
+                # qcom-fastrpc1 (Qualcomm PPA), which shipped that unit. The
+                # current package set (fastrpc + libcdsprpc1 from the Radxa
+                # qcs6490-noble repo) does NOT ship a cdsprpcd unit — and
+                # the NPU works fine without it: genie-server.service
+                # (enabled by hook 23c, which runs later) hosts inference
+                # directly, the in-kernel fastrpc driver handles
+                # /dev/fastrpc-* on demand, and Peregrine (the working
+                # reference) runs no cdsprpcd either. Keeping cdsprpcd.service
+                # in this enable list would `systemctl enable` a non-existent
+                # unit and abort the whole build (regression caught 2026-05-30).
                 chroot "$1" systemctl enable \
                     ssh.service \
                     avahi-daemon.service \
                     NetworkManager.service \
                     systemd-timesyncd.service \
                     gdm.service \
-                    trailcurrent-playbill-firstboot.service \
-                    cdsprpcd.service
+                    trailcurrent-playbill-firstboot.service
                 chroot "$1" systemctl set-default graphical.target
             |||,
 
