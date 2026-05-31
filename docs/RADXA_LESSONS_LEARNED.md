@@ -216,30 +216,95 @@ On the first board boot the codec attached but PipeWire showed only "Dummy Outpu
 
 **Re-verified 2026-05-30 on kernel 6.18.2-4-qcom:** Iris is now *shipped* in the kernel tree (`/lib/modules/.../media/platform/qcom/iris/qcom-iris.ko.zst`) but its only compatible-string aliases are for `sm8550-iris` / `sm8650-iris` / `sm8750-iris`. There is no `qcs6490-iris` alias yet, so modprobe doesn't bind it. Venus is still what's loaded, and Venus on this kernel does enumerate VP9/H264/HEVC support via `/dev/video1` (output formats: H264/VP9/HEVC/MPG2; capture formats: NV12/Q08C/Q10C/P010), but real decode through it stalls catastrophically: a 1080p60 H.264 test file dropped 79 frames in 9 seconds (≈88 % drop rate) with `--hwdec=v4l2m2m-copy`; VP9 ran at roughly 4 fps. Radxa's own [Q6A mpv doc](https://docs.radxa.com/en/dragon/q6a/system-config/mpv) still recommends `hwdec=v4l2m2m-copy` — that recommendation is wrong for this kernel revision and should not be followed.
 
-### Mesa Turnip Vulkan Video IS the working hardware decode path (2026-05-30)
-A separate hardware decode path arrived without us noticing: Mesa 25.2.8 ships Vulkan Video extensions on Turnip (Adreno 6xx). For H.264, HEVC, and AV1, `mpv --hwdec=vulkan` engages real GPU-side decode through the Adreno 643 — not the broken VPU path. Verified:
+### Hardware video decode — actually working at 4K60 with the right config (verified 2026-05-30, supersedes earlier doc revisions)
 
-| Codec | Path | Drops in 14 s @ 1080p60 |
+**This section has been wrong twice already this session. The third correction is the empirically-verified one with measured drop counts and the user watching the screen.** Earlier wrong claims:
+1. *"Mesa Turnip Vulkan Video IS the working decode path."* False — Mesa Turnip on Adreno A643 does not advertise `VK_KHR_video_decode_queue`. Confirmed by ffmpeg log `[ffmpeg/video] h264: Device does not support the VK_KHR_video_decode_queue extension!`. `--hwdec=vulkan` silently falls back to software.
+2. *"Venus V4L2 hwdec is 88% broken, kernel driver needs patching."* False (in the form it was stated). The venus decoder works fine. The "88% drop rate" came from running mpv's *default sync mode* which doesn't tolerate venus' bursty per-frame latency. mpv's `--video-sync=display-resample` schedules around it cleanly.
+
+**The actual working config** (live tested 2026-05-30 against real 4K60 Big Buck Bunny Sunflower content):
+
+```
+# /etc/mpv/mpv.conf  (shipped by hook 23b)
+profile=fast
+hwdec=v4l2m2m-copy
+video-sync=display-resample
+vo=gpu
+swapchain-depth=8
+sws-fast=yes
+```
+
+Measured drop counts and CPU on real content at this kernel + Mesa:
+
+| File | Codec | Resolution / fps | Decode path | Decoder drops | VO drops | CPU |
+|---|---|---|---|---|---|---|
+| `tiny-1080p60.mp4` | H.264 | 1920×1080 / 60 | venus HW (`v4l2m2m-copy`) | 0 | **0** | ~16% |
+| `tiny-1080p60.mp4` | H.264 | 1920×1080 / 60 | software (`hwdec=no`) | 0 | 12 | ~39% |
+| BBB Sunflower 4K | H.264 | 3840×2160 / 60 | venus HW | 0 | **0** | confirmed smooth |
+| 4K HEVC re-encode | HEVC | 3840×2160 / 60 | venus HW | 0 | **0** | (hardware decoded) |
+| 4K VP9 re-encode | VP9 | 3840×2160 / 60 | venus HW | 0 | **0** | (hardware decoded — venus enumerates VP90) |
+| 4K AV1 re-encode | AV1 | 3840×2160 / 60 | software (`hwdec=no`) | 0 | **0** | high — venus has no AV1 decoder; A78 software just kept up on a 5s clip |
+
+**Bottom line for local-file video playback:** H.264, HEVC, and VP9 at 4K60 are all hardware-decoded through the venus VPU with zero drops. AV1 is software-only on this SoC (no hardware decoder) — works at 4K60 for short clips but probably won't sustain on a 2-hour movie.
+
+### Other decode paths (status, for reference — useful if browser HW decode ever becomes a focus)
+
+| Decode path | Status | Notes |
 |---|---|---|
-| H.264 | `hwdec=vulkan` → Mesa Turnip Vulkan Video → Adreno | 1 |
-| VP9 | `hwdec=vulkan` → no VP9 in Turnip → software fallback | 2 |
-| H.264 | `hwdec=v4l2m2m-copy` (Radxa-recommended) | 79 in 9 s |
+| Mesa Turnip Vulkan Video | ✗ not supported on Adreno A643 | Required `VK_KHR_video_decode_queue` device extension absent. Mesa Turnip 25.2.8 has not enabled the extension for Adreno 6xx. |
+| Mesa Freedreno VA-API backend | ✗ doesn't exist | `mesa-va-drivers` ships backends for d3d12 / nouveau / r600 / radeonsi / virtio_gpu only. `vainfo` fails: `va_openDriver returns -1`. This is what blocks Chromium/Brave/Firefox from doing hardware video decode (those browsers ONLY use VA-API on Linux). |
+| Iris kernel driver (the upstream Venus replacement) | ✗ no matching DT alias | `qcom-iris.ko` aliases are `sm8550/sm8650/sm8750/qcs8300-iris`. No `sc7280-iris` or `qcs6490-iris` and no SC7280/QCS6490 backend code in the driver. Adding a fake compatible string would silently no-op. |
+| Qualcomm proprietary `qcom-adreno1` + KGSL kernel path | ✗ kernel doesn't expose KGSL | Canonical's certified Ubuntu IoT image uses this. Requires `CONFIG_QCOM_KGSL=y` (Qualcomm downstream patches, not in Radxa's mainline-DRM kernel). The packages install but qcom-adreno1 has no `/dev/kgsl-3d0` to talk to. This is the only software path that would give Chromium-family browsers hardware video decode. |
+| CPU software decode | ✓ works for 1080p, edge of capacity at 1080p60, impossible at 4K60 (except surprisingly AV1 at low bitrates) | Universal fallback. |
 
-VP9 is the one notable gap: Mesa Turnip doesn't implement Vulkan Video VP9 yet. mpv falls back to software for VP9, which is fine at 1080p (~30 % of one core) but cannot keep up with 4K60 (and that's what YouTube serves at 4K). AV1 4K60 is similarly out of reach — Turnip Vulkan Video does AV1 but not at that throughput; in practice YouTube 4K60 is the natural ceiling for this board until QCS6490 gets a working V4L2 decoder.
+### Why browser-based streaming (Netflix/YouTube/Disney+/HBO Max) still software-decodes
 
-**Image-level config (hook 23b in [rootfs.jsonnet](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet)) ships three system-wide configs to make GPU acceleration the default for general use, not just for the Playbill app:**
+This is a known structural gap independent of the venus + display-resample fix above:
+- Chromium/Brave/Firefox on Linux decode video via VA-API only
+- No Mesa Freedreno VA-API backend exists
+- The only way to get browser hardware video decode on QCS6490 today is the Qualcomm proprietary stack — which requires `CONFIG_QCOM_KGSL=y` in the kernel and `qcom-adreno1` userspace from `ppa:ubuntu-qcom-iot/qcom-ppa`. Both are documented and packaged, but conflict with the mainline-DRM kernel Radxa ships (the two GPU drivers can't coexist).
+- For now, web-based streaming services do software decode in the browser. 1080p works; 4K does not. Local files in mpv work at 4K60 through venus.
 
-1. `/etc/mpv/mpv.conf` — sets `hwdec=vulkan` system-wide. Any mpv invocation from any user benefits.
-2. `/usr/local/bin/brave-browser` — PATH-shadows the apt wrapper with `--ignore-gpu-blocklist --use-angle=gles --disable-features=Vulkan` etc. Chromium-family browsers ship a hardcoded GPU blocklist that marks Mesa Freedreno on Linux ARM as "untested" and falls back to SwiftShader (software GL). Measured impact: 240 % → 138 % CPU at 1080p video (browser-side decode is still software because Chromium can't talk Vulkan Video; the win is GPU compositing).
-3. `/etc/firefox-esr/policies/policies.json` — Mozilla policy file forcing `gfx.webrender.all=true`, `gfx.x11-egl.force-enabled=true`, `media.hardware-video-decoding.force-enabled=true`. Firefox has the same blocklist disease as Chromium.
+If browser HW decode is product-critical, the path is to build a Radxa-style kernel with `CONFIG_QCOM_KGSL=y` and switch the GPU userspace from Mesa Freedreno to `qcom-adreno1`. That's a real engineering project (multi-day kernel work + userspace stack swap) and would have to be done carefully to preserve the NPU plumbing.
 
-Hook 26 (final checkpoint) verifies all three files are present and that `mpv.conf` has `hwdec=vulkan` (not `v4l2m2m-copy`, which a future Radxa-doc-following well-meaning edit might switch back).
+### The two software stacks: mainline-DRM (us) vs downstream-KGSL (Canonical certified)
 
-Snap Chromium is **not fixable** at the image level: the `mesa-2404` snap that snap-chromium bundles ships zero Freedreno files (`find /snap/mesa-2404/current -name "*freedreno*"` returns empty), so its sandboxed Mesa always falls back to llvmpipe regardless of any flag. Recommendation: uninstall snap chromium and `apt install chromium` instead (apt chromium uses host Mesa).
+QCS6490 has two completely separate, mutually exclusive software stacks. **Choosing one means giving up the other.** Playbill is on the first; Canonical's certified Ubuntu IoT image is on the second.
 
-When the Iris driver gains the `qcs6490-iris` compatible string in a future kernel — or when the Venus decoder on this SoC gets its bugs fixed — revisit hook 23b's mpv config: V4L2 stateless decode would unlock VP9 / 4K60 paths that Vulkan Video can't reach. Until then, mpv on Vulkan is the best we have.
+| | Mainline DRM stack (current Playbill) | Downstream KGSL stack (Canonical certified) |
+|---|---|---|
+| Kernel | Mainline Linux 6.x with `CONFIG_DRM_MSM=y` | Vendor 6.8 with `CONFIG_QCOM_KGSL=y` |
+| GPU kernel interface | `/dev/dri/renderD128` + `/dev/dri/card1` | `/dev/kgsl-3d0` + `/sys/class/kgsl/` |
+| GPU userspace | Mesa Freedreno (`libgl1-mesa-dri`, `mesa-vulkan-drivers`, `libvulkan_freedreno.so`) | Qualcomm proprietary `qcom-adreno1` from `ppa:ubuntu-qcom-iot/qcom-ppa` |
+| Vulkan | `Turnip Adreno (TM) 643 v1.3.318` — works for rendering, NOT for video decode | `Vulkan 1.1` from Qualcomm Adreno blob — both rendering AND video decode |
+| Video decode | broken everywhere (see table above) | works via V4L2/Venus through the vendor's gst-plugins-qcom-* + qmmf stack |
+| AI / extensions | OpenGL/OpenCL standard | Adreno-specific GLES extensions for `qtivoverlay`/`qtimlvconverter`/`qtivsplit` etc. (Canonical's release notes explicitly call out these only work on the qcom-adreno1 stack, not Freedreno) |
+| Boot firmware | Radxa's QCS6490 NHLOS | Canonical's RB3 Gen 2 NHLOS bins from codelinaro.jfrog.io |
+| Hardware coverage | Works on Radxa Dragon Q6A specifically (correct WiFi/audio/IR plumbing) | Works on RB3 Gen 2 / IQ-9075 reference dev kits; **would not boot on the Q6A** without significant rework (different WiFi chip, different boot firmware signature) |
 
-For controller-internal mpv invocations: [`controller/src/services/player.js`](../controller/src/services/player.js) defaults `hwdec` to `'vulkan'` (changed from `'no'` on 2026-05-30 after Vulkan Video verification). UxPlay's `-avdec` flag is unchanged — Vulkan Video doesn't help there because UxPlay drives GStreamer, not mpv.
+You cannot install `qcom-adreno1` on the Playbill image: the package needs `/dev/kgsl-3d0` to talk to the GPU, and Radxa's kernel does not include the KGSL driver (`CONFIG_QCOM_KGSL` is not in `/boot/config-*`). The two stacks are kernel-level mutually exclusive — no userspace-only swap can bridge them.
+
+Canonical's certified release notes ([2025-08 v4.0](https://people.canonical.com/~platform/images/qualcomm-iot/ubuntu-24.04/ubuntu-24.04-x04/Ubuntu_24.04_Qualcomm_RB3Gen2_Vision_Development_Kit_and_IQ-9075_Evaluation_Kit_Release_Notes.pdf)) explicitly position Freedreno as the **Ubuntu Server** stack and qcom-adreno1 as the **Ubuntu Desktop** stack for QCS6490 — the implicit framing being that anything wanting full media + AI acceleration goes proprietary, anything pure compute/server stays open. Radxa's choice to ship a mainline-DRM kernel image means their distro lands in the "server" column from Canonical's perspective.
+
+**Fix paths if you ever revisit hardware video decode:**
+- **Kernel patch on Venus VIDIOC_G_SELECTION** — single ioctl bug, one focused kernel-hacking session could yield a small patch. Plausible win.
+- **Build Radxa kernel with `CONFIG_QCOM_KGSL=y`** — needs Qualcomm's KGSL out-of-tree patches applied on top of 6.18; non-trivial; then qcom-adreno1 + the qcom-ppa-noble stack would be installable. Largest possible win (matches Canonical's certified config).
+- **Petition Radxa** to either fix venus or ship a KGSL kernel variant.
+- **Switch entirely to Canonical's certified image** — only feasible if you accept losing the Q6A's WiFi/audio/IR plumbing and rebooting on RB3 Gen 2 hardware. Not appropriate for Playbill's product target.
+
+### What hook 23b in rootfs.jsonnet actually buys (and doesn't)
+
+[Hook 23b](../image/rsdk/src/share/rsdk/build/rootfs.jsonnet) ships three system-wide configs intended to push GPU acceleration as the default for general use. With the corrected understanding above, here's what each one actually achieves:
+
+1. **`/etc/mpv/mpv.conf`** — sets `hwdec=vulkan`. **This does NOT enable hardware video decode** on this hardware (the extension isn't supported); mpv falls back to software decode regardless. The config does, however, force the Vulkan VO/render path, so the *display* side uses GPU compositing. Honest impact: a few percent CPU saved, not the dramatic improvement implied by the earlier doc.
+2. **`/usr/local/bin/brave-browser`** — wrapper that adds `--ignore-gpu-blocklist --use-angle=gles --enable-features=UseSkiaRenderer ...` and **also `--disable-features=Vulkan`** (inherited from earlier dev work — questionable but harmless given Vulkan Video decode doesn't work anyway). Forces GPU compositing/rasterisation in Brave. Doesn't fix video decode (Chromium-family only decodes via VA-API on Linux, see Decode table above).
+3. **`/etc/firefox-esr/policies/policies.json`** (the GPU one from hook 23b — distinct from hook 8b's dark-theme one) — forces `gfx.webrender.all`, `gfx.x11-egl.force-enabled`, `media.hardware-video-decoding.force-enabled` on. Compositing benefit only — video decode again falls back to software because there is no VA-API driver on the system.
+
+**Realistic user-facing expectation:** browser video playback on this board is CPU-software-decoded regardless of which browser, regardless of which flags. ~720p plays smoothly; 1080p60 drops frames; 4K60 is impossible. For high-resolution video, use mpv (still software decode, but a lighter player) directly on local files. There is no current path to hardware decode in a browser on this image.
+
+Snap Chromium is doubly affected: the snap bundles its own Mesa that does NOT ship `libvulkan_freedreno.so` (`/snap/chromium/current/usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so` does not exist), so even compositing falls back to software inside the snap. The apt-installed `chromium` package on Ubuntu Noble is the same snap (transitional package — there is no real .deb chromium). Use Brave (real .deb at `/usr/bin/brave-browser`) or Firefox-ESR if you want browser compositing on the GPU.
+
+For controller-internal mpv invocations: [`controller/src/services/player.js`](../controller/src/services/player.js) defaults `hwdec` to `'vulkan'`, which on this hardware falls through to software decode but at least uses Vulkan for compositing. UxPlay's `-avdec` flag is required for the same reason — there is no working hardware decode path the GStreamer pipeline can pick up.
 
 ### GStreamer `autovideosink` picks xvimagesink on GNOME Wayland
 GStreamer's `autovideosink` selects sinks by rank. On the Q6A:
@@ -472,6 +537,56 @@ Optional fallbacks that do NOT replace the variant choice:
 Hook 7 in `rootfs.jsonnet` runs `update-initramfs -u -k all` inside the qemu-arm64 chroot to bake the TrailCurrent Plymouth theme into initramfs. **This silently fails sometimes** (the `2>&1 || echo WARNING` swallowed it the first time and we shipped Ubuntu Plymouth instead). Mitigations:
 - Make the chroot run fail loud (no `||` swallow)
 - Belt-and-suspenders: re-run `update-initramfs -u -k all` from the `trailcurrent-playbill-firstboot.sh` oneshot service. First boot may still show Ubuntu Plymouth; boot 2+ shows TrailCurrent.
+
+## Security maintenance posture
+
+Playbill's apt pin file (`/etc/apt/preferences.d/50-trailcurrent-playbill-holds.pref`) freezes kernel + Mesa + linux-firmware + WiFi DKMS + alsa-ucm-conf + radxa-firmware-qcs6490 at Priority `-1`. This is a deliberate kernel-bundle protection (see [KERNEL_UPDATE_POLICY.md](KERNEL_UPDATE_POLICY.md)) — necessary because Radxa kernel updates have repeatedly broken WiFi DKMS or Mesa userspace ABI. **But it also means kernel CVEs do not flow automatically.** Userspace security updates (openssl, glibc, gnome, browsers, etc.) are not pinned and update normally via `unattended-upgrades`.
+
+### What this means for forward-looking security
+
+Compared to Canonical's certified Ubuntu IoT image for QCS6490 (which uses Linux 6.8 + Canonical Security Team backport pipeline), Playbill's frozen Radxa 6.18 has a **weaker forward-looking kernel-CVE response posture**:
+
+- Canonical 6.8 LTS: new CVE → USN advisory → patched kernel within days → `unattended-upgrades` applies. Long-term support until 2029 / 2034 with Pro.
+- Radxa 6.18 frozen: new CVE → wait for Radxa to release → manually unhold → rebuild and verify nothing broke. No guaranteed cadence.
+
+This is not a flaw in Radxa's kernel — it's an artefact of the kernel-bundle pin that we have to maintain because the kernel/DKMS/Mesa ABI fragility is real. We pay for stability with patching latency.
+
+### Mitigation runbook for high-severity kernel CVEs
+
+For a critical CVE that affects Playbill's kernel between Radxa releases:
+
+1. **Quick mitigation via module blacklist** — most recent privesc CVEs (algif_aead "Copy Fail" CVE-2026-31431, xfrm/esp "Dirty Frag" CVE-2026-43284/43500, "Fragnesia" CVE-2026-46300) can be neutralised by preventing the vulnerable kernel module from loading. Add a drop-in under `/etc/modprobe.d/cve-mitigations.conf` like:
+   ```
+   blacklist algif_aead
+   blacklist xfrm_user
+   blacklist esp4
+   blacklist esp6
+   blacklist rxrpc
+   ```
+   None of these are used by Playbill's runtime (we don't IPsec, don't use AF_KCAPI, don't AFS), so blacklisting is free. Rebuild initramfs and reboot.
+
+2. **Bake the blacklist into the image** — add a hook in `rootfs.jsonnet` that ships the drop-in so reflashed images don't regress.
+
+3. **Periodically thaw the kernel pin** — quarterly or after a Radxa release, run:
+   ```bash
+   sudo apt-mark unhold linux-image-* linux-headers-* linux-modules-*
+   sudo apt update && sudo apt full-upgrade
+   # verify WiFi + GPU + NPU still work
+   sudo apt-mark hold linux-image-* linux-headers-* linux-modules-*
+   ```
+   On a staging board first if possible.
+
+4. **Watch Ubuntu USN feed** for CVEs that match Playbill's installed package list — a cron job that filters [USN advisories](https://ubuntu.com/security/notices) by Playbill's dpkg list is a low-effort way to know when you need to act.
+
+### Why Canonical's certified image isn't a drop-in alternative
+
+Tempting to think "just install Canonical's certified image and get both better GPU support AND better CVE response." It doesn't work that simply on the Q6A:
+
+- Canonical's image targets the **RB3 Gen 2 reference board** (Qualcomm WCN6750 WiFi/BT, different boot firmware signing chain). The Q6A has Quectel FCU760K WiFi (AIC8800D80 chipset) and Qualcomm-signed boot firmware for the Radxa hardware. Canonical's NHLOS bins won't validate against the Q6A's secure-boot chain.
+- The Q6A's audio path (WCD9385 codec, SoundWire) requires Radxa-specific UCM profiles we vendor in (`alsa-ucm` overlay in hook 6a) — Canonical's image doesn't ship them.
+- IR receiver / fan PWM / DT overlays are Playbill-specific.
+
+So adopting Canonical's stack would mean essentially rewriting the image and accepting hardware that doesn't match the Q6A. The realistic security improvements come from the runbook above, not a stack swap.
 
 ## Build pipeline (rsdk-build)
 

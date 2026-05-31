@@ -65,22 +65,30 @@ function getMetadata() { return session ? session.metadata || null : null; }
  *                                          live here so all callers route through
  *                                          one balancing layer.
  */
-// Q6A hwdec story (re-verified 2026-05-30 on kernel 6.18.2-4-qcom):
-//   v4l2m2m-copy / auto-safe : Venus driver enumerates VP9/H264/HEVC but
-//                              stalls in real-world decode (~88% drop rate
-//                              measured; single-digit fps). Do NOT use.
-//                              Earlier symptom in this code was green/fuzzy
-//                              frames; the new symptom is just stalling.
-//   vulkan                   : Mesa Turnip 25.2.8 ships Vulkan Video for
-//                              H.264 / HEVC / AV1 on Adreno 643. Verified
-//                              1 drop in 14 s at 1080p60 H.264. For VP9
-//                              (no Vulkan-Video VP9 path) mpv falls back
-//                              to software automatically — also smooth.
-//   no                       : Pure software. Fine for 1080p; 4K VP9/AV1
-//                              CPU-bound at ~all-cores.
-// Default is vulkan: hardware where supported, software fallback for the
-// rest. Callers can pass an explicit hwdec to override.
-function play({ url, audioUrl, hwdec = 'vulkan', headers, mediaType = 'video', metadata, fullscreen = true, audioFxArgs } = {}) {
+// Q6A hwdec story (re-verified empirically 2026-05-30 on kernel 6.18.2-4-qcom,
+// Mesa 25.2.8 — supersedes earlier claims in this comment that were based on
+// misread mpv verbose output):
+//
+//   v4l2m2m-copy + --video-sync=display-resample : WORKS. Venus VPU hardware
+//     decode delivers 0 dropped frames at 1080p60 H.264 with ~16% CPU (vs
+//     ~39% for pure software). The earlier "88% drop rate" claim was an
+//     artifact of mpv's default sync mode handling Venus' bursty late-frame
+//     output badly. With display-resample, mpv's scheduler accommodates the
+//     ~10–20ms per-frame firmware-RPC latency Venus has, and drops go to 0.
+//
+//   vulkan : DOES NOT DECODE in hardware. Mesa Turnip 25.2.8 does not advertise
+//     VK_KHR_video_decode_queue on Adreno A643 (verified via ffmpeg log:
+//     "Device does not support the VK_KHR_video_decode_queue extension!"
+//     plus vulkaninfo queue-family enumeration — no VIDEO_DECODE_BIT). mpv
+//     silently falls back to software decode. CPU spikes; no HW acceleration.
+//
+//   no : Pure software libavcodec. Fine for 1080p (~39% CPU). 4K VP9/AV1 is
+//     beyond A78 capacity.
+//
+// Default is v4l2m2m-copy. The --video-sync=display-resample flag below is
+// mandatory for venus to actually deliver smooth frames. Both are also set
+// in /etc/mpv/mpv.conf as the system default.
+function play({ url, audioUrl, hwdec = 'v4l2m2m-copy', headers, mediaType = 'video', metadata, fullscreen = true, audioFxArgs } = {}) {
   if (!url) return Promise.reject(new Error('player.play: url required'));
   ensureDirs();
   return stop().then(() => new Promise((resolve, reject) => {
@@ -104,6 +112,12 @@ function play({ url, audioUrl, hwdec = 'vulkan', headers, mediaType = 'video', m
       '--keep-open=no',
       `--hwdec=${hwdec}`,
       '--vo=' + (mediaType === 'audio' ? 'null' : 'gpu-next'),
+      // Required for venus v4l2m2m-copy to deliver smooth playback —
+      // see hwdec story comment above. Venus' ~10-20ms per-frame firmware
+      // RPC latency causes mpv's default sync mode to drop ~20+ frames/sec
+      // at 1080p60. display-resample makes mpv's scheduler accommodate
+      // the bursty/late frames and brings drops to zero.
+      '--video-sync=display-resample',
       '--profile=fast',
       // Live MPEG-TS coming off dvbv5-zap is being written as we read; tell
       // mpv to follow the file rather than treat it as a finite asset.

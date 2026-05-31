@@ -141,7 +141,7 @@ Common failure: WCD938x codec doesn't appear in `aplay -l`. This is a known Qual
 2. Connect an OTA antenna to the tuner's RF input.
 3. Sidebar → **Live TV**. The empty state will say "No channels yet." Click **Rescan**.
 4. Channel scan runs `dvbv5-scan` against the US ATSC frequency table (`dtv-scan-tables` package). On a strong signal it takes 1–3 minutes and writes `~/.config/trailcurrent-playbill/channels.conf`.
-5. Click any channel tile to tune. The app spawns a fullscreen mpv overlay (`--hwdec=auto-safe --vo=gpu-next`) — MPEG-2 / H.264 frames decode on the Adreno Venus V4L2-M2M codec, not the CPU. Press **Esc** to exit playback.
+5. Click any channel tile to tune. The app spawns a fullscreen mpv overlay (`--hwdec=auto-safe --vo=gpu-next`). MPEG-2 / H.264 frames decode **in software on the A78 cores** — see Step 8 for the full GPU/decode story; on this kernel the Adreno Venus V4L2 path is broken and Vulkan Video isn't supported by the GPU, so software decode is the only working path. ATSC's 1080i / 1080p30 streams are comfortable for the A78 cores. Press **Esc** to exit playback.
 
 ### Radio — RTL-SDR USB dongle (FM/AM)
 
@@ -161,28 +161,42 @@ Common failure: WCD938x codec doesn't appear in `aplay -l`. This is a known Qual
 
 DRM-protected video (Netflix, Disney+, HBO Max, Apple TV+) mirrors as a black frame — that's an iOS-side restriction Apple enforces on non-Apple receivers, not a Playbill bug. Use the Roku or Apple TV in the rig for those services. Full details + troubleshooting: [app/cast.md](app/cast.md).
 
-## Step 8 — Verify the GPU + 4K hardware video decode
+## Step 8 — Verify the GPU + 4K60 hardware video decode
 
-The Q6A's Adreno 643 GPU runs through Mesa Turnip (Vulkan) and freedreno (GL). Hardware video decode goes through the in-kernel `venus` driver as a V4L2 stateful codec on `/dev/videoN`.
+The Q6A's Adreno 643 GPU is fully exposed: 3D rendering, compositing, OpenGL, OpenGL ES, Vulkan, OpenCL, WebGL, WebGPU. Mesa Turnip provides Vulkan, Mesa Freedreno provides GL/GLES. The Venus VPU on the same SoC handles hardware video decode for H.264, HEVC, VP9 at up to 4K60.
+
+The mpv config shipped in this image (`/etc/mpv/mpv.conf`) is tuned to actually use the Venus hardware decoder cleanly:
+- `hwdec=v4l2m2m-copy` — route decode through Venus VPU
+- `video-sync=display-resample` — required to handle Venus' bursty per-frame latency; without this mpv drops ~25 frames/sec at 60fps even though the hardware is keeping up
+
+Verify GPU + decode:
 
 ```bash
 # GL renderer should mention "FD643" or "Turnip Adreno 643"
-glxinfo -B | grep -E "OpenGL renderer|Vendor"
+eglinfo | grep -E "OpenGL.*renderer|OpenGL.*vendor" | head -4
 
-# Vulkan device
+# Vulkan device should enumerate as Turnip Adreno
 vulkaninfo --summary | grep -E "deviceName|driverName"
 
 # OpenCL — Adreno platform comes from radxa-firmware-qcs6490
 clinfo -l
 
-# Venus video decode/encode nodes
+# Venus video decode nodes
 v4l2-ctl --list-devices
 
-# Smoke-test the v4l2 H.264 decoder element from gstreamer-bad
-gst-inspect-1.0 v4l2slh264dec >/dev/null && echo "v4l2slh264dec: present"
+# Quick 4K decode smoke-test — should show "Using hardware decoding (v4l2m2m-copy)"
+# and zero VO drops at end
+mpv --no-config --hwdec=v4l2m2m-copy --video-sync=display-resample \
+    --term-status-msg='DROP=${decoder-frame-drop-count} VO=${frame-drop-count}' \
+    your-4k-file.mp4
 ```
 
-If `v4l2-ctl --list-devices` shows no Venus codec, check `dmesg | grep -i venus` — the Venus firmware (`venus.mbn` / `venus-5.4.fw`) is in `linux-firmware` and the Radxa firmware bundle, both of which are pinned. Don't reach for `apt upgrade linux-firmware` to "fix" it without unpinning carefully (see [KERNEL_UPDATE_POLICY.md](KERNEL_UPDATE_POLICY.md)).
+Verified working as of 2026-05-30 on kernel 6.18.2-4-qcom + Mesa 25.2.8: 4K60 H.264 / HEVC / VP9 all play through the Venus VPU with 0 dropped frames. AV1 has no hardware decoder on this SoC and falls back to software.
+
+**Important limitations** — these are real and worth knowing:
+- **Browser video playback (Netflix, YouTube, Disney+, HBO Max) software-decodes.** Chromium/Brave/Firefox on Linux only do hardware video via VA-API, and there is no Mesa Freedreno VA-API backend. The Venus path that mpv uses is unavailable to browsers. 1080p in browsers works; 4K does not.
+- **`hwdec=vulkan` silently falls back to software** because Mesa Turnip on Adreno A643 doesn't advertise the `VK_KHR_video_decode_queue` extension. Don't use it.
+- See [RADXA_LESSONS_LEARNED.md → Hardware video decode](RADXA_LESSONS_LEARNED.md#hardware-video-decode--actually-working-at-4k60-with-the-right-config-verified-2026-05-30-supersedes-earlier-doc-revisions) for the full empirical capability matrix and what would be needed to address the browser-streaming gap (a different kernel + GPU userspace stack).
 
 ## Step 9 — Verify the NPU and use the on-device LLM
 
