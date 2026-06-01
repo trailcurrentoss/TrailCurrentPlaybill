@@ -2395,33 +2395,41 @@ function(
             // Hook 23b: GPU acceleration — system-wide configs
             //
             // The Q6A's Adreno 643 GPU works correctly under Mesa Freedreno
-            // (OpenGL ES) and Turnip (Vulkan). vkmark scores ~3300; glmark2
-            // ~1500. BUT most desktop apps default-disable GPU acceleration
-            // on this SoC for two unrelated reasons:
+            // (OpenGL ES) and Turnip (Vulkan render). vkmark ~3300; glmark2
+            // ~1500. The Venus VPU on the same SoC handles hardware video
+            // decode for H.264 / HEVC / VP9 at up to 4K60.
             //
-            //   - mpv defaults pick `hwdec=auto-safe`, which whitelists the
-            //     V4L2-M2M Venus driver. On kernel 6.18.x for QCS6490 that
-            //     driver enumerates VP9/H.264/HEVC support but stalls in
-            //     actual decode (~88 % drop rate measured 2026-05-30 with
-            //     a 1080p60 H.264 file: 79 drops in 9 s; with VP9 the
-            //     decoder loop ran at ~4 fps). Iris is the upstream
-            //     replacement but ships without a `qcs6490-iris` compatible
-            //     string in 6.18, so it never binds.
+            // BUT most desktop apps default-disable GPU acceleration on this
+            // SoC for two reasons that are independent of the hardware:
+            //
+            //   - mpv defaults pick `video-sync=audio`, which doesn't
+            //     tolerate Venus' ~10-20 ms per-frame firmware RPC latency.
+            //     With venus hwdec + default sync, mpv drops ~25 frames/sec
+            //     at 1080p60 (200+ VO drops in 9 s measured) — looks like
+            //     "broken hwdec" but is actually a scheduling mismatch. The
+            //     fix is `video-sync=display-resample`, which makes mpv's
+            //     scheduler accommodate the bursty arrival pattern. With
+            //     that flag, drops go to 0 at 1080p60 AND 4K60.
             //
             //   - Chromium-family browsers (Brave, Chromium snap, Chromium
             //     apt) consult their GPU blocklist, find Freedreno on
             //     Linux ARM marked "untested", and fall back to SwiftShader
             //     software rendering. Firefox does the same via its own
             //     blocklist. Net effect: at 1080p60 video, browsers peg
-            //     2-3 cores; mpv (which has no blocklist) sips ~30 % of one.
+            //     2-3 cores; mpv (with the right config) sips ~16 % of one.
             //
             // What this hook ships:
             //
             //   /etc/mpv/mpv.conf
-            //     hwdec=vulkan via Mesa Turnip Vulkan Video. Verified
-            //     2026-05-30: 1 drop in 14 s @ 1080p60 H.264. VP9 falls
-            //     back to software automatically (no Vulkan Video VP9 in
-            //     Turnip) — 2 drops in 14 s, also smooth.
+            //     hwdec=v4l2m2m-copy + video-sync=display-resample. Routes
+            //     decode through Venus VPU. Verified 2026-05-30 at 4K60 on
+            //     real Big Buck Bunny Sunflower: 0 drops, ~16% CPU, smooth.
+            //     H.264 / HEVC / VP9 all work; AV1 falls back to software
+            //     (no AV1 hardware decoder in this SoC).
+            //     Earlier doc revisions claimed Mesa Turnip Vulkan Video
+            //     worked here — false: Adreno A643 doesn't advertise the
+            //     VK_KHR_video_decode_queue extension (no VIDEO_DECODE_BIT
+            //     queue), so hwdec=vulkan silently falls back to software.
             //
             //   /usr/local/bin/brave-browser
             //     PATH-shadows /usr/bin/brave-browser with a wrapper that
@@ -3005,12 +3013,20 @@ function(
                 # block (task-qualcomm's 99-fastrpc.rules sets GROUP=render).
                 # No separate fastrpc-group check needed — the legacy
                 # qcom-fastrpc1 path that required it is now removed.
-                # mpv.conf must specify hwdec=vulkan (NOT v4l2m2m / auto-safe,
-                # both of which are broken on QCS6490 in kernel 6.18.x).
-                if grep -q '^hwdec=vulkan' "$1/etc/mpv/mpv.conf"; then
-                    echo "  ✓ /etc/mpv/mpv.conf uses hwdec=vulkan"
+                # mpv.conf must specify hwdec=v4l2m2m-copy AND
+                # video-sync=display-resample together. Either alone produces
+                # drops at 1080p60+; together they deliver 0-drop HW decode
+                # via Venus VPU at up to 4K60 (H.264/HEVC/VP9). Verified
+                # 2026-05-30 on kernel 6.18.2-4-qcom + Mesa 25.2.8.
+                # Earlier check enforced hwdec=vulkan — that was based on a
+                # wrong claim (Mesa Turnip Vulkan Video does NOT advertise
+                # VK_KHR_video_decode_queue on Adreno A643; vulkan hwdec
+                # silently falls back to software).
+                if grep -q '^hwdec=v4l2m2m-copy' "$1/etc/mpv/mpv.conf" \
+                   && grep -q '^video-sync=display-resample' "$1/etc/mpv/mpv.conf"; then
+                    echo "  ✓ /etc/mpv/mpv.conf uses hwdec=v4l2m2m-copy + video-sync=display-resample"
                 else
-                    echo "  ✗ /etc/mpv/mpv.conf does NOT set hwdec=vulkan"
+                    echo "  ✗ /etc/mpv/mpv.conf must set BOTH hwdec=v4l2m2m-copy AND video-sync=display-resample"
                     FAIL=$((FAIL+1))
                 fi
                 # Brave wrapper must override the GPU blocklist.
